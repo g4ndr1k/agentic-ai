@@ -1,6 +1,6 @@
 # Agentic Mail Alert System — Build & Operations Guide
 
-**Version:** 1.6.0
+**Version:** 1.7.0
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
 **Last validated against:** checked-in codebase post-repair
 
@@ -331,17 +331,21 @@ agentic-ai/
 ├── data/                         # Runtime SQLite DBs (gitignored)
 │   ├── agent.db
 │   ├── bridge.db
-│   ├── pdf_jobs.db               # PDF processing job queue
-│   ├── pdf_inbox/                # Uploaded PDFs awaiting processing
+│   ├── pdf_jobs.db               # PDF processing job queue (bridge HTTP API)
+│   ├── processed_files.db        # Batch processor dedup registry (SHA-256 keyed)
+│   ├── pdf_inbox/                # Drop PDFs/ZIPs here for batch processing
+│   │   └── _extracted/           # Auto-created; holds PDFs extracted from ZIPs
 │   ├── pdf_unlocked/             # Password-removed PDF copies
 │   └── seen_attachments.db       # Tracks already-scanned Mail.app attachments
 ├── logs/                         # Log files (gitignored)
+│   └── batch_process.log         # Batch processor run log (appended, DEBUG level)
 ├── output/
 │   └── xls/                      # Exported XLS files (gitignored)
 │       ├── Maybank_Gandrik.xlsx  # One file per bank per owner, accumulates over time
 │       ├── BCA_Gandrik.xlsx
 │       └── ALL_TRANSACTIONS.xlsx # Flat table — all banks, all owners, Owner column
 ├── scripts/
+│   ├── batch_process.py          # Automatic, idempotent PDF→XLS batch processor
 │   ├── post_reboot_check.sh      # Post-boot health check
 │   ├── tahoe_validate.sh         # Mail schema validator
 │   ├── run_bridge.sh             # Bridge startup wrapper
@@ -1384,7 +1388,7 @@ To change the lookback window before resetting:
 # initial_lookback_days = 15   ← set to desired days
 ```
 
-### Check PDF processing jobs
+### Check PDF processing jobs (bridge web UI / API)
 
 ```bash
 TOKEN=$(cat ~/agentic-ai/secrets/bridge.token)
@@ -1392,6 +1396,30 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9100/pdf/jobs | pytho
 ```
 
 Or open the web UI: **http://127.0.0.1:9100/pdf/ui**
+
+### Batch processor operations
+
+```bash
+cd ~/agentic-ai
+
+# One-shot: process everything currently in pdf_inbox, then exit
+python3 scripts/batch_process.py
+
+# Watch mode: process files as they are dropped into pdf_inbox (Ctrl-C to stop)
+python3 scripts/batch_process.py --watch
+
+# Check what has been processed (and any errors)
+python3 scripts/batch_process.py --status
+
+# Wipe XLS output and reprocess all files from scratch
+python3 scripts/batch_process.py --clear-output --reset-registry
+
+# Retry only previously failed files (re-run; successes are skipped automatically)
+python3 scripts/batch_process.py
+
+# View the batch processor log
+tail -50 ~/agentic-ai/logs/batch_process.log
+```
 
 ---
 
@@ -1568,6 +1596,103 @@ The `Owner` column is first, making it easy to filter by account holder. Multi-c
 
 `export()` returns a `(per_person_path, all_tx_path)` tuple.
 
+### Batch processor (`scripts/batch_process.py`)
+
+The batch processor is a standalone Python script that watches `data/pdf_inbox/` and converts every new bank statement PDF into XLS output. It runs without the bridge HTTP server.
+
+#### Two operating modes
+
+| Mode | Command | When to use |
+|---|---|---|
+| One-shot | `python3 scripts/batch_process.py` | Process the current inbox contents and exit |
+| Watch | `python3 scripts/batch_process.py --watch` | Drop files into pdf_inbox at any time; they are processed automatically |
+
+#### Idempotency — SHA-256 deduplication
+
+Every file is SHA-256 hashed **before** processing. The hash and result are written to `data/processed_files.db` (SQLite). On any subsequent run, the same file content produces the same hash → immediate skip. This guarantee holds after restart and even if the file is renamed or re-copied.
+
+```
+File dropped → hash computed → already in registry? → skip
+                                ↓ no
+                            stability check (size unchanged for N secs)
+                                ↓ stable
+                            unlock → parse → export → record hash as 'ok'
+```
+
+Previously failed files (status `error` in the registry) are automatically retried on the next run.
+
+#### File stability check
+
+Before processing any file, the script reads the file size, waits `--stable-secs` (default: 5 s), then reads it again. A file is only processed when:
+- Its size is non-zero
+- Its size has not changed between the two reads
+
+This prevents reading a file that is still being written (e.g. a large PDF mid-copy). Files that are not yet stable are silently deferred to the next scan.
+
+#### ZIP handling
+
+When a `.zip` file appears in `pdf_inbox/`:
+1. Stability check applied to the ZIP itself
+2. ZIP is extracted into `pdf_inbox/_extracted/` (directory structure inside the ZIP is flattened)
+3. Each extracted PDF is processed with the same hash dedup rules
+4. The ZIP itself is recorded in the registry so it is never re-extracted
+
+#### Full CLI reference
+
+```bash
+# Run from project root
+cd ~/agentic-ai
+
+# One-shot (default)
+python3 scripts/batch_process.py
+
+# Watch mode — poll every 10 s, require 5 s of size stability
+python3 scripts/batch_process.py --watch
+
+# Tune timing
+python3 scripts/batch_process.py --watch --poll-secs 15 --stable-secs 8
+
+# Use a different inbox (e.g. a mounted network share)
+python3 scripts/batch_process.py --inbox /Volumes/NAS/bank_statements
+
+# Detect bank/type only — skip parsing and XLS export
+python3 scripts/batch_process.py --dry-run
+
+# Wipe all XLS output before processing
+python3 scripts/batch_process.py --clear-output
+
+# Wipe the dedup registry (forces reprocessing of everything)
+python3 scripts/batch_process.py --reset-registry
+
+# Both: full clean slate
+python3 scripts/batch_process.py --clear-output --reset-registry
+
+# Show registry summary and errors, then exit
+python3 scripts/batch_process.py --status
+
+# Print full Python tracebacks on parse errors
+python3 scripts/batch_process.py -v
+```
+
+#### Registry database
+
+`data/processed_files.db` — SQLite, WAL mode. Two tables:
+
+| Table | Primary key | Purpose |
+|---|---|---|
+| `processed_files` | `sha256` | One row per unique file content; records bank, period, txn count, output filename, status, error |
+| `zip_members` | `(zip_sha256, pdf_filename)` | Maps each ZIP extraction to its contained PDFs |
+
+To inspect directly:
+```bash
+sqlite3 data/processed_files.db \
+  "SELECT filename, bank, stmt_type, period, transactions, status FROM processed_files ORDER BY processed_at DESC;"
+```
+
+#### Log file
+
+All runs append to `logs/batch_process.log` (DEBUG level). Console output is INFO level. Use `-v` to promote DEBUG to the console as well.
+
 ### Web UI
 
 Access at **http://127.0.0.1:9100/pdf/ui** (localhost only; SSH tunnel for remote access).
@@ -1578,6 +1703,8 @@ Three tabs:
 - **Mail Attachments** — scans Mail.app attachments folder for new bank PDFs, lets you queue them for processing with one click
 
 The UI uses the same bearer token as the rest of the bridge API. On first load it prompts for the token and stores it in `localStorage`.
+
+> **Note:** The web UI and batch processor use separate job-tracking databases (`pdf_jobs.db` vs `processed_files.db`) and are independent. The batch processor does not require the bridge to be running.
 
 ### Attachment scanner
 
@@ -1783,6 +1910,25 @@ docker compose up -d
 ---
 
 ## 23. Version History
+
+### v1.7.0
+
+- Added: `scripts/batch_process.py` — automatic, idempotent PDF→XLS batch processor (full rewrite)
+  - **Watch mode** (`--watch`): polls `pdf_inbox/` on a configurable interval (`--poll-secs`, default 10 s); processes new files as they arrive; clean shutdown on Ctrl-C / SIGTERM
+  - **SHA-256 deduplication**: every file is content-hashed before processing; the same file is never processed twice regardless of filename, copy count, or restart
+  - **Persistent registry**: `data/processed_files.db` (SQLite, WAL mode) stores hash, bank, period, transaction count, output filename, and status per file; survives restarts
+  - **File stability guard**: size sampled twice `--stable-secs` apart (default 5 s); files still being written are silently deferred to the next scan
+  - **ZIP support**: ZIPs extracted into `pdf_inbox/_extracted/`; each contained PDF subject to same hash dedup; parent ZIP recorded to prevent re-extraction
+  - **Auto-retry on error**: files with `status='error'` in registry are retried on the next run
+  - **`--status` flag**: prints registry summary (OK/error counts, total transactions, error details) without processing anything
+  - **`--reset-registry` flag**: wipes `processed_files.db` to force reprocessing of all files
+  - **`--dry-run` flag**: bank/type detection only; no parsing or XLS writing
+  - **`--clear-output` flag**: deletes all `.xlsx` files from `output/xls/` before starting
+  - **Dual logging**: INFO to stdout; DEBUG to `logs/batch_process.log` (appended across runs)
+  - Does not require the bridge HTTP server to be running
+- Added: `data/processed_files.db` — batch processor dedup registry (two tables: `processed_files`, `zip_members`)
+- Added: `data/pdf_inbox/_extracted/` — auto-created subdirectory for ZIP-extracted PDFs
+- Added: `logs/batch_process.log` — persistent batch processor log
 
 ### v1.6.0
 
