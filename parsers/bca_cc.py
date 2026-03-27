@@ -68,8 +68,12 @@ _SKIP_PATTERNS = re.compile(
 
 
 def can_parse(text_page1: str) -> bool:
-    # Bank name first; "KARTU KREDIT" distinguishes CC from BCA savings (Tahapan)
-    return ("BCA" in text_page1 or "Bank Central Asia" in text_page1) and "KARTU KREDIT" in text_page1
+    # Require "REKENING KARTU KREDIT" — the actual BCA CC document title — rather
+    # than the generic phrase "KARTU KREDIT", which also appears as a transaction
+    # description inside BCA Savings statements (e.g. "KARTU KREDIT/PL 0108 ...").
+    # Using the full title prevents a savings statement from being misrouted to this
+    # parser just because one of its rows records a CC payment.
+    return ("BCA" in text_page1 or "Bank Central Asia" in text_page1) and "REKENING KARTU KREDIT" in text_page1
 
 
 def parse(pdf_path: str, ollama_client=None) -> StatementResult:
