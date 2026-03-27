@@ -9,10 +9,17 @@ Detection priority:
   4. BCA Savings     — "REKENING TAHAPAN" + "MUTASI"
   5. Maybank CC      — "Total Tagihan" + "BALANCE OF LAST MONTH"
   6. Maybank Consol  — "RINGKASAN PORTOFOLIO NASABAH" or "DETAIL & MUTASI TRANSAKSI"
+  7. CIMB Niaga CC   — "PERINCIAN TAGIHAN" + "Tgl. Statement" + "CIMB"
+  8. CIMB Niaga Consol — "LAPORAN KONSOLIDASI PORTFOLIO" + "COMBINE STATEMENT PORTFOLIO"
 """
 import pdfplumber
 from .base import StatementResult
-from . import maybank_cc, maybank_consol, bca_cc, bca_savings, permata_cc, permata_savings
+from . import (
+    maybank_cc, maybank_consol,
+    bca_cc, bca_savings,
+    permata_cc, permata_savings,
+    cimb_niaga_cc, cimb_niaga_consol,
+)
 
 
 class UnknownStatementError(Exception):
@@ -47,6 +54,14 @@ def detect_and_parse(pdf_path: str, ollama_client=None,
     if maybank_cc.can_parse(page1_text):
         return maybank_cc.parse(pdf_path, ollama_client)
 
+    # CIMB Niaga must be checked before Maybank consol: the CIMB consol page 2
+    # contains "ALOKASI ASET" which is also a Maybank consol detection keyword.
+    if cimb_niaga_cc.can_parse(page1_text):
+        return cimb_niaga_cc.parse(pdf_path, owner_mappings=owner_mappings, ollama_client=ollama_client)
+
+    if cimb_niaga_consol.can_parse(page1_text):
+        return cimb_niaga_consol.parse(pdf_path, owner_mappings=owner_mappings, ollama_client=ollama_client)
+
     if maybank_consol.can_parse(combined):
         return maybank_consol.parse(pdf_path, ollama_client)
 
@@ -73,6 +88,10 @@ def detect_bank_and_type(pdf_path: str) -> tuple[str, str]:
         return "BCA", "savings"
     if maybank_cc.can_parse(page1_text):
         return "Maybank", "cc"
+    if cimb_niaga_cc.can_parse(page1_text):
+        return "CIMB Niaga", "cc"
+    if cimb_niaga_consol.can_parse(page1_text):
+        return "CIMB Niaga", "consol"
     if maybank_consol.can_parse(combined):
         return "Maybank", "consolidated"
 
