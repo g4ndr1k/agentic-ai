@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 2.7.0 · Stage 1 complete · Stage 2 fully built · Stage 3 planned
+**Version:** 2.8.1 · Stage 1 complete · Stage 2 fully built · Stage 3 planned
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-03-31
+**Last validated against:** checked-in codebase 2026-04-03
 
 ---
 
@@ -2001,6 +2001,56 @@ docker compose up -d
 
 ## 23. Version History
 
+### v2.8.1 (2026-04-03)
+
+#### Fixed
+
+- **Category Overrides migration** — `finance/sync.py` now applies `migrate_category()` to override values read from the "Category Overrides" Google Sheet tab. Previously, legacy names stored in that tab (`Opening Balance`, `Internal Transfer`) were applied *after* the migration pass, re-introducing old names into SQLite. The override values are now migrated in place before being written to the DB.
+- **"Category Overrides" tab patched** — 8 override rows in the live Google Sheet updated directly: 4× `Opening Balance` → `Adjustment`, 4× `Internal Transfer` → `Transfer`.
+- **`data/finance.db` regenerated** — old SQLite DB deleted and sync re-run; DB now has zero legacy category names across all tables.
+
+---
+
+### v2.8.0 (2026-04-03)
+
+#### Features
+
+- **Expanded category taxonomy: 22 → 31 categories across 8 groups** — categories are now organised into Groups with Subcategory metadata for richer reporting and filtering.
+
+  | Group | New Categories Added |
+  |---|---|
+  | Housing & Bills | Phone Bill, Internet |
+  | Food & Dining | Delivery & Takeout |
+  | Transportation | Rideshare (split from Auto) |
+  | System / Tracking | Dividends, Interest Income, Capital Gains, Other Income, Taxes |
+
+- **`category_group` and `subcategory` columns** — added to the Google Sheet "Categories" tab (columns F–G), the SQLite `categories` table, and the `/api/categories` API response.
+- **Helen BCA ATM → Household auto-rule** — transactions on Helen's BCA account `5500346622` with `TARIK TUNAI` / `ATM` in the raw description are now auto-categorized as `Household` at post-processing time (Layer 0, alongside the cross-account transfer matcher).
+- **Legacy category migration** — `finance/categorizer.py` exports a `migrate_category()` function that maps all retired category names forward. Applied at sync time to every transaction row and every Category Override row:
+
+  | Old name | New name |
+  |---|---|
+  | Internal Transfer | Transfer |
+  | External Transfer | Transfer |
+  | Opening Balance | Adjustment |
+  | Transport | Auto |
+  | Household Expenses | Household |
+  | Child Support | Family |
+  | Travel | Flights & Hotels |
+
+#### Changed
+
+- **`Transfer` replaces `Internal Transfer` + `External Transfer`** — all three cross-account transfer categories collapsed into one. `Adjustment` replaces `Opening Balance`.
+- **`finance/setup_sheets.py`** — `DEFAULT_CATEGORIES` expanded from 22 to 31 rows; seed range changed from `A:E` to `A:G`; `categories_tab` headers now include `category_group` and `subcategory`.
+- **`finance/db.py`** — `categories` table gains `category_group TEXT DEFAULT ''` and `subcategory TEXT DEFAULT ''` columns.
+- **`finance/sync.py`** — `_read_categories()` reads columns A–G; `INSERT INTO categories` includes the two new columns; migration pass added before override application.
+- **`finance/api.py`** — `/api/categories` returns `category_group` and `subcategory`; all `NOT IN (…)` exclusion sets updated to `('Transfer', 'Adjustment')`.
+- **`finance/_seed_aliases.py`** — 4 seeded aliases updated from `"Household Expenses"` → `"Household"`.
+- **`pwa/src/views/Dashboard.vue`** — `EXCLUDED_FROM_SPENDING` set updated to `['Transfer', 'Adjustment']`.
+- **`pwa/src/views/Transactions.vue`** — `EXCLUDE_CATS` set updated to `['Transfer', 'Adjustment']`.
+
+---
+
 ### v2.7.0 (2026-03-31)
 
 #### Features
@@ -2139,7 +2189,7 @@ docker compose up -d
 - **Changed: Subscriptions icon** updated from 🔄 to 📱 (was too similar to 🔁 Internal Transfer).
 - **Populated: Merchant Aliases tab** — 207 alias rules (22 regex + 185 exact) covering all 273 unique transaction descriptions; 100% L1/L2 auto-categorisation with zero L4 fallbacks.
 
-#### Categories (current)
+#### Categories (superseded — see v2.8.0 for current taxonomy)
 
 | Sort | Category | Icon |
 |---|---|---|
@@ -2702,13 +2752,51 @@ Column order optimized for mobile scanning (most-viewed fields leftmost):
 
 | Column | Type | Example | Notes |
 |---|---|---|---|
-| `category` | Text | Dining Out | |
+| `category` | Text | Dining Out | Unique display name |
 | `icon` | Text | 🍽️ | |
-| `sort_order` | Number | 3 | |
+| `sort_order` | Number | 6 | |
 | `is_recurring` | Boolean | FALSE | |
 | `monthly_budget` | Number | 8000000 | Reserved for Stage 2.x; not surfaced in Stage 2 UI |
+| `category_group` | Text | Food & Dining | Top-level group (8 groups) |
+| `subcategory` | Text | Dining Out | Subcategory label |
 
-Default categories: Housing 🏠 · Utilities ⚡ · Groceries 🛒 · Dining Out 🍽️ · Transport 🚗 · Shopping 🛍️ · Healthcare 🏥 · Entertainment 🎬 · Subscriptions 📱 · Travel ✈️ · Education 📚 · Personal Care 💇 · Gifts & Donations 🎁 · Fees & Interest 🏦 · Cash Withdrawal 💵 · Income 💰 · Other ❓ · Internal Transfer 🔁 · External Transfer ↗️ · Household Expenses 🧺 · Child Support 👧 · Opening Balance 🏦
+**31 categories across 8 groups (v2.8.0 taxonomy):**
+
+| # | Group | Category | Icon | Recurring |
+|---|---|---|---|---|
+| 1 | **Housing & Bills** | Housing | 🏠 | ✓ |
+| | | Utilities | ⚡ | ✓ |
+| | | Phone Bill | 📞 | ✓ |
+| | | Internet | 🌐 | ✓ |
+| 2 | **Food & Dining** | Groceries | 🛒 | |
+| | | Dining Out | 🍽️ | |
+| | | Delivery & Takeout | 🛵 | |
+| 3 | **Transportation** | Auto | 🚗 | |
+| | | Rideshare | 🚕 | |
+| 4 | **Lifestyle & Personal** | Shopping | 🛍️ | |
+| | | Personal Care | 💇 | |
+| | | Entertainment | 🎬 | |
+| | | Subscriptions | 📱 | ✓ |
+| 5 | **Health & Family** | Healthcare | 🏥 | |
+| | | Family | 👨‍👩‍👧 | ✓ |
+| | | Household | 🧺 | |
+| | | Education | 📚 | |
+| | | Gifts & Donations | 🎁 | |
+| 6 | **Travel** | Flights & Hotels | ✈️ | |
+| | | Vacation Spending | 🏖️ | |
+| 7 | **Financial & Legal** | Fees & Interest | 🏦 | |
+| | | Taxes | 📋 | |
+| 8 | **System / Tracking** | Income | 💰 | |
+| | | Dividends | 📈 | |
+| | | Interest Income | 🏦 | |
+| | | Capital Gains | 📊 | |
+| | | Other Income | 💵 | |
+| | | Transfer | 🔁 | |
+| | | Cash Withdrawal | 🏧 | |
+| | | Adjustment | 🔧 | |
+| | | Other | ❓ | |
+
+> **System / Tracking categories** (`Transfer`, `Adjustment`) are excluded from all income/expense totals, % calculations, and spending charts in both the API and the PWA.
 
 ### 26.5 Google Sheets — Currency Codes tab
 
@@ -2770,13 +2858,15 @@ CREATE TABLE IF NOT EXISTS merchant_aliases (
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    category       TEXT NOT NULL UNIQUE,
-    icon           TEXT,
-    sort_order     INTEGER NOT NULL DEFAULT 99,
-    is_recurring   INTEGER NOT NULL DEFAULT 0,    -- 0/1 boolean
-    monthly_budget REAL,
-    synced_at      TEXT NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    category        TEXT    UNIQUE NOT NULL,
+    icon            TEXT    DEFAULT '',
+    sort_order      INTEGER DEFAULT 99,
+    is_recurring    INTEGER DEFAULT 0,            -- 0/1 boolean
+    monthly_budget  REAL,
+    category_group  TEXT    DEFAULT '',           -- e.g. "Food & Dining"
+    subcategory     TEXT    DEFAULT '',           -- e.g. "Dining Out"
+    synced_at       TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS currency_codes (
@@ -2833,8 +2923,9 @@ CREATE TABLE IF NOT EXISTS sync_log (
    User confirms → write to Sheet + expand Merchant Aliases tab
 
 After all transactions are categorized:
-      ▼ Post-processing: cross-account internal transfer matching
-   Found matching DB/CR pair? ──Yes──▶ re-categorize both as Internal Transfer
+      ▼ Post-processing (Layer 0): two rules
+         1. Cross-account transfer matching → re-categorize both sides as Transfer
+         2. Helen BCA ATM withdrawals → re-categorize as Household
 ```
 
 **Layers 1, 1b, and 2 auto-assign** (no user interaction needed). **Layers 3, 3b, and 4 always require one user confirmation tap** in the PWA review queue.
@@ -2845,32 +2936,48 @@ Every confirmed Layer 3/4 entry writes back to the Merchant Aliases tab. Future 
 
 All alias layers (exact, contains, regex) support two optional filter columns: `owner_filter` and `account_filter`. When set, the alias only matches if the transaction's owner and/or account number matches.
 
-**Priority:** Within each layer, filtered (specific) rules are always checked before generic (unfiltered) rules. This ensures that, e.g., "TARIKAN ATM" from Helen's BCA 5500346622 → Household Expenses, while the same pattern from any other account → Cash Withdrawal (generic regex).
+**Priority:** Within each layer, filtered (specific) rules are always checked before generic (unfiltered) rules. This ensures that, e.g., "TARIKAN ATM" from Helen's BCA 5500346622 → Household, while the same pattern from any other account → Cash Withdrawal (generic regex).
 
 **Example account-aware rules:**
 
 | merchant | alias | category | match_type | owner_filter | account_filter |
 |---|---|---|---|---|---|
-| Household Cash | TARIKAN ATM | Household Expenses | contains | Helen | 5500346622 |
+| Household Cash | TARIKAN ATM | Household | contains | Helen | 5500346622 |
 | Healthcare (Ivan) | IVAN | Healthcare | contains | Helen | 2684118322 |
 | ANZ Indonesia (Salary) | LLG-ANZ | Income | contains | Gandrik | 2171138631 |
 | ERHA Clinic (Income) | ERHA CLINIC | Income | contains | Helen | 4123968773 |
-| Child Support (Katina) | KATINA MIKAELA | Child Support | contains | | |
-| Household Staff (Rini) | FRANSISCA RINI | Household Expenses | contains | | |
+| Family (Katina) | KATINA MIKAELA | Family | contains | | |
+| Household Staff (Rini) | FRANSISCA RINI | Household | contains | | |
 
-### Cross-account internal transfer matching
+### Cross-account transfer matching and Helen BCA ATM rule
 
-After individual transaction categorization, a post-processing step (`match_internal_transfers()`) detects matching debit/credit pairs across known internal account pairs.
+After individual transaction categorization, `match_internal_transfers()` runs two post-processing passes:
 
-**How it works:**
+**Pass 1 — Cross-account transfer matching:**
 1. For each configured account pair (A ↔ B), find transactions where account A has a debit on date D for amount X, and account B has a credit on the same date D for the same amount X.
-2. Only pair rows whose `raw_description` still looks transfer-like (for example `TRSF E-BANKING`, `TRF INCOMING`, `TRF BIFAST`, `TRF KE`, `PB DARI`, `PB KE`, `BI-FAST`). This avoids reclassifying unrelated same-day/same-amount debit and credit rows.
-3. Both sides are re-categorised as "Internal Transfer".
+2. Only pair rows whose `raw_description` still looks transfer-like (e.g. `TRSF E-BANKING`, `TRF INCOMING`, `TRF BIFAST`, `TRF KE`, `PB DARI`, `PB KE`, `BI-FAST`). This avoids reclassifying unrelated same-day/same-amount rows.
+3. Both sides are re-categorised as **`Transfer`**.
 
 **Configured account pairs** (in `categorizer.py::INTERNAL_ACCOUNT_PAIRS`):
 - Gandrik BCA (2171138631) ↔ Helen BCA (5500346622) — monthly household allowance
 - Helen Permata (4123968773) ↔ Helen BCA (2684118322) — savings ↔ spending
 - Helen Permata (4123968773) ↔ Gandrik Permata (4123968447) — cross-account
+
+**Pass 2 — Helen BCA ATM cash → Household:**
+Cash withdrawals from Helen's BCA account (5500346622) with ATM-like descriptions (`TARIKAN ATM`, `TARIKAN TUNAI`, `CASH WITHDRAWAL`, `CW-ATM`) are re-categorised as **`Household`**, since this cash is used for daily household spending. Controlled by `HELEN_BCA_HOUSEHOLD_ACCOUNT` constant in `categorizer.py`.
+
+**Legacy category migration (sync-time):**
+When syncing from Google Sheets, `migrate_category()` automatically translates old names to new ones — applied to both transaction rows and Category Override rows:
+
+| Old name | New name |
+|---|---|
+| `Internal Transfer` | `Transfer` |
+| `External Transfer` | `Transfer` |
+| `Opening Balance` | `Adjustment` |
+| `Transport` | `Auto` |
+| `Household Expenses` | `Household` |
+| `Child Support` | `Family` |
+| `Travel` | `Flights & Hotels` |
 
 ### Layer 1 — Merchant alias table (exact match)
 
@@ -2886,21 +2993,34 @@ Same tab, rows where `match_type = "regex"`. Python regex with `re.IGNORECASE`. 
 
 ### Layer 3 — Ollama AI suggestion
 
-Prompt structure sent to `llama3.2:3b`:
+Prompt structure sent to `qwen2.5:7b` (Anthropic Claude as fallback):
 
 ```
 You are a personal finance categorizer for an Indonesian household.
 
-Known categories: Housing, Utilities, Groceries, Dining Out, Transport,
-Shopping, Healthcare, Entertainment, Subscriptions, Travel, Education,
-Personal Care, Gifts & Donations, Fees & Interest, Cash Withdrawal,
-Income, Other, Internal Transfer, External Transfer, Household Expenses,
-Child Support
+Available categories: Housing, Utilities, Phone Bill, Internet,
+Groceries, Dining Out, Delivery & Takeout, Auto, Rideshare,
+Shopping, Personal Care, Entertainment, Subscriptions,
+Healthcare, Family, Household, Education, Gifts & Donations,
+Flights & Hotels, Vacation Spending, Fees & Interest, Taxes,
+Income, Dividends, Interest Income, Capital Gains, Other Income,
+Transfer, Cash Withdrawal, Adjustment, Other
+
+Category guidance:
+- Auto: fuel (SPBU, Pertamina), vehicle repairs, parking, toll
+- Rideshare: Grab, Gojek, Uber for transport
+- Delivery & Takeout: GrabFood, GoFood, ShopeeFood
+- Flights & Hotels: airlines, hotels, Airbnb, booking platforms
+- Vacation Spending: food and activities while on vacation / overseas
+- Household: IKEA, ACE Hardware, Informa, cleaning supplies
+...
 
 Recent confirmed examples:
-- "GRAB* TRANSPORT" → Grab, Transport
+- "GRAB* A8NPTNG SOUTH JAKARTA" → Grab, Rideshare
 - "NETFLIX.COM" → Netflix, Subscriptions
 - "INDOMARET" → Indomaret, Groceries
+- "GRABFOOD" → GrabFood, Delivery & Takeout
+- "CATHAY PACIFIC AIRWAYS" → Cathay Pacific, Flights & Hotels
 
 Transaction: "{raw_description}"
 
