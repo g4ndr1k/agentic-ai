@@ -69,15 +69,23 @@
           <div class="e-sub">No expense data this month</div>
         </div>
         <div v-else>
-          <div v-for="cat in topCats" :key="cat.category" class="cat-row">
+          <div
+            v-for="cat in topCats"
+            :key="cat.category"
+            class="cat-row cat-row-tappable"
+            @click="drillDown(cat)"
+            role="button"
+            :aria-label="`View ${cat.category} transactions`"
+          >
             <div class="cat-header">
               <span class="cat-name">
                 <span>{{ catIcon(cat.category) }}</span>
                 {{ cat.category }}
               </span>
-              <span>
+              <span style="display:flex;align-items:center;gap:4px">
                 <span class="cat-amount">{{ fmt(Math.abs(cat.amount)) }}</span>
                 <span class="cat-pct">{{ (cat.pct_of_expense || 0).toFixed(0) }}%</span>
+                <span class="cat-drill-chevron">›</span>
               </span>
             </div>
             <div class="cat-bar-bg">
@@ -131,12 +139,14 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { formatIDR } from '../utils/currency.js'
 
-const store = useFinanceStore()
+const router = useRouter()
+const store  = useFinanceStore()
 const trendRef = ref(null)
 let trendChart = null
 
@@ -187,6 +197,19 @@ function fmtShort(n) {
 
 function catIcon(name) {
   return store.categoryMap[name]?.icon || '📁'
+}
+
+// ── Category drill-down ──────────────────────────────────────────────────────
+function drillDown(cat) {
+  router.push({
+    path: '/category-drilldown',
+    query: {
+      category: cat.category,
+      year:     store.selectedYear,
+      month:    store.selectedMonth,
+      ...(store.selectedOwner ? { owner: store.selectedOwner } : {}),
+    },
+  })
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
@@ -281,3 +304,24 @@ onMounted(load)
 watch([() => store.selectedYear, () => store.selectedMonth], load)
 onUnmounted(() => { if (trendChart) trendChart.destroy() })
 </script>
+
+<style scoped>
+/* Make category rows tappable */
+.cat-row-tappable {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: 0 -8px 3px;
+  transition: background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.cat-row-tappable:hover  { background: var(--primary-dim); }
+.cat-row-tappable:active { background: rgba(30,58,95,0.14); }
+
+.cat-drill-chevron {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-left: 2px;
+  font-weight: 400;
+}
+</style>
