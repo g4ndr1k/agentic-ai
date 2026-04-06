@@ -62,26 +62,24 @@
               <th>Category</th>
               <th class="num">{{ ccy }}</th>
               <th class="num">IDR</th>
-              <th class="num">Rate</th>
-              <th>Owner</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="r in rows.filter(rx => rx.original_currency === ccy)" :key="r.hash ?? r.date + r.amount">
               <td>{{ r.date }}</td>
               <td>{{ r.merchant || r.raw_description }}</td>
-              <td>{{ r.category ? (catIcon(r.category) + ' ' + r.category) : '—' }}</td>
-              <td class="num text-expense">{{ fmtFX(r.original_amount) }}</td>
-              <td class="num text-expense">{{ fmt(r.amount) }}</td>
-              <td class="num" style="color:var(--text-muted);font-size:11px">{{ fmtRate(r.exchange_rate) }}</td>
-              <td>{{ r.owner }}</td>
+              <td>{{ r.category || '—' }}</td>
+              <td class="num text-expense">
+                <div class="fx-amount">{{ fmtFX(r.original_amount) }}</div>
+                <div class="fx-rate">{{ fmtRate(r.exchange_rate) }}</div>
+              </td>
+              <td class="num text-expense">{{ fmtIDRCell(r.amount) }}</td>
             </tr>
             <!-- Currency subtotal -->
             <tr style="background:var(--bg);font-weight:700">
               <td colspan="3" style="text-align:right;font-size:11px;color:var(--text-muted)">Subtotal</td>
               <td class="num text-expense">{{ fmtFX(ccyTotalFX(ccy)) }}</td>
-              <td class="num text-expense">{{ fmt(ccyTotalIDR(ccy)) }}</td>
-              <td colspan="2"></td>
+              <td class="num text-expense">{{ fmtIDRCell(ccyTotalIDR(ccy)) }}</td>
             </tr>
           </tbody>
         </table>
@@ -106,7 +104,6 @@ const filters = ref({ year: '', month: '', owner: '' })
 
 const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December']
 function monthName(m) { return MONTHS_LONG[m - 1] }
-function catIcon(name) { return store.categoryMap[name]?.icon || '📁' }
 
 // ── Derived ───────────────────────────────────────────────────────────────────
 const currencies = computed(() => {
@@ -142,6 +139,14 @@ function fmt(n) {
   return formatIDR(n)
 }
 
+function fmtIDRCell(n) {
+  if (n === null || n === undefined) return '0'
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(Math.abs(Math.round(n)))
+}
+
 function fmtFX(n) {
   if (n === null || n === undefined) return '—'
   return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(n))
@@ -149,7 +154,7 @@ function fmtFX(n) {
 
 function fmtRate(n) {
   if (!n) return '—'
-  if (n >= 1000) return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(n)
+  if (n >= 1000) return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n)
   return n.toFixed(4)
 }
 

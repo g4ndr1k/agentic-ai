@@ -117,12 +117,12 @@ def parse(pdf_path: str, ollama_client=None) -> StatementResult:
         all_texts, account_number, period_year, mo, errors, ollama_client
     )
 
-    # ── Layer 2: summary from last page ──────────────────────────────────
-    opening_balance = _extract_summary_value(all_texts[-1], "SALDO AWAL")
-    closing_balance = _extract_summary_value(all_texts[-1], "SALDO AKHIR")
-    total_cr = _extract_summary_value(all_texts[-1], "MUTASI CR")
-    total_db = _extract_summary_value(all_texts[-1], "MUTASI DB")
-
+    # ── Layer 2: summary (scan full document — the summary block is usually on
+    #              the last page but may shift in multi-page layouts) ───────────────
+    opening_balance = _extract_summary_value(full_text, "SALDO AWAL")
+    closing_balance = _extract_summary_value(full_text, "SALDO AKHIR")
+    total_cr        = _extract_summary_value(full_text, "MUTASI CR")
+    total_db        = _extract_summary_value(full_text, "MUTASI DB")
     accounts = [AccountSummary(
         product_name="BCA Rekening Tahapan",
         account_number=account_number,

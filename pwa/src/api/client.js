@@ -10,7 +10,7 @@ async function get(path, params = {}) {
       url.searchParams.set(k, String(v))
     }
   }
-  const res = await fetch(url.toString())
+  const res = await fetch(url.toString(), { headers: AUTH_HEADERS })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`${res.status}: ${text || res.statusText}`)
@@ -23,6 +23,20 @@ async function post(path, body = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
     body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status}: ${text || res.statusText}`)
+  }
+  return res.json()
+}
+
+// Multipart upload — do NOT set Content-Type; browser injects the boundary automatically.
+async function postMultipart(path, formData) {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { ...AUTH_HEADERS },
+    body: formData,
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -85,4 +99,15 @@ export const api = {
   getLiabilities:      (p = {})   => get('/wealth/liabilities', p),
   upsertLiability:     (body)     => post('/wealth/liabilities', body),
   deleteLiability:     (id)       => del(`/wealth/liabilities/${id}`),
+
+  // ── PDF Local Processing ────────────────────────────────────────────────────
+  // The finance-api (port 8090) proxies these to the bridge (port 9100) so the
+  // PWA never needs to open a second origin or use the File System Access API.
+  //
+  //   pdfLocalFiles()              GET  /api/pdf/local-files
+  //   processLocalPdf(folder, fn)  POST /api/pdf/process-local
+  //   pdfLocalStatus(jobId)        GET  /api/pdf/local-status/:id
+  pdfLocalFiles:   ()                      => get('/pdf/local-files'),
+  processLocalPdf: (folder, filename)      => post('/pdf/process-local', { folder, filename }),
+  pdfLocalStatus:  (jobId)                 => get(`/pdf/local-status/${jobId}`),
 }

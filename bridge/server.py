@@ -21,7 +21,7 @@ from bridge.mail_source import MailSource
 from bridge.messages_source import MessagesSource
 from bridge.pdf_handler import (
     init_pdf_handler,
-    handle_upload, handle_process, handle_status,
+    handle_upload, handle_process, handle_process_file, handle_status,
     handle_download, handle_jobs, handle_attachments,
 )
 
@@ -283,6 +283,11 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/pdf/process":
                 status, payload = handle_process(data)
+                self._json(status, payload)
+                return
+
+            if path == "/pdf/process-file":
+                status, payload = handle_process_file(data)
                 self._json(status, payload)
                 return
 

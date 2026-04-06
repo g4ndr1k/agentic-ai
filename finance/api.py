@@ -1326,6 +1326,170 @@ def get_wealth_summary(
     }
 
 
+# ── PDF Local Processing ───────────────────────────────────────────────────────
+# The finance-api container can see pdf_inbox / pdf_unlocked via the mounted
+# ./data:/app/data volume.  PDF parsing itself lives in the bridge (port 9100
+# on the host); these endpoints scan local folders and proxy files to it.
+#
+#   GET  /api/pdf/local-files              list PDFs in both inbox dirs
+#   POST /api/pdf/process-local            upload one file to bridge + trigger parse
+#   GET  /api/pdf/local-status/{job_id}    proxy bridge /pdf/status/<id>
+# ──────────────────────────────────────────────────────────────────────────────
+import asyncio  as _asyncio
+import uuid     as _uuid
+import urllib.request as _urllib_req
+import urllib.error   as _urllib_err
+import json     as _json
+import pathlib  as _pl
+
+# Bridge location — override via BRIDGE_URL env var when running outside Docker
+_BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://host.docker.internal:9100").rstrip("/")
+
+# Data dir is the directory containing finance.db (mounted from ./data)
+_DATA_DIR = _pl.Path(_db_path).parent
+
+_PDF_FOLDERS: dict[str, _pl.Path] = {
+    "pdf_inbox":    _DATA_DIR / "pdf_inbox",
+    "pdf_unlocked": _DATA_DIR / "pdf_unlocked",
+}
+
+def _read_bridge_token() -> str:
+    """Read the bridge bearer token from the secrets mount (best-effort)."""
+    for candidate in [
+        _pl.Path("/app/secrets/bridge.token"),
+        _pl.Path(os.environ.get("BRIDGE_TOKEN_FILE", "/app/secrets/bridge.token")),
+    ]:
+        if candidate.exists():
+            return candidate.read_text().strip()
+    return ""
+
+def _bridge_headers(token: str) -> dict:
+    h = {"Content-Type": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+def _bridge_get(path: str, token: str) -> dict:
+    """Synchronous bridge GET — run via asyncio.to_thread."""
+    req = _urllib_req.Request(
+        f"{_BRIDGE_URL}{path}",
+        headers={"Authorization": f"Bearer {token}"} if token else {},
+    )
+    with _urllib_req.urlopen(req, timeout=15) as r:
+        return _json.loads(r.read())
+
+def _bridge_post_json(path: str, body: dict, token: str) -> dict:
+    """Synchronous bridge POST (JSON) — run via asyncio.to_thread."""
+    data = _json.dumps(body).encode()
+    req = _urllib_req.Request(
+        f"{_BRIDGE_URL}{path}", data=data,
+        headers={
+            "Content-Type": "application/json",
+            **( {"Authorization": f"Bearer {token}"} if token else {} ),
+        }, method="POST",
+    )
+    with _urllib_req.urlopen(req, timeout=120) as r:
+        return _json.loads(r.read())
+
+def _bridge_upload(path: str, filename: str, file_bytes: bytes, token: str) -> dict:
+    """Synchronous multipart upload to bridge — run via asyncio.to_thread."""
+    boundary = "----FinanceBridge" + _uuid.uuid4().hex
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: application/pdf\r\n\r\n"
+    ).encode() + file_bytes + f"\r\n--{boundary}--\r\n".encode()
+    req = _urllib_req.Request(
+        f"{_BRIDGE_URL}{path}", data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+            **( {"Authorization": f"Bearer {token}"} if token else {} ),
+        }, method="POST",
+    )
+    with _urllib_req.urlopen(req, timeout=60) as r:
+        return _json.loads(r.read())
+
+
+@app.get("/api/pdf/local-files")
+async def pdf_local_files(_auth=Depends(require_api_key)):
+    """
+    List all PDF files found in pdf_inbox and pdf_unlocked under the data directory.
+    Returns a list of { folder, filename, size_kb, mtime } objects sorted by mtime desc.
+    """
+    results = []
+    for folder, dir_path in _PDF_FOLDERS.items():
+        if not dir_path.is_dir():
+            continue
+        for f in dir_path.iterdir():
+            if f.is_file() and f.suffix.lower() == ".pdf":
+                stat = f.stat()
+                results.append({
+                    "folder":   folder,
+                    "filename": f.name,
+                    "size_kb":  round(stat.st_size / 1024, 1),
+                    "mtime":    stat.st_mtime,
+                })
+    results.sort(key=lambda x: x["mtime"], reverse=True)
+    return results
+
+
+class _ProcessLocalReq(BaseModel):
+    folder:   str   # "pdf_inbox" or "pdf_unlocked"
+    filename: str
+
+@app.post("/api/pdf/process-local")
+async def pdf_process_local(req: _ProcessLocalReq, _auth=Depends(require_api_key)):
+    """
+    Ask the bridge to process a PDF by folder+filename — no byte upload needed.
+    Both the bridge (Mac host) and this container share the ./data volume, so the
+    bridge can read the file directly from its own configured inbox/unlocked dirs.
+    Returns { job_id } — poll /api/pdf/local-status/<job_id> for progress.
+    """
+    dir_path = _PDF_FOLDERS.get(req.folder)
+    if not dir_path:
+        raise HTTPException(400, f"Unknown folder '{req.folder}'. Use pdf_inbox or pdf_unlocked.")
+
+    if not (dir_path / req.filename).is_file():
+        raise HTTPException(404, f"File not found: {req.folder}/{req.filename}")
+    if not req.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only .pdf files are supported.")
+
+    token = _read_bridge_token()
+
+    # Bridge reads the file directly from disk — avoids multipart upload entirely.
+    try:
+        result = await _asyncio.to_thread(
+            _bridge_post_json,
+            "/pdf/process-file",
+            {"folder": req.folder, "filename": req.filename},
+            token,
+        )
+    except _urllib_err.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(502, f"Bridge error {e.code}: {body}")
+    except Exception as e:
+        raise HTTPException(502, f"Bridge unreachable: {e}")
+
+    job_id = result.get("job_id")
+    if not job_id:
+        raise HTTPException(502, f"Bridge returned no job_id: {result}")
+
+    return {"job_id": job_id, "filename": req.filename, "folder": req.folder}
+
+
+@app.get("/api/pdf/local-status/{job_id}")
+async def pdf_local_status(job_id: str, _auth=Depends(require_api_key)):
+    """Proxy bridge /pdf/status/<job_id> so the PWA only needs one origin."""
+    token = _read_bridge_token()
+    try:
+        return await _asyncio.to_thread(_bridge_get, f"/pdf/status/{job_id}", token)
+    except _urllib_err.HTTPError as e:
+        raise HTTPException(502, f"Bridge status error: {e.code} {e.reason}")
+    except Exception as e:
+        raise HTTPException(502, f"Bridge unreachable: {e}")
+
+
 # ── PWA static files (must be last — mounted after all /api/* routes) ─────────
 # Serves pwa/dist/ at "/" so the dashboard is accessible at the same origin.
 # In dev: run `npm run dev` in pwa/ instead (uses Vite proxy to :8090).

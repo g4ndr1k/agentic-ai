@@ -138,7 +138,7 @@ const cats = computed(() => {
       category: c.category,
       icon:     store.categoryMap[c.category]?.icon || '📁',
       amount:   Math.abs(c.amount),
-      txCount:  c.transaction_count ?? 0,
+      txCount:  c.count ?? 0,
       pct:      gTotal > 0 ? Math.round((Math.abs(c.amount) / gTotal) * 100) : 0,
     }))
     .sort((a, b) => b.amount - a.amount)

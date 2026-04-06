@@ -207,6 +207,66 @@ def handle_process(body: dict) -> tuple[int, dict]:
     return 200, {"job_id": job_id, "status": job["status"], "error": job.get("error", "")}
 
 
+def handle_process_file(body: dict) -> tuple[int, dict]:
+    """
+    POST /pdf/process-file  {"folder": "pdf_inbox", "filename": "foo.pdf", "password": ""}
+    Resolves the file from the configured inbox/unlocked directories — no upload needed.
+    Immediately queues and runs the job; returns {job_id, status}.
+    """
+    folder   = body.get("folder", "").strip()
+    filename = body.get("filename", "").strip()
+    password = body.get("password", "")
+
+    if not filename:
+        return 400, {"error": "filename is required"}
+
+    # Resolve the directory from config
+    folder_map = {
+        "pdf_inbox":    _config.get("pdf_inbox_dir", ""),
+        "pdf_unlocked": _config.get("pdf_unlocked_dir", ""),
+    }
+    if folder not in folder_map or not folder_map[folder]:
+        return 400, {"error": f"Unknown or unconfigured folder '{folder}'. Use pdf_inbox or pdf_unlocked."}
+
+    file_path = os.path.join(folder_map[folder], os.path.basename(filename))
+    if not os.path.isfile(file_path):
+        return 404, {"error": f"File not found: {folder}/{filename}"}
+    if not filename.lower().endswith(".pdf"):
+        return 400, {"error": "Only .pdf files are supported"}
+
+    # Auto-detect bank/type
+    bank, stmt_type = "Unknown", "unknown"
+    try:
+        from parsers.router import detect_bank_and_type
+        bank, stmt_type = detect_bank_and_type(file_path)
+    except Exception as e:
+        log.warning("Could not detect bank/type for %s: %s", filename, e)
+
+    job_id = str(uuid.uuid4())[:8]
+    job = {
+        "job_id":      job_id,
+        "created_at":  datetime.utcnow().isoformat(),
+        "status":      "pending",
+        "source_path": file_path,
+        "bank":        bank,
+        "stmt_type":   stmt_type,
+        "period":      "",
+        "output_path": "",
+        "error":       "",
+        "log":         "",
+    }
+    _upsert_job(job)
+    _run_job(job_id, password)
+    job = _get_job(job_id)
+    return 200, {
+        "job_id":   job_id,
+        "filename": filename,
+        "folder":   folder,
+        "status":   job["status"],
+        "error":    job.get("error", ""),
+    }
+
+
 def handle_status(job_id: str) -> tuple[int, dict]:
     """GET /pdf/status/<job_id>"""
     job = _get_job(job_id)
@@ -333,8 +393,17 @@ def _run_job(job_id: str, password: str):
         #   For statements that include Rekening Investasi Obligasi data,
         #   write each bond position into the Stage 3 holdings table so the
         #   Wealth dashboard shows government bond values and P/L.
+        #   Covers: Permata savings, Maybank consolidated.
         if getattr(result, "bonds", None):
             _upsert_bond_holdings(result, logs)
+
+        # ── Step 2.7: auto-upsert mutual fund holdings → holdings ─────────
+        #   For consolidated statements that include Reksa Dana positions,
+        #   write each fund position into the Stage 3 holdings table.
+        #   Fund accounts are tagged with extra["account_category"]=="mutual_fund"
+        #   by the parser (currently Maybank consolidated only).
+        if result.statement_type in ("consol", "consolidated"):
+            _upsert_fund_holdings(result, logs)
 
         # ── Step 3: export XLS ────────────────────────────────────────────
         from exporters.xls_writer import export
@@ -620,7 +689,7 @@ def _upsert_bond_holdings(result, logs: list):
             cost_basis_idr = round(bond.market_value_idr - unreal_pnl_idr, 2)
 
             note = (
-                f"Auto-imported from Permata statement ({snapshot_date})"
+                f"Auto-imported from {result.bank} statement ({snapshot_date})"
                 f" | Market price: {bond.market_price:.3f}%"
                 f" | Unrealized P/L: {bond.unrealised_pl_pct:+.2f}%"
             )
@@ -653,7 +722,7 @@ def _upsert_bond_holdings(result, logs: list):
             """, (
                 snapshot_date, "bond", "Investments",
                 bond.product_name, bond.product_name,
-                "Permata", "", result.owner or "",
+                result.bank, "", result.owner or "",
                 bond.currency,
                 bond.face_value, bond.market_price,
                 bond.market_value, bond.market_value_idr,
@@ -677,6 +746,135 @@ def _upsert_bond_holdings(result, logs: list):
 
     except Exception as exc:
         logs.append(f"Bond-holdings upsert warning: {exc}")
+
+
+def _upsert_fund_holdings(result, logs: list):
+    """
+    Upsert Reksa Dana (mutual fund) positions from a consolidated statement
+    (e.g. Maybank) into the Stage 3 holdings table.
+
+    Fund accounts are identified by AccountSummary entries where
+    extra["account_category"] == "mutual_fund" — set by the Maybank parser.
+
+    Field mapping
+    ─────────────
+      asset_class        = "mutual_fund"
+      asset_group        = "Investments"
+      asset_name         = account.product_name
+      isin_or_code       = account.product_name
+      institution        = result.bank
+      currency           = account.currency
+      quantity           = extra["units"]            (number of fund units)
+      unit_price         = market_value_idr / units  (computed NAV per unit)
+      market_value       = market_value_idr          (IDR-denominated)
+      market_value_idr   = account.closing_balance
+      cost_basis_idr     = market_value_idr − unrealised_pnl_idr
+      unrealised_pnl_idr = extra["unrealized_gain_loss"]
+      exchange_rate      = 1.0                       (IDR funds)
+      notes              = fund type, growth %, import date
+    """
+    finance_db = _config.get("finance_sqlite_db", "")
+    if not finance_db:
+        logs.append("Fund-holdings upsert skipped: finance_sqlite_db not configured")
+        return
+
+    fund_accounts = [
+        a for a in getattr(result, "accounts", [])
+        if a.extra.get("account_category") == "mutual_fund"
+    ]
+    if not fund_accounts:
+        return
+
+    try:
+        import re as _re
+        import sqlite3 as _sqlite3
+        from datetime import datetime as _dt
+
+        today = _dt.now().strftime("%Y-%m-%d")
+
+        # Snapshot date: prefer period_end from accounts, fall back to result fields
+        raw_date = ""
+        if getattr(result, "accounts", None):
+            raw_date = result.accounts[0].period_end or ""
+        if not raw_date:
+            raw_date = result.print_date or result.period_end or ""
+        dm = _re.match(r"(\d{2})/(\d{2})/(\d{4})", raw_date)
+        if not dm:
+            logs.append("Fund-holdings upsert skipped: could not determine snapshot date")
+            return
+        snapshot_date = f"{dm.group(3)}-{dm.group(2)}-{dm.group(1)}"
+
+        con = _sqlite3.connect(finance_db)
+        upserted = 0
+
+        for acc in fund_accounts:
+            market_value_idr  = acc.closing_balance or 0.0
+            units             = acc.extra.get("units") or 0.0
+            unrealised_pnl_idr = acc.extra.get("unrealized_gain_loss") or 0.0
+            fund_type         = acc.extra.get("type", "")
+            growth_pct        = acc.extra.get("growth_pct", "")
+
+            # Computed NAV per unit
+            unit_price = round(market_value_idr / units, 4) if units else 0.0
+            # Cost basis = market value minus unrealized P/L
+            cost_basis_idr = round(market_value_idr - unrealised_pnl_idr, 2)
+
+            note = f"Auto-imported from {result.bank} statement ({snapshot_date})"
+            if fund_type:
+                note += f" | Type: {fund_type}"
+            if growth_pct:
+                note += f" | Growth: {growth_pct}"
+
+            con.execute("""
+                INSERT INTO holdings
+                    (snapshot_date, asset_class, asset_group, asset_name, isin_or_code,
+                     institution, account, owner, currency, quantity, unit_price,
+                     market_value, market_value_idr, cost_basis, cost_basis_idr,
+                     unrealised_pnl_idr, exchange_rate, maturity_date, coupon_rate,
+                     notes, import_date)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(snapshot_date, asset_class, asset_name, owner)
+                DO UPDATE SET
+                    isin_or_code       = excluded.isin_or_code,
+                    institution        = excluded.institution,
+                    currency           = excluded.currency,
+                    quantity           = excluded.quantity,
+                    unit_price         = excluded.unit_price,
+                    market_value       = excluded.market_value,
+                    market_value_idr   = excluded.market_value_idr,
+                    cost_basis         = excluded.cost_basis,
+                    cost_basis_idr     = excluded.cost_basis_idr,
+                    unrealised_pnl_idr = excluded.unrealised_pnl_idr,
+                    exchange_rate      = excluded.exchange_rate,
+                    notes              = excluded.notes,
+                    import_date        = excluded.import_date
+            """, (
+                snapshot_date, "mutual_fund", "Investments",
+                acc.product_name, acc.product_name,
+                result.bank, "", result.owner or "",
+                acc.currency,
+                units, unit_price,
+                market_value_idr, market_value_idr,  # market_value = IDR for IDR funds
+                cost_basis_idr, cost_basis_idr,
+                unrealised_pnl_idr, 1.0,
+                "", 0.0,
+                note, today,
+            ))
+            upserted += 1
+            logs.append(
+                f"  Fund {acc.product_name}"
+                + (f" [{fund_type}]" if fund_type else "")
+                + f"  units={units:,.2f}  mktval_idr={market_value_idr:,.0f}"
+                + f"  P/L {unrealised_pnl_idr:+,.0f}"
+            )
+
+        con.commit()
+        con.close()
+        if upserted:
+            logs.append(f"Funds: upserted {upserted} position(s) for {result.bank} [{snapshot_date}]")
+
+    except Exception as exc:
+        logs.append(f"Fund-holdings upsert warning: {exc}")
 
 
 def _get_bank_password(bank_name: str) -> str:

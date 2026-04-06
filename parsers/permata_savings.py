@@ -20,7 +20,7 @@ from typing import Optional
 
 import pdfplumber
 
-from parsers.base import Transaction, AccountSummary, StatementResult
+from parsers.base import Transaction, AccountSummary, BondHolding, StatementResult
 
 
 # ── Detection ──────────────────────────────────────────────────────────────
@@ -326,6 +326,159 @@ def _parse_sections(
     return all_txns, summaries
 
 
+# ── Bond investment table (Rekening Investasi Obligasi) ───────────────────
+#
+# PDF text layout (pdfplumber extraction):
+#   Rekening Investasi Obligasi  Total  8.488.063.196,25
+#   Nilai  Harga  Keuntungan/Kerugian
+#   Nama Produk  Mata Uang  Saldo  Saldo Rupiah
+#   Kepemilikan  Pasar  yang belum direalisasikan
+#   Product Name  Currency  Balance  Balance in IDR
+#   Outstanding  Market  Unrealized P/L
+#   Amount  Price  Amount  %
+#   FR0097        IDR  500.000.000,00  104,734  523.672.730,00  523.672.730,00  13.672.730,00  2,68%
+#   INDOIS54 NEW  USD   50,000.00       98.478   49,239.04      823,030,553.60   1,639.04       3.44%
+#   INDON47       USD  364,000.00       96.651  351,811.46    5,880,528,553.90  -22,470.54     -6.00%
+#
+# Columns: ProductName  Currency  FaceValue  MarketPrice%  MktVal  MktValIDR  UnrealisedPL  UnrealisedPL%
+
+_BOND_ROW = re.compile(
+    r"^(.+?)\s+(IDR|USD)\s+"     # product name + currency
+    r"([\d.,]+)\s+"               # face value (Outstanding Amount)
+    r"([\d.,]+)\s+"               # market price as %
+    r"([\d.,]+)\s+"               # market value in original currency
+    r"([\d.,]+)\s+"               # market value IDR (Saldo Rupiah)
+    r"(-?[\d.,]+)\s+"             # unrealized P/L in original currency
+    r"(-?[\d.,]+)%\s*$"           # unrealized P/L %
+)
+
+
+def _parse_bond_section(all_text: str) -> list:
+    """
+    Scan the full document for 'Rekening Investasi Obligasi' and extract
+    every bond row from the summary table as a BondHolding.
+
+    Stops at 'Nasabah Yth.' (marketing text that follows the last bond row)
+    or when the next per-account transaction section starts ('No.CIF').
+    """
+    bonds: list = []
+    in_section = False
+
+    for line in all_text.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+
+        # Enter section
+        if "Rekening Investasi Obligasi" in line_s:
+            in_section = True
+            continue
+
+        if not in_section:
+            continue
+
+        # Stop at marketing footer or per-account details
+        if line_s.startswith("Nasabah Yth") or "No.CIF" in line_s:
+            break
+        if re.match(r"^No\.\s*Rekening\s+\d", line_s):
+            break
+
+        m = _BOND_ROW.match(line_s)
+        if not m:
+            continue
+
+        product_name = m.group(1).strip()
+        currency     = m.group(2)
+        face_value   = _parse_num(m.group(3))
+        market_price = _parse_num(m.group(4))
+        market_val   = _parse_num(m.group(5))
+        market_idr   = _parse_num(m.group(6))
+        unreal_pl    = _parse_num(m.group(7))
+        unreal_pct   = _parse_num(m.group(8))
+
+        # Implied FX rate: how many IDR per 1 unit of original currency
+        # For IDR bonds this is always 1.0; for USD bonds this embeds the
+        # exact rate used by the bank in the statement so totals match.
+        fx_rate = round(market_idr / market_val, 6) if market_val else 1.0
+
+        bonds.append(BondHolding(
+            product_name=product_name,
+            currency=currency,
+            face_value=face_value,
+            market_price=market_price,
+            market_value=market_val,
+            market_value_idr=market_idr,
+            unrealised_pl=unreal_pl,
+            unrealised_pl_pct=unreal_pct,
+            statement_fx_rate=fx_rate,
+        ))
+
+    return bonds
+
+
+# ── Ringkasan Rekening summary table ──────────────────────────────────────
+#
+# Permata PDFs include a front-page summary table:
+#
+#   Nama Produk       Mata Uang  Jumlah Rekening  Saldo            Saldo Rupiah
+#   PERMATATAB OPTIMA IDR        1                1.572.258.118,70 1.572.258.118,70
+#   Tabungan USD      USD        1                67.681,59        1.145.172.502,80
+#
+# The "Saldo Rupiah" column is the bank's own IDR equivalent, calculated at
+# the bank's internal rate — far more accurate than any external FX API.
+# Both Saldo and Saldo Rupiah are in Indonesian number format (dots=thousands,
+# comma=decimal) regardless of the account's currency.
+
+_SUMMARY_ROW = re.compile(
+    r"^(.+?)\s+(IDR|USD|EUR|SGD|AUD|JPY|GBP|CNY)\s+\d+\s+([\d.,]+)\s+([\d.,]+)\s*$"
+)
+
+
+def _parse_idr_summary(all_text: str) -> dict[str, float]:
+    """
+    Scan the full document text for the 'Ringkasan Rekening' table and return
+    a mapping of  UPPERCASE_PRODUCT_NAME → saldo_rupiah (float, IDR).
+
+    Also stores the implied exchange rate inside the returned dict under the
+    special key  '__rate__{PRODUCT}' = saldo_rupiah / saldo  for non-IDR rows.
+    """
+    result: dict[str, float] = {}
+    in_section = False
+
+    for line in all_text.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+
+        # Enter section on either the section header or its sub-heading
+        if "Ringkasan Rekening" in line_s or "Rekening Simpanan" in line_s:
+            in_section = True
+            continue
+
+        if not in_section:
+            continue
+
+        # Leave section when the per-account transaction details start
+        if re.match(r"^No\.\s*Rekening\s+\d+", line_s):
+            break
+        if "Rekening Investasi" in line_s:
+            break
+
+        m = _SUMMARY_ROW.match(line_s)
+        if m:
+            product    = m.group(1).strip().upper()
+            currency   = m.group(2)
+            saldo      = _parse_num(m.group(3))
+            saldo_idr  = _parse_num(m.group(4))
+            if saldo_idr > 0:
+                result[product] = saldo_idr
+                # Store implied rate so pdf_handler can record it
+                if currency != "IDR" and saldo > 0:
+                    result[f"__rate__{product}"] = round(saldo_idr / saldo, 6)
+
+    return result
+
+
 # ── Owner detection ────────────────────────────────────────────────────────
 
 def _detect_owner(text: str, owner_mappings: dict[str, str]) -> str:
@@ -378,6 +531,20 @@ def parse(
     for s in summaries:
         s.print_date = stmt_date_str
 
+    # ── Populate closing_balance_idr from "Ringkasan Rekening / Saldo Rupiah" table ──
+    # The front-page summary lists each product with the bank's own IDR equivalent,
+    # which is the authoritative rate — prefer it over any external FX API.
+    idr_summary = _parse_idr_summary(all_text)
+    if idr_summary:
+        for s in summaries:
+            key = s.product_name.strip().upper()
+            saldo_idr = idr_summary.get(key, 0.0)
+            if saldo_idr > 0:
+                s.closing_balance_idr = saldo_idr
+                # For IDR accounts, also correct currency tag if it was ever wrong
+                if s.currency != "IDR" and saldo_idr == s.closing_balance:
+                    s.currency = "IDR"
+
     sheet_name = period_end.strftime("%b %Y") + " Savings"
 
     primary_summary = summaries[0] if summaries else AccountSummary(
@@ -391,6 +558,9 @@ def parse(
         period_end=_date_to_str(period_end),
     )
 
+    # ── Parse bond holdings from Rekening Investasi Obligasi ──────────────
+    bonds = _parse_bond_section(all_text)
+
     return StatementResult(
         bank="Permata",
         statement_type="savings",
@@ -400,4 +570,5 @@ def parse(
         transactions=all_txns,
         summary=primary_summary,
         accounts=summaries,
+        bonds=bonds,
     )

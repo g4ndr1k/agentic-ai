@@ -31,11 +31,40 @@ class AccountSummary:
     opening_balance: float = 0.0
     total_debit: float = 0.0
     total_credit: float = 0.0
+    closing_balance_idr: float = 0.0    # Bank's own IDR equivalent (from Saldo Rupiah column)
     print_date: Optional[str] = None    # DD/MM/YYYY
     period_start: Optional[str] = None  # DD/MM/YYYY
     period_end: Optional[str] = None    # DD/MM/YYYY
     credit_limit: Optional[float] = None
     extra: dict = field(default_factory=dict)  # Flexible bag for consolidated statements
+
+
+@dataclass
+class BondHolding:
+    """
+    A single bond position from the 'Rekening Investasi Obligasi' summary
+    table in a Permata (or similar) consolidated statement.
+
+    Column mapping from PDF:
+      product_name      — e.g. "FR0097", "INDOIS54 NEW", "INDON47"
+      currency          — "IDR" or "USD"
+      face_value        — Outstanding Amount (nominal / par value)
+      market_price      — Price as % of face value (e.g. 104.734, 96.651)
+      market_value      — face_value × market_price/100 in original currency
+      market_value_idr  — Saldo Rupiah: bank's own IDR equivalent
+      unrealised_pl     — Unrealized P/L in original currency (negative = loss)
+      unrealised_pl_pct — Unrealized P/L as %  (e.g. -6.00)
+      statement_fx_rate — Implied FX: market_value_idr / market_value (1.0 for IDR)
+    """
+    product_name:      str
+    currency:          str
+    face_value:        float
+    market_price:      float
+    market_value:      float
+    market_value_idr:  float
+    unrealised_pl:     float
+    unrealised_pl_pct: float
+    statement_fx_rate: float
 
 
 @dataclass
@@ -53,6 +82,7 @@ class StatementResult:
     period_start: str = ""              # DD/MM/YYYY
     period_end: str = ""                # DD/MM/YYYY
     exchange_rates: dict = field(default_factory=dict)
+    bonds: list[BondHolding] = field(default_factory=list)
     raw_errors: list[str] = field(default_factory=list)
 
 
@@ -75,6 +105,18 @@ def parse_idr_amount(s: str) -> Optional[float]:
     if last_comma > last_dot:
         # Indonesian: dot=thousands, comma=decimal  e.g. 1.234.567,89
         s = s.replace(".", "").replace(",", ".")
+    elif "." in s and "," not in s:
+        parts = s.split(".")
+        # Indonesian whole-IDR amounts commonly use dot thousands only:
+        #   147.857   → 147857
+        #   1.572.426 → 1572426
+        # Treat dot-only values as thousands separators when every group after
+        # the first is exactly 3 digits.
+        if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+            s = "".join(parts)
+        else:
+            # Western decimal or already-normalized number
+            s = s.replace(",", "")
     else:
         # Western or dot-only: comma=thousands, dot=decimal  e.g. 1,234,567.89 or 1.234.567
         s = s.replace(",", "")

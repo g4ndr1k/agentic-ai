@@ -52,6 +52,13 @@ def detect_and_parse(pdf_path: str, ollama_client=None,
     if bca_savings.can_parse(page1_text):
         return bca_savings.parse(pdf_path, ollama_client)
 
+    # Maybank consolidated MUST be checked before Maybank CC:
+    # the consolidated PDF lists "Maybank Kartu Kredit" as a product on page 1,
+    # which would falsely trigger the CC detector. The consolidated statement has
+    # "ALOKASI ASET" on page 1 and "RINGKASAN PORTOFOLIO" on page 2 — both unique.
+    if maybank_consol.can_parse(combined):
+        return maybank_consol.parse(pdf_path, ollama_client)
+
     if maybank_cc.can_parse(page1_text):
         return maybank_cc.parse(pdf_path, ollama_client)
 
@@ -64,9 +71,6 @@ def detect_and_parse(pdf_path: str, ollama_client=None,
 
     if cimb_niaga_consol.can_parse(page1_text):
         return cimb_niaga_consol.parse(pdf_path, owner_mappings=owner_mappings, ollama_client=ollama_client)
-
-    if maybank_consol.can_parse(combined):
-        return maybank_consol.parse(pdf_path, ollama_client)
 
     raise UnknownStatementError(
         f"Could not identify statement type from PDF: {pdf_path}\n"
@@ -89,13 +93,13 @@ def detect_bank_and_type(pdf_path: str) -> tuple[str, str]:
         return "BCA", "cc"
     if bca_savings.can_parse(page1_text):
         return "BCA", "savings"
+    if maybank_consol.can_parse(combined):
+        return "Maybank", "consolidated"
     if maybank_cc.can_parse(page1_text):
         return "Maybank", "cc"
     if cimb_niaga_cc.can_parse(combined):
         return "CIMB Niaga", "cc"
     if cimb_niaga_consol.can_parse(page1_text):
         return "CIMB Niaga", "consol"
-    if maybank_consol.can_parse(combined):
-        return "Maybank", "consolidated"
 
     return "Unknown", "unknown"

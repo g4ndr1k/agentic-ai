@@ -25,6 +25,7 @@ class SheetsConfig:
     import_log_tab: str
     overrides_tab: str
     pdf_import_log_tab: str
+    holdings_tab: str
 
 
 @dataclass
@@ -85,6 +86,7 @@ def get_sheets_config(cfg: dict) -> SheetsConfig:
         import_log_tab=s.get("import_log_tab", "Import Log"),
         overrides_tab=s.get("overrides_tab", "Category Overrides"),
         pdf_import_log_tab=s.get("pdf_import_log_tab", "PDF Import Log"),
+        holdings_tab=s.get("holdings_tab", "Holdings"),
     )
 
 

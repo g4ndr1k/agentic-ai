@@ -39,7 +39,7 @@ regex_rules = [
     ["External Transfer",           r"^TRSF E-BANKING CR \d{4}/[A-Z]+/WS9$",           "External Transfer",  "regex"],
     ["External Transfer",           r"^TRSF E-BANKING DB \d{4}/FTSCY/WS9$",            "External Transfer",  "regex"],
     ["Airbnb",                      r"^AIRBNB",                                         "Travel",             "regex"],
-    ["Amazon",                      r"^AMAZON DIGI",                                    "Subscriptions",      "regex"],
+    ["Amazon Digi",                 r"^AMAZON DIGI",                                    "Entertainment",      "regex"],
     ["Allianz",                     r"Allianz",                                         "Other",              "regex"],
     ["CIMB Niaga Installment",      r"^\(0\.00% 12BLN\)",                               "Fees & Interest",    "regex"],
     ["External Transfer",           r"^TRF BIFAST KE",                                  "External Transfer",  "regex"],

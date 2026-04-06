@@ -17,7 +17,7 @@ import re
 import pdfplumber
 from typing import Optional
 from .base import (
-    StatementResult, AccountSummary, Transaction,
+    StatementResult, AccountSummary, Transaction, BondHolding,
     parse_idr_amount, parse_date_ddmmyyyy
 )
 
@@ -31,8 +31,13 @@ DETECTION_KEYWORDS = [
 
 
 def can_parse(text_page1: str) -> bool:
-    # Bank name first; "PORTFOLIO" distinguishes consolidated from Maybank CC
-    return "Maybank" in text_page1 and "PORTFOLIO" in text_page1
+    # "RINGKASAN PORTOFOLIO NASABAH" appears on page 2 of the consolidated statement.
+    # The caller passes combined (p1+p2) text, so this reliably fires for consol
+    # while never matching a pure CC statement (which has no portfolio summary page).
+    # "ALOKASI ASET" on page 1 is also a strong unique signal.
+    if "Maybank" not in text_page1:
+        return False
+    return "RINGKASAN PORTOFOLIO" in text_page1 or "ALOKASI ASET" in text_page1
 
 
 # ── Main parser ──────────────────────────────────────────────────────────────
@@ -41,13 +46,13 @@ def parse(pdf_path: str, ollama_client=None) -> StatementResult:
     customer_name = ""
     period_start = period_end = report_date = ""
     accounts: list[AccountSummary] = []
+    raw_bonds: list[dict] = []      # raw dicts from obligasi table; processed after FX extracted
     transactions: list[Transaction] = []
     exchange_rates: dict = {}
 
     with pdfplumber.open(pdf_path) as pdf:
         all_pages = pdf.pages
         full_texts = [p.extract_text() or "" for p in all_pages]
-        full_text = "\n".join(full_texts)
 
         # ── Layer 2: header metadata ──────────────────────────────────────
         customer_name = _extract_customer_name(full_texts[0])
@@ -61,11 +66,11 @@ def parse(pdf_path: str, ollama_client=None) -> StatementResult:
             page = all_pages[pg_idx]
             tables = page.extract_tables()
             for table in tables:
-                accs = _parse_summary_table(table, errors)
+                accs, page_raw_bonds = _parse_summary_table(table, errors)
                 accounts.extend(accs)
+                raw_bonds.extend(page_raw_bonds)
 
         # ── Layer 1+2: transaction pages (pages 3 onward) ─────────────────
-        # Find which pages have "MUTASI TRANSAKSI"
         for pg_idx, text in enumerate(full_texts):
             if "Mutasi Debet" in text or "Mutasi Kredit" in text:
                 page = all_pages[pg_idx]
@@ -77,6 +82,9 @@ def parse(pdf_path: str, ollama_client=None) -> StatementResult:
         # ── Layer 2: exchange rates (last page) ───────────────────────────
         exchange_rates = _extract_exchange_rates(full_texts[-1])
 
+    # Build BondHolding objects now that exchange_rates are available
+    bonds = _build_bond_holdings(raw_bonds, exchange_rates)
+
     return StatementResult(
         bank="Maybank",
         statement_type="consolidated",
@@ -87,6 +95,7 @@ def parse(pdf_path: str, ollama_client=None) -> StatementResult:
         accounts=accounts,
         transactions=transactions,
         exchange_rates=exchange_rates,
+        bonds=bonds,
         raw_errors=errors,
     )
 
@@ -118,10 +127,16 @@ def _extract_period(text: str) -> tuple[str, str]:
 
 
 # ── Summary table helpers ─────────────────────────────────────────────────────
-def _parse_summary_table(table: list, errors: list) -> list[AccountSummary]:
+def _parse_summary_table(table: list, errors: list) -> tuple[list[AccountSummary], list[dict]]:
+    """
+    Returns (accounts, raw_bonds).
+    raw_bonds is a list of dicts with raw numeric data from the Obligasi table;
+    BondHolding objects are built later in parse() once exchange_rates are available.
+    """
     accounts = []
+    raw_bonds: list[dict] = []
     if not table or len(table) < 2:
-        return accounts
+        return accounts, raw_bonds
     header = [str(c or "").strip() for c in table[0]]
     header_joined = " ".join(header).lower()
 
@@ -159,31 +174,57 @@ def _parse_summary_table(table: list, errors: list) -> list[AccountSummary]:
             ))
 
     elif "nama produk" in header_joined and "nilai nominal" in header_joined:
-        # Obligasi
+        # Obligasi (bonds) — enhanced to capture market price % and unrealized P/L.
+        # Typical MayBank columns:
+        #   [0] Nama Produk | [1] Mata Uang | [2] Nilai Nominal
+        #   [3] Harga Pasar (%) | [4] Laba/Rugi Belum Terealisasi | [-1] Nilai Pasar
         for row in table[1:]:
             if not row or not row[0]:
                 continue
             name = str(row[0] or "").replace("\n", " ").strip()
-            currency_info = str(row[1] or "").strip()
-            nominal = parse_idr_amount(str(row[2] or ""))
+            if not name or name.lower() in ("total", "jumlah"):
+                continue
+            currency_info = str(row[1] or "").strip() if len(row) > 1 else ""
+            nominal = parse_idr_amount(str(row[2] or "")) if len(row) > 2 else None
             market_val = parse_idr_amount(str(row[-1] or ""))
+
             currency = "IDR"
-            m = re.search(r"^(IDR|USD|SGD)", currency_info)
+            m = re.search(r"\b(IDR|USD|SGD|EUR|JPY)\b", currency_info)
             if m:
                 currency = m.group(1)
+
+            # Optional columns: Harga Pasar (%) at [3], Unrealized P/L at [4]
+            market_price_raw: Optional[float] = None
+            unrealised_idr_raw = 0.0
+            if len(row) >= 5:
+                market_price_raw = _parse_price_pct(str(row[3] or ""))
+            if len(row) >= 6:
+                unrealised_idr_raw = parse_idr_amount(str(row[4] or "")) or 0.0
+
+            # Keep AccountSummary for summary display
             accounts.append(AccountSummary(
                 product_name=name, account_number=None,
                 currency=currency, closing_balance=market_val or 0.0,
                 extra={"nominal": nominal, "coupon_rate": currency_info}
             ))
+            # Collect raw bond data; BondHolding built after FX extraction
+            if market_val:
+                raw_bonds.append({
+                    "product_name": name,
+                    "currency": currency,
+                    "face_value": nominal or 0.0,
+                    "market_price_raw": market_price_raw,
+                    "unrealised_idr_raw": unrealised_idr_raw,
+                    "market_value_idr": market_val,
+                })
 
     elif "jumlah unit" in header_joined or "reksa dana" in header_joined:
-        # Reksa Dana
+        # Reksa Dana (mutual funds) — tagged with account_category for holdings upsert
         for row in table[1:]:
             if not row or not row[0]:
                 continue
             name = str(row[0] or "").replace("\n", " ").strip()
-            if not name:
+            if not name or name.lower() in ("total", "jumlah"):
                 continue
             reksadana_type = str(row[1] or "").replace("\n", " ").strip() if len(row) > 1 else ""
             currency = str(row[2] or "").strip() if len(row) > 2 else "IDR"
@@ -191,10 +232,13 @@ def _parse_summary_table(table: list, errors: list) -> list[AccountSummary]:
             growth = str(row[4] or "").strip() if len(row) > 4 else ""
             unrealized = parse_idr_amount(str(row[5] or "")) if len(row) > 5 else None
             market_val = parse_idr_amount(str(row[-1] or ""))
+            if not market_val:
+                continue
             accounts.append(AccountSummary(
                 product_name=name, account_number=None,
-                currency=currency, closing_balance=market_val or 0.0,
+                currency=currency, closing_balance=market_val,
                 extra={
+                    "account_category": "mutual_fund",   # marker for _upsert_fund_holdings
                     "type": reksadana_type,
                     "units": units,
                     "growth_pct": growth,
@@ -219,7 +263,89 @@ def _parse_summary_table(table: list, errors: list) -> list[AccountSummary]:
                 extra={"limit": limit}
             ))
 
-    return accounts
+    return accounts, raw_bonds
+
+
+def _parse_price_pct(s: str) -> Optional[float]:
+    """Parse a bond market-price percentage like '96,651' or '96.651'."""
+    if not s:
+        return None
+    s = s.strip().replace(" ", "")
+    if not s or s == "-":
+        return None
+    # Indonesian style: comma = decimal, no thousands separator in % values
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        # Western: comma=thousands e.g. "1,234.56" — unlikely for price % but handle it
+        s = s.replace(",", "")
+    try:
+        val = float(s)
+        return val if 0 < val < 1000 else None  # sanity: bond price ≈ 50-150%
+    except ValueError:
+        return None
+
+
+def _build_bond_holdings(raw_bonds: list[dict], exchange_rates: dict) -> list[BondHolding]:
+    """
+    Convert raw Obligasi dicts (collected during table parsing) into proper
+    BondHolding objects now that the exchange_rates dict is available.
+
+    For IDR bonds:
+      fx = 1.0, market_value = market_value_idr, unrealised_pl = unrealised_idr_raw
+    For USD/foreign bonds:
+      fx = exchange_rates[currency]
+      market_value = market_value_idr / fx
+      unrealised_pl = unrealised_idr_raw / fx
+    """
+    holdings = []
+    for rb in raw_bonds:
+        currency = rb["currency"]
+        face_value = rb["face_value"]
+        market_value_idr = rb["market_value_idr"]
+        market_price_raw = rb.get("market_price_raw")
+        unrealised_idr_raw = rb.get("unrealised_idr_raw") or 0.0
+
+        if currency == "IDR":
+            fx = 1.0
+            market_value = market_value_idr
+            unrealised_pl = unrealised_idr_raw
+        else:
+            fx = exchange_rates.get(currency, 0.0)
+            if fx > 0:
+                market_value = round(market_value_idr / fx, 2)
+                unrealised_pl = round(unrealised_idr_raw / fx, 2)
+            else:
+                market_value = 0.0
+                unrealised_pl = 0.0
+
+        # Market price as % of face value
+        if market_price_raw is not None:
+            market_price = market_price_raw
+        elif face_value > 0 and market_value > 0:
+            market_price = round(100.0 * market_value / face_value, 4)
+        else:
+            market_price = 0.0
+
+        # Unrealized P/L %
+        cost_basis = market_value - unrealised_pl
+        if cost_basis != 0:
+            unrealised_pl_pct = round(100.0 * unrealised_pl / cost_basis, 2)
+        else:
+            unrealised_pl_pct = 0.0
+
+        holdings.append(BondHolding(
+            product_name=rb["product_name"],
+            currency=currency,
+            face_value=face_value,
+            market_price=market_price,
+            market_value=market_value,
+            market_value_idr=market_value_idr,
+            unrealised_pl=unrealised_pl,
+            unrealised_pl_pct=unrealised_pl_pct,
+            statement_fx_rate=fx,
+        ))
+    return holdings
 
 
 # ── Transaction table helpers ─────────────────────────────────────────────────

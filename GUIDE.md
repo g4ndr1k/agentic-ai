@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.2.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.3.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-04-05
+**Last validated against:** checked-in codebase 2026-04-06
 
 ---
 
@@ -2049,6 +2049,44 @@ docker compose up -d
 
 ---
 
+### v3.3.0 (2026-04-06)
+
+#### Features
+
+- **Added: "Process Local PDFs" in Settings page** — a new section in `pwa/src/views/Settings.vue` (visible on Mac desktop only, detected via `navigator.platform` + `maxTouchPoints`) lets the user trigger server-side processing of all PDF files already in the `pdf_inbox` and `pdf_unlocked` data folders on the host. No file picker is required; paths are resolved entirely server-side.
+
+  Flow:
+  1. `GET /api/pdf/local-files` — finance-api scans `~/agentic-ai/data/pdf_inbox` and `~/agentic-ai/data/pdf_unlocked`, returns a sorted list of PDF filenames and their folder keys.
+  2. `POST /api/pdf/process-local` — sends `{ folder, filename }` to finance-api, which proxies to bridge `POST /pdf/process-file`.
+  3. Bridge resolves the file path from its own config, creates a job, and runs the PDF pipeline synchronously.
+  4. PWA polls the returned `job_id` until `done/error/skipped`.
+  5. Per-file status chips (`pending → processing → ok/skipped/error`) update in real time; a summary counter shows results on completion.
+
+- **Added: `POST /pdf/process-file` bridge endpoint** — handles `{ folder, filename }` payloads where `folder` is one of `pdf_inbox` / `pdf_unlocked`. The bridge resolves the full path from its `pdf_inbox_dir` / `pdf_unlocked_dir` config keys, so no file paths are ever transmitted from the browser. Implemented in `bridge/pdf_handler.py:handle_process_file()` and routed in `bridge/server.py`.
+
+- **Added: three PDF proxy endpoints to finance-api** (`finance/api.py`):
+  - `GET /api/pdf/local-files` — scans the two PDF folders and returns a list of `{ folder, filename }` objects.
+  - `POST /api/pdf/process-local` — proxies `{ folder, filename }` to bridge `/pdf/process-file`.
+  - `GET /api/pdf/local-status/{job_id}` — proxies to bridge `/pdf/status/:id`.
+  All three require `X-Api-Key` authentication.
+
+- **Confirmed: CIMB Niaga consolidated savings balances recorded automatically** — `parsers/cimb_niaga_consol.py` extracts both savings account closing balances from the "RINCIAN ASET / ASSET DETAIL" table on the accounts page (regex `_ACCT_SUM_RE`, multi-line). `bridge/pdf_handler.py:_upsert_closing_balance()` then writes each account to `account_balances` with `asset_group='Cash & Liquid'`. Confirmed for both XTRA Savers (account 707241000000) and XTRA Savers MANFAAT (account 701347791200) from Jan 2026 and Feb 2026 statements. No parser changes were required — the existing pipeline already handled the consol type correctly.
+
+#### Fixed
+
+- **Fixed: Maybank consolidated statement misidentified as CC** — the Maybank consol PDF lists "Maybank Kartu Kredit" as a product line on page 1, causing the router to match `maybank_cc.can_parse()` before reaching the consol detector. Two changes:
+  1. `parsers/maybank_consol.py` — strengthened `can_parse()` to require either `"RINGKASAN PORTOFOLIO"` or `"ALOKASI ASET"` (both are page-1 keywords unique to the consol statement).
+  2. `parsers/router.py` — moved the `maybank_consol.can_parse(combined)` check **before** `maybank_cc.can_parse(page1_text)` in both `detect_and_parse()` and `detect_bank_and_type()`. The `combined` variable (page1 + page2) is used so the consol check sees the full portfolio summary.
+  Result: 6 Maybank investment holdings (3 per month, Jan and Feb 2026) now correctly recorded in `finance.db`.
+
+- **Fixed: GET requests to PDF endpoints returning 401** — `pwa/src/api/client.js` `get()` helper was calling `fetch(url)` without the `Authorization` header object, causing all `GET` calls to PDF endpoints (and any future authenticated GET) to return 401. Added `{ headers: AUTH_HEADERS }` to the `fetch()` call in `get()`.
+
+#### Security
+
+- **HTTPS recommendation** — for production use, place the finance-api (port 8090) behind a reverse proxy that terminates TLS. On Synology NAS: Application Portal → Reverse Proxy → add a rule forwarding `https://finance.local` → `http://192.168.1.205:8090`. This enables `Secure` cookies and eliminates the mixed-content issue that blocks `showDirectoryPicker` in Chrome on HTTP origins.
+
+---
+
 ### v3.2.0 (2026-04-05)
 
 #### Security & Bug Fixes (audit remediation)
@@ -3877,4 +3915,4 @@ Monthly wealth management cycle (1st–5th of each month):
 - [ ] Multi-owner net worth split (currently shown per-item via `owner` field; aggregated snapshot is household total)
 
 
-*Guide last updated 2026-04-04 · v3.0.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅*
+*Guide last updated 2026-04-06 · v3.3.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅*
