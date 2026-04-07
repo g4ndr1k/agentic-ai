@@ -1034,6 +1034,7 @@ def upsert_holding(req: HoldingUpsertRequest):
         ).fetchone()
     _sync_holdings_to_sheets()
     _auto_snapshot(req.snapshot_date)
+    _cascade_holding_update(req.snapshot_date, req.asset_class, req.asset_name, req.owner)
     return {"ok": True, "holding": _row(row)}
 
 
@@ -1137,6 +1138,51 @@ def _auto_snapshot(snapshot_date: str):
         create_snapshot(SnapshotRequest(snapshot_date=snapshot_date))
     except Exception as exc:
         log.warning("Auto-snapshot failed for %s (non-fatal): %s", snapshot_date, exc)
+
+
+def _cascade_holding_update(snapshot_date: str, asset_class: str, asset_name: str, owner: str):
+    """
+    For carry-forward asset classes, propagate the updated values to all subsequent
+    months that already have an entry for this (asset_class, asset_name, owner).
+    Called after upsert_holding when asset_class is in CARRY_FORWARD_CLASSES.
+    """
+    if asset_class not in CARRY_FORWARD_CLASSES:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    affected_dates: list[str] = []
+    with _db() as conn:
+        source = conn.execute(
+            "SELECT * FROM holdings WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?",
+            (snapshot_date, asset_class, asset_name, owner),
+        ).fetchone()
+        if not source:
+            return
+        subsequent = conn.execute(
+            "SELECT snapshot_date FROM holdings "
+            "WHERE asset_class=? AND asset_name=? AND owner=? AND snapshot_date > ? "
+            "ORDER BY snapshot_date ASC",
+            (asset_class, asset_name, owner, snapshot_date),
+        ).fetchall()
+        for row in subsequent:
+            target_date = row["snapshot_date"]
+            conn.execute(
+                """UPDATE holdings SET
+                    market_value=?, market_value_idr=?, cost_basis=?, cost_basis_idr=?,
+                    unrealised_pnl_idr=?, quantity=?, unit_price=?,
+                    last_appraised_date=?, notes=?, import_date=?
+                WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?""",
+                (source["market_value"], source["market_value_idr"],
+                 source["cost_basis"], source["cost_basis_idr"],
+                 source["unrealised_pnl_idr"], source["quantity"], source["unit_price"],
+                 source["last_appraised_date"], source["notes"], today,
+                 target_date, asset_class, asset_name, owner),
+            )
+            if conn.execute("SELECT changes()").fetchone()[0] > 0:
+                affected_dates.append(target_date)
+    if affected_dates:
+        _sync_holdings_to_sheets()
+        for d in affected_dates:
+            _auto_snapshot(d)
 
 
 # ── /api/wealth/liabilities ───────────────────────────────────────────────────
