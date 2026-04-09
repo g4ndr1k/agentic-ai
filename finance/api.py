@@ -551,7 +551,7 @@ def _ask_wealth_question_with_ollama(question: str, context: dict, history: list
     }
 
 
-def _build_wealth_explanation(conn: sqlite3.Connection, snapshot_date: Optional[str]) -> dict:
+def _build_wealth_explanation(conn: sqlite3.Connection, snapshot_date: Optional[str], use_ai: bool = False) -> dict:
     if snapshot_date:
         curr = conn.execute(
             "SELECT * FROM net_worth_snapshots WHERE snapshot_date=?",
@@ -575,6 +575,9 @@ def _build_wealth_explanation(conn: sqlite3.Connection, snapshot_date: Optional[
     curr_dict = _row(curr)
     prev_dict = _row(prev)
     fallback = _wealth_explanation_fallback(curr_dict, prev_dict)
+
+    if not use_ai:
+        return fallback
 
     try:
         return _generate_wealth_explanation_with_ollama(curr_dict, prev_dict, fallback)
@@ -1941,10 +1944,14 @@ def get_wealth_summary(
 
 
 @app.get("/api/wealth/explanation", dependencies=[Depends(require_api_key)])
-def get_wealth_explanation(snapshot_date: Optional[str] = Query(None)):
-    """Explain the selected month's net worth movement using local Ollama with fallback."""
+def get_wealth_explanation(snapshot_date: Optional[str] = Query(None), ai: bool = Query(False)):
+    """Explain the selected month's net worth movement.
+
+    Without ?ai=1 returns the deterministic fallback instantly.
+    With ?ai=1 calls Ollama for an AI-generated explanation (may be slow).
+    """
     with _db() as conn:
-        return _build_wealth_explanation(conn, snapshot_date)
+        return _build_wealth_explanation(conn, snapshot_date, use_ai=ai)
 
 
 @app.post("/api/wealth/explanation/query", dependencies=[Depends(require_api_key)])

@@ -151,7 +151,11 @@
       <!-- 12-month trend chart -->
       <div class="card">
         <div class="card-title">Net Worth Trend</div>
-        <div v-if="explanation?.available" class="trend-explanation">
+        <div v-if="explanationLoading" class="trend-explanation-loading">
+          <span class="spinner spinner-sm"></span>
+          Generating trend analysis…
+        </div>
+        <div v-else-if="explanation?.available" class="trend-explanation">
           <div class="trend-explanation-headline">{{ explanation.headline }}</div>
           <div class="trend-explanation-summary">{{ explanation.summary }}</div>
           <div v-if="explanation.drivers?.length" class="trend-driver-list">
@@ -230,9 +234,10 @@ import { formatIDR } from '../utils/currency.js'
 
 const router = useRouter()
 
-const loading    = ref(false)
-const error      = ref(null)
-const generating = ref(false)
+const loading            = ref(false)
+const explanationLoading = ref(false)
+const error              = ref(null)
+const generating         = ref(false)
 
 const snap        = ref(null)
 const balances    = ref([])
@@ -497,25 +502,26 @@ function buildChart() {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 async function load() {
-  loading.value = true
-  error.value   = null
+  loading.value            = true
+  explanationLoading.value = true
+  error.value              = null
   try {
-    const [summary, hist, explanationRes] = await Promise.all([
+    // Phase 1: critical data — render immediately
+    const [summary, hist] = await Promise.all([
       api.wealthSummary({ snapshot_date: selectedDate.value || undefined }),
       api.wealthHistory(24),
-      api.wealthExplanation({ snapshot_date: selectedDate.value || undefined }).catch(() => null),
     ])
-    const collapsedDates = collapseMonthDates(summary.dates, summary.snapshot_date || selectedDate.value)
+    const collapsedDates   = collapseMonthDates(summary.dates, summary.snapshot_date || selectedDate.value)
     const collapsedHistory = collapseMonthlyHistory(hist)
 
-    snap.value        = summary.snapshot
-    balances.value    = summary.balances
-    holdings.value    = summary.holdings
-    liabilities.value = summary.liabilities
-    dates.value       = collapsedDates
-    history.value     = collapsedHistory
-    explanation.value = explanationRes
-    qaHistory.value = []
+    snap.value             = summary.snapshot
+    balances.value         = summary.balances
+    holdings.value         = summary.holdings
+    liabilities.value      = summary.liabilities
+    dates.value            = collapsedDates
+    history.value          = collapsedHistory
+    explanation.value      = null
+    qaHistory.value        = []
     followUpQuestion.value = ''
 
     // Auto-select most recent date (prefer a date with a snapshot, fall back to any data date)
@@ -527,11 +533,20 @@ async function load() {
     await nextTick()
     buildChart()
   } catch (e) {
-    error.value = e.message
-    explanation.value = null
+    error.value              = e.message
+    explanationLoading.value = false
   } finally {
     loading.value = false
   }
+
+  // Phase 2: AI explanation — non-blocking, fills in trend box when ready
+  const dateForExplanation = selectedDate.value
+  api.wealthExplanation({ snapshot_date: dateForExplanation || undefined, ai: true })
+    .then(res => {
+      if (selectedDate.value === dateForExplanation) explanation.value = res
+    })
+    .catch(() => { explanation.value = null })
+    .finally(() => { explanationLoading.value = false })
 }
 
 async function askFollowUp(question) {
@@ -701,6 +716,23 @@ onUnmounted(destroyChart)
 
 .cat-bar-wealth { background: var(--primary); opacity: 0.7; }
 
+.trend-explanation-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(30, 58, 95, 0.1);
+  border-radius: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.spinner-sm {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  flex-shrink: 0;
+}
 .trend-explanation {
   margin-bottom: 14px;
   padding: 12px 14px;

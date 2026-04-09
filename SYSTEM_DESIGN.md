@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.5.1 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.5.2 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-04-08
+**Last validated against:** checked-in codebase 2026-04-09
 
 ---
 
@@ -2463,6 +2463,16 @@ docker compose up -d --build finance-api
 
 ---
 
+### v3.5.2 (2026-04-09)
+
+#### Stage 3 — Wealth page progressive loading
+
+- **Changed: `GET /api/wealth/explanation`** — added `ai: bool = False` query parameter. Without `?ai=1` the endpoint returns the deterministic fallback immediately (< 100 ms) without touching Ollama. With `?ai=1` it calls Ollama (timeout now 5 s, down from 60 s) and falls back to deterministic on failure. This ensures the old PWA bundle (served from service worker cache) no longer blocks the page load.
+- **Changed: `Wealth.vue` load strategy** — `load()` split into two phases. Phase 1 awaits `wealthSummary` + `wealthHistory` in parallel and renders the full dashboard immediately. Phase 2 fires `wealthExplanation?ai=1` as a non-blocking promise; a "Generating trend analysis…" spinner occupies the Net Worth Trend box until the result arrives or fails. Added `explanationLoading` reactive ref to control the spinner.
+- **Changed: `vite.config.js` service worker** — added `clientsClaim: true` and `skipWaiting: true` to the Workbox config so a newly deployed service worker takes control of all open tabs immediately without waiting for a full close/reopen cycle.
+- **Changed: `config/settings.toml`** — `[ollama_finance] timeout_seconds` reduced from 60 → 5. Faster failure and fallback for slow or unreachable Ollama instances.
+- **Deployment note:** backend code changes (`api.py`) are baked into the Docker image and require `docker compose up --build -d` to apply. A plain `docker compose restart` only restarts the existing image and does **not** pick up Python source changes. Config-file changes (settings.toml, mounted as a volume) do take effect on restart.
+
 ### v3.5.1 (2026-04-08)
 
 #### Stage 3 — Wealth explanation + interactive Q&A
@@ -4112,7 +4122,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 | `POST` | `/api/wealth/snapshot` | Aggregate all 3 tables for `snapshot_date` → upsert `net_worth_snapshots` row |
 | `GET` | `/api/wealth/history` | Snapshots oldest-first (for trend chart). Param: `limit` (default 24) |
 | `GET` | `/api/wealth/summary` | Full snapshot + all items for a date in one call. Params: `snapshot_date`, `owner` |
-| `GET` | `/api/wealth/explanation` | Monthly explanation for why net worth changed. Param: `snapshot_date`; uses local Ollama with deterministic fallback |
+| `GET` | `/api/wealth/explanation` | Monthly explanation for why net worth changed. Params: `snapshot_date`, `ai` (bool, default `false`). Without `?ai=1` returns the deterministic fallback instantly (< 100 ms). With `?ai=1` calls local Ollama (timeout: 5 s) and falls back to deterministic on failure |
 | `POST` | `/api/wealth/explanation/query` | Follow-up Q&A for the explanation card. Body: `{snapshot_date?, question, history[]}`; answers from item-level month-over-month diffs |
 
 ### `asset_class` → `asset_group` mapping (auto-applied on POST)
@@ -4135,7 +4145,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 - **Assets / Liabilities cards** — side-by-side summary grid
 - **Asset group breakdown** — tappable rows per group (Cash & Liquid, Investments, Real Estate, Physical Assets) with bar, % of total, and sub-type chips; tapping navigates to `/holdings?group=…`
 - **Liabilities row** — shown when liabilities > 0; sub-chips list mortgage/CC/loans/taxes
-- **Net worth explanation panel** — above the chart, explains why monthly net worth changed using local Ollama with deterministic fallback based on snapshot deltas
+- **Net worth explanation panel** — above the chart, explains why monthly net worth changed. Loads in two phases: Phase 1 (blocking) fetches summary + history and renders the full page immediately; Phase 2 (non-blocking) fetches `?ai=1` explanation asynchronously and fills in the trend box when ready with a “Generating trend analysis…” spinner. Without AI the deterministic fallback is shown instantly.
 - **Interactive Ask AI follow-up** — suggested question chips plus a free-text input allow drill-down questions such as “What made Investments rise by Rp 1.7B?” and “Which cash accounts fell?”
 - **12-month trend chart** — Chart.js line chart of net worth in IDR millions, oldest-to-newest
 - **Refresh Snapshot button** — calls `POST /api/wealth/snapshot` for the selected date and reloads
