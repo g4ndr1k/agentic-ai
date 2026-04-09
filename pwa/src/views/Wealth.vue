@@ -202,6 +202,10 @@
             </div>
           </div>
         </div>
+        <div v-else-if="explanationEmptyMessage" class="trend-explanation trend-explanation-empty">
+          <div class="trend-explanation-headline">{{ explanationEmptyTitle }}</div>
+          <div class="trend-explanation-summary">{{ explanationEmptyMessage }}</div>
+        </div>
         <div v-if="history.length < 2" class="empty-state" style="padding:16px 0">
           <div class="e-sub">Generate at least 2 monthly snapshots to see a trend</div>
         </div>
@@ -253,6 +257,7 @@ const selectedDate = ref('')
 
 const trendRef = ref(null)
 let trendChart = null
+let loadToken = 0
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 function fmt(n) { return formatIDR(n ?? 0) }
@@ -460,6 +465,23 @@ const suggestedQuestions = computed(() => {
   ].filter(Boolean)
 })
 
+const explanationEmptyTitle = computed(() => {
+  if (explanation.value?.reason === 'no_previous_month') return 'AI analysis starts next month'
+  if (explanation.value?.reason === 'no_snapshot') return 'No snapshot available yet'
+  return ''
+})
+
+const explanationEmptyMessage = computed(() => {
+  if (explanation.value?.reason === 'no_previous_month') {
+    const month = explanation.value?.snapshot_date?.slice(0, 7) || selectedDate.value?.slice(0, 7) || 'this month'
+    return `${month} is the first available wealth snapshot, so there is no prior month for Gemma to compare against yet.`
+  }
+  if (explanation.value?.reason === 'no_snapshot') {
+    return 'Create a monthly wealth snapshot first, then the trend analysis will appear here.'
+  }
+  return ''
+})
+
 // ── Chart ─────────────────────────────────────────────────────────────────────
 function destroyChart() {
   if (trendChart) { trendChart.destroy(); trendChart = null }
@@ -502,6 +524,7 @@ function buildChart() {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 async function load() {
+  const token = ++loadToken
   loading.value            = true
   explanationLoading.value = true
   error.value              = null
@@ -530,23 +553,36 @@ async function load() {
     } else if (!collapsedDates.includes(selectedDate.value)) {
       selectedDate.value = collapsedDates.find(d => monthKey(d) === monthKey(selectedDate.value)) || selectedDate.value
     }
+    if (token !== loadToken) return
     await nextTick()
     buildChart()
   } catch (e) {
+    if (token !== loadToken) return
     error.value              = e.message
     explanationLoading.value = false
+    return
   } finally {
-    loading.value = false
+    if (token === loadToken) loading.value = false
   }
 
-  // Phase 2: AI explanation — non-blocking, fills in trend box when ready
   const dateForExplanation = selectedDate.value
-  api.wealthExplanation({ snapshot_date: dateForExplanation || undefined, ai: true })
+  api.wealthExplanation({ snapshot_date: dateForExplanation || undefined })
     .then(res => {
-      if (selectedDate.value === dateForExplanation) explanation.value = res
+      if (token !== loadToken || selectedDate.value !== dateForExplanation) return null
+      explanation.value = res
+      if (!res?.available) return null
+      return api.wealthExplanation({ snapshot_date: dateForExplanation || undefined, ai: true })
     })
-    .catch(() => { explanation.value = null })
-    .finally(() => { explanationLoading.value = false })
+    .then(res => {
+      if (!res || token !== loadToken || selectedDate.value !== dateForExplanation) return
+      explanation.value = res
+    })
+    .catch(() => {
+      if (token === loadToken && selectedDate.value === dateForExplanation) explanation.value = null
+    })
+    .finally(() => {
+      if (token === loadToken && selectedDate.value === dateForExplanation) explanationLoading.value = false
+    })
 }
 
 async function askFollowUp(question) {
@@ -891,4 +927,18 @@ onUnmounted(destroyChart)
   transition: background 0.15s;
 }
 .wealth-fab:active { background: var(--primary-deep); }
+
+@media (min-width: 1024px) {
+  .nw-hero {
+    padding: 24px 28px;
+  }
+
+  .nw-hero-value {
+    font-size: 32px;
+  }
+
+  .chart-wrap {
+    height: 320px;
+  }
+}
 </style>

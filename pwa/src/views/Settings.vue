@@ -1,6 +1,7 @@
 <template>
   <div>
     <div class="section-hd">⚙️ Settings</div>
+    <div class="settings-grid">
 
     <!-- Health status -->
     <div class="setting-card">
@@ -232,6 +233,33 @@
           🗑 Clear results
         </button>
       </div>
+
+      <div v-if="isDesktopMac" class="pdf-desktop-tools">
+        <div class="setting-desc" style="margin-bottom:10px">
+          Desktop-only PDF workspace from the bridge controller.
+        </div>
+        <div class="pdf-desktop-actions">
+          <button class="btn btn-ghost btn-sm" @click="showPdfWorkspace = !showPdfWorkspace">
+            {{ showPdfWorkspace ? 'Hide PDF Workspace' : 'Open PDF Workspace' }}
+          </button>
+          <a
+            class="btn btn-ghost btn-sm"
+            :href="bridgePdfUiUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open in New Tab
+          </a>
+        </div>
+        <div v-if="showPdfWorkspace" class="pdf-ui-wrap">
+          <iframe
+            class="pdf-ui-frame"
+            :src="bridgePdfUiUrl"
+            title="PDF Workspace"
+            loading="lazy"
+          ></iframe>
+        </div>
+      </div>
     </div>
 
     <!-- About -->
@@ -244,6 +272,7 @@
           API: <code style="font-size:11px">localhost:8090</code>
         </div>
       </div>
+    </div>
     </div>
   </div>
 </template>
@@ -258,6 +287,7 @@ const store = useFinanceStore()
 const syncState   = ref({ loading: false, result: null, error: null })
 const importState = ref({ loading: false, result: null, error: null })
 const importOpts  = ref({ dry_run: false, overwrite: false })
+const showPdfWorkspace = ref(false)
 
 // ── Mac desktop detection ────────────────────────────────────────────────────
 // navigator.platform is "MacIntel" on macOS (and iPadOS ≥13 — exclude via maxTouchPoints).
@@ -268,6 +298,10 @@ const isDesktopMac = computed(() => {
   const isTouch      = navigator.maxTouchPoints > 1
   return looksLikeMac && !isTouch
 })
+
+const bridgePdfUiUrl = computed(() =>
+  `${window.location.protocol}//${window.location.hostname}:9100/pdf/ui`
+)
 
 // ── PDF processing state ─────────────────────────────────────────────────────
 const FILE_ICONS = { pending: '⏳', processing: '⚙️', ok: '✅', skipped: '⏭', error: '❌' }
@@ -529,5 +563,42 @@ onMounted(() => store.loadHealth())
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: right;
+}
+
+.pdf-desktop-tools {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #e0e0e0);
+}
+
+.pdf-desktop-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pdf-ui-wrap {
+  margin-top: 12px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.pdf-ui-frame {
+  display: block;
+  width: 100%;
+  min-height: 720px;
+  border: 0;
+  background: #fff;
+}
+
+@media (min-width: 1024px) {
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: start;
+  }
 }
 </style>

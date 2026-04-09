@@ -32,7 +32,7 @@
 20. [Security Notes](#20-security-notes)
 21. [Known Limitations](#21-known-limitations)
 22. [Troubleshooting](#22-troubleshooting)
-23. [Version History](#23-version-history)
+23. [Current Implementation Snapshot](#23-current-implementation-snapshot)
 
 ### Stage 2 — Personal Finance Dashboard (fully built ✅)
 
@@ -199,7 +199,7 @@ The system alerts on:
   - `finance/setup_sheets.py` — one-time Sheet initializer: creates tabs, writes formatted headers, seeds 22 default categories and 18 currency codes
   - `finance/db.py` — SQLite schema (5 tables + 5 indexes), WAL mode, `open_db()` connection helper
   - `finance/sync.py` — Sheets → SQLite sync engine: atomic DELETE + INSERT per table, hash deduplication, sync_log, `--status` CLI flag
-  - `finance/api.py` — FastAPI app: 12 REST endpoints, CORS, SQLite `_db()` context manager, monthly summary aggregation, alias write-back to Sheets, auto-sync after import; also mounts `pwa/dist/` at `/` when present
+  - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, wealth APIs, CORS, SQLite `_db()` context manager; also mounts `pwa/dist/` at `/` when present
   - `finance/server.py` — uvicorn entry point: `python3 -m finance.server`; `--host`, `--port`, `--reload` overrides
   - `finance/Dockerfile` — `python:3.12-slim` image; installs google-auth, fastapi, uvicorn[standard], rapidfuzz, openpyxl; copies `pwa/dist/` for production static serving
   - `finance/requirements.txt` — Python dependencies: `google-auth`, `google-auth-oauthlib`, `google-api-python-client`, `rapidfuzz`, `fastapi`, `uvicorn[standard]`
@@ -207,10 +207,12 @@ The system alerts on:
   - `pwa/src/views/Dashboard.vue` — month/owner navigation, summary cards, **spending by group** rollup with category chips, Chart.js 12-month trend, owner split table
   - `pwa/src/views/GroupDrilldown.vue` — Level 1 drill-down: group → category list with amounts, tx counts, mini bar chart
   - `pwa/src/views/CategoryDrilldown.vue` — Level 2 drill-down: category → transaction list with inline edit (merchant, category, alias, notes, apply-to-similar); breadcrumb back to group
-  - `pwa/src/views/Transactions.vue` — year/month/owner/category/search filters, paginated list (50/page), expandable detail rows
-  - `pwa/src/views/ReviewQueue.vue` — inline alias form: merchant, category, match type, apply-to-similar, toast feedback
+  - `pwa/src/views/Transactions.vue` — year/month/owner/category/search filters, paginated list (50/page), mobile expandable detail rows, desktop sortable table + detail panel
+  - `pwa/src/views/ReviewQueue.vue` — inline alias form on mobile; desktop two-pane review workspace; toast feedback
   - `pwa/src/views/ForeignSpend.vue` — foreign transactions grouped by currency, per-currency subtotals, flag emojis
-  - `pwa/src/views/Settings.vue` — Sync + Import buttons with live results, API health status card
+  - `pwa/src/views/Settings.vue` — Sync + Import buttons with live results, API health status card, PDF processing tools, desktop-only embedded bridge PDF workspace
+  - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual `Desktop View` override
+  - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace
   - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month, reviewCount badge
   - `pwa/src/api/client.js` — thin `fetch` wrapper for all 12 API endpoints
   - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (Workbox NetworkFirst cache) + `/api` proxy to `:8090`
@@ -221,11 +223,11 @@ The system alerts on:
   - `bridge/gold_price.py` — fetches IDR price per gram of gold via the fawazahmed0 XAU/IDR API (same free no-key API as `bridge/fx_rate.py`; works for historical dates). Converts troy-ounce price to per-gram: `xau_idr / 31.1035`. Returns `None` on failure.
   - `scripts/seed_gold_holdings.py` — one-time (and repeatable) seeder for 14 Antam Logam Mulia gold bars in three weight classes (100 gr × 5, 50 gr × 5, 25 gr × 4). Fetches end-of-month XAU/IDR spot prices for every month from 2026-01 to today, inserts 3 `holdings` rows per month (`asset_class="gold"`, `institution="Physical"`), stores certificate numbers in `notes`. Supports `--dry-run`, `--owner`, `--from YYYY-MM`, `--db` flags. Re-running refreshes prices (ON CONFLICT DO UPDATE).
 - Stage 3 Vue 3 PWA additions (`pwa/`) — see §37
-  - `pwa/src/views/Wealth.vue` — net worth dashboard: snapshot date chips, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, Chart.js 12-month trend, "Refresh Snapshot" button, FAB to Assets
+  - `pwa/src/views/Wealth.vue` — net worth dashboard: arrow month navigation, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, month-over-month movement card, AI explanation panel, Chart.js trend, "Refresh Snapshot" button, FAB to Assets
   - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical/Liabilities), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 3-mode entry form (Balance / Holding / Liability), "Save Snapshot" button; ↺ inline refresh button in month-nav bar
   - `pwa/src/api/client.js` — extended with 13 new wealth API calls + `del()` helper
   - `pwa/src/router/index.js` — 2 new routes: `/wealth`, `/holdings`
-  - `pwa/src/App.vue` — nav expanded to 6 tabs: Flows · 💰 Wealth · 🗂️ Assets · Txns · Review · More
+  - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; 6-tab mobile nav and desktop sidebar
 
 ### Present but NOT integrated
 
@@ -419,21 +421,32 @@ agentic-ai/
 │   ├── dist/                     # Production build output (gitignored) — served by FastAPI
 │   └── src/
 │       ├── main.js
-│       ├── App.vue               # Shell: top bar + 6-tab bottom nav (Flows/Wealth/Assets/Txns/Review/More)
-│       ├── style.css             # CSS variables, cards, buttons, forms, toast
+│       ├── App.vue               # Shell switcher: mobile shell vs desktop shell
+│       ├── style.css             # CSS variables, cards, buttons, forms, toast, desktop shell rules
 │       ├── router/index.js       # 9 routes: /, /wealth, /holdings, /transactions, /review, /foreign, /settings, /group-drilldown, /category-drilldown
 │       ├── api/client.js         # fetch wrapper for all 25 /api/* endpoints + del() helper
 │       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month, reviewCount
+│       ├── composables/
+│       │   └── useLayout.js      # Breakpoint detection + persisted Desktop View override
+│       ├── components/
+│       │   ├── AppHeader.vue         # Route-aware mobile header + Desktop View toggle
+│       │   ├── BottomNav.vue         # 6-tab mobile nav
+│       │   ├── DesktopSidebar.vue    # Desktop navigation + Auto Layout button
+│       │   ├── TransactionTable.vue  # Desktop transactions table
+│       │   └── ReviewWorkspace.vue   # Desktop review queue two-pane workspace
+│       ├── layouts/
+│       │   ├── MobileShell.vue       # Mobile chrome wrapper
+│       │   └── DesktopShell.vue      # Sidebar + full-width desktop content
 │       └── views/
 │           ├── Dashboard.vue         # Month nav, summary cards, spending-by-group, Chart.js trend, owner table
-│           ├── Wealth.vue            # Net worth dashboard: date chips, hero card, breakdown bars, trend chart, snapshot button
+│           ├── Wealth.vue            # Net worth dashboard: arrow month nav, hero card, movement card, AI explanation, trend chart
 │           ├── Holdings.vue          # Asset manager: group tabs, snapshot date, FAB → 3-mode entry form (Balance/Holding/Liability)
 │           ├── GroupDrilldown.vue    # Level 1 drill-down: group → categories (amounts, tx count, mini bars)
 │           ├── CategoryDrilldown.vue # Level 2 drill-down: category → transactions + inline edit + breadcrumb
-│           ├── Transactions.vue      # Filters + paginated list + expandable detail rows
-│           ├── ReviewQueue.vue       # Inline alias form + apply-to-similar + toast
+│           ├── Transactions.vue      # Mobile expandable list + desktop table/detail workspace
+│           ├── ReviewQueue.vue       # Mobile inline form + desktop review workspace + toast
 │           ├── ForeignSpend.vue      # Grouped by currency, per-currency subtotals
-│           └── Settings.vue          # Sync, Import, health status
+│           └── Settings.vue          # Sync, Import, health status, PDF tools, desktop-only bridge PDF UI
 ├── config/
 │   └── settings.toml             # All runtime configuration (Stage 1 + Stage 2 sections)
 ├── data/                         # Runtime SQLite DBs (gitignored)
@@ -2132,842 +2145,17 @@ docker compose up -d
 
 ---
 
-## 23. Version History
+## 23. Current Implementation Snapshot
 
-### v2.9.0 (2026-04-03)
+This document now describes the current architecture and operating model rather than maintaining a long in-file changelog. Historical implementation details that no longer affect how the system is built, deployed, or operated have been removed.
 
-#### Features
+### What is current as of 2026-04-09
 
-- **Spending by Group (Dashboard)** — the "Spending by Category" section on the Dashboard is replaced with "Spending by Group". All expense categories are rolled up into their `category_group` (up to 7 visible groups; `System / Tracking` is excluded). Each group row shows the group icon, name, total spend, % of total monthly expense, and up to 3 category chips. Groups are sorted by total descending. Tapping a group navigates to the new Group Drilldown view.
-
-- **Two-level drill-down navigation**
-  - **Level 1 — `GroupDrilldown.vue` (`/group-drilldown`)**: shows all spending categories within the selected group for the current month. Columns: icon, category name, transaction count, amount (IDR), % of group total. A mini horizontal bar chart below the list gives a quick visual breakdown when more than one category is present. No extra API call — the `by_category` payload from the Dashboard `summaryMonth` response is passed as a query parameter.
-  - **Level 2 — `CategoryDrilldown.vue` (`/category-drilldown`)**: all individual transactions for the selected category and month. Each row expands to show full details + an edit form (merchant name, category, notes, alias match type, apply-to-similar). Save calls `POST /api/alias` (writes Merchant Aliases tab + batch-updates all matching transactions) and optionally `PATCH /api/transaction/{hash}/category` for notes.
-
-- **Breadcrumb back-navigation** — `CategoryDrilldown.vue` reads a `fromGroup` query parameter. When present, a tappable breadcrumb (e.g. `❤️ Health & Family ›`) is displayed above the category title. The back button calls `router.back()` to restore the group view from browser history.
-
-- **"Hobbies" category** — new category added to `Lifestyle & Personal` group:
-
-  | Category | Icon | Sort | Group | Subcategory |
-  |---|---|---|---|---|
-  | Hobbies | 🎮 | 13 | Lifestyle & Personal | Hobbies |
-
-  Appended directly to the live Google Sheets Categories tab and synced into SQLite (total: 32 categories). `finance/categorizer.py` and `finance/setup_sheets.py` updated accordingly; sort orders for all subsequent categories bumped by 1 (max sort_order: 32).
-
-#### Changed
-
-- **`pwa/src/views/Dashboard.vue`** — `topCats` computed replaced by `spendingGroups`; new `drillToGroup()` function navigates to `/group-drilldown` with `byCategory` + `totalExpense` encoded in the query string. `GROUP_ICONS` constant maps each of the 8 groups to an emoji.
-- **`pwa/src/views/GroupDrilldown.vue`** — new view (see above). Reads `byCategoryRaw` and `totalExpense` from route query; uses `store.categoryMap` for `category_group` lookups. Transaction count sourced from `c.count` field in the `by_category` API response.
-- **`pwa/src/views/CategoryDrilldown.vue`** — reads `fromGroup` query param; renders breadcrumb; `goBack()` uses `router.back()` for correct history traversal.
-- **`pwa/src/router/index.js`** — two new routes: `/group-drilldown` and `/category-drilldown`.
-
-#### Fixed
-
-- `GroupDrilldown.vue` was reading `c.transaction_count` for the transaction count sub-label; the actual field name returned by `GET /api/summary/{year}/{month}` → `by_category` is `c.count`. Fixed to `c.count ?? 0`.
-
----
-
-### v3.5.0 (2026-04-08)
-
-#### Features
-
-- **Added: IPOT Portfolio parser** (`parsers/ipot_portfolio.py`) — parses PT Indo Premier Sekuritas "Client Portofolio" PDFs. Extracts stocks and mutual funds into the `holdings` table and the RDN closing balance into `account_balances`. After upserting, carries all holdings forward month-by-month (INSERT OR IGNORE gap-fill) until the current month or until data for that institution already exists.
-
-- **Added: IPOT Statement parser** (`parsers/ipot_statement.py`) — parses IPOT "Client Statement" (RDN cash ledger) PDFs. Extracts numbered transaction rows (handling 8-column cash-only rows and 10-column price/volume rows) and the END BALANCE into `account_balances`. Uses `[ \t]+` (not `\s+`) for all numeric column separators to prevent cross-line regex matches.
-
-- **Added: BNI Sekuritas parser** (`parsers/bni_sekuritas.py`) — parses PT BNI Sekuritas "CLIENT STATEMENT" portfolio PDFs. Extracts stocks and mutual funds (with multi-line fund name continuation) and the Cash RDN closing balance.
-- **Added: legacy BNI Sekuritas parser** (`parsers/bni_sekuritas_legacy.py`) — parses older PT BNI Sekuritas `CONSOLIDATE ACCOUNT STATEMENT` PDFs used by January 2026. Extracts the cash summary closing balance plus stock and mutual-fund holdings; intentionally separate from the newer `CLIENT STATEMENT` parser.
-
-- **Added: Stockbit Sekuritas parser** (`parsers/stockbit_sekuritas.py`) — parses PT Stockbit Sekuritas Digital "Statement of Account" PDFs. Stock rows have no leading sequence number; optional single-letter flags (`M`, `X`) are stripped from company names; company names span two lines. Cash ledger Ending Balance uses parentheses for negatives; the Interest column is optional (absent in payment rows).
-
-- **Added: `bridge/gold_price.py`** — fetches the IDR price per gram of gold via the fawazahmed0 XAU/IDR API (same free, no-key, historical-capable source as `bridge/fx_rate.py`). `get_gold_price_idr_per_gram(date_str)` → `xau_idr / 31.1035`.
-
-- **Added: `scripts/seed_gold_holdings.py`** — idempotent seeder for 14 Antam Logam Mulia gold bars (100 gr × 5 bars: KSQ 052, DE 074, OR 023, IMA 022, IMA 021; 50 gr × 5: JP 060, JM 037, JM 038, ID 002, BB 063; 25 gr × 4: BXJ 055, FB 024, BDP 013, ACO 073). Fetches end-of-month XAU/IDR spot prices for every month from `--from` (default 2026-01) to the current month and upserts 3 `holdings` rows per month (`asset_class="gold"`, `asset_group="Physical Assets"`, `institution="Physical"`). Certificate numbers stored in `notes`. Re-running refreshes prices via `ON CONFLICT DO UPDATE`. Supports `--dry-run`, `--owner`, `--from YYYY-MM`, `--db`.
-
-- **Added: ↺ Refresh button in Holdings.vue** — inline button in the month-nav bar calls `loadItems()` to reload all holdings data for the current snapshot date without a full page reload.
-
-#### Fixed
-
-- **Fixed: `holdings` UNIQUE constraint missing `institution`** — the original `UNIQUE(snapshot_date, asset_class, asset_name, owner)` key caused `INSERT OR IGNORE` in the gap-fill to silently block rows when two brokerages held the same ticker (e.g. BNGA at both IPOT and BNI Sekuritas). Rebuilt to `UNIQUE(snapshot_date, asset_class, asset_name, owner, institution)`. All `ON CONFLICT(...)` clauses in `bridge/pdf_handler.py` updated to match.
-- **Fixed: `POST /api/wealth/holdings` still used the old 4-column `ON CONFLICT` target** — after the DB unique key was expanded to include `institution`, the API upsert path still targeted `(snapshot_date, asset_class, asset_name, owner)` and raised `sqlite3.OperationalError`. Updated the conflict target and post-upsert lookup to include `institution`.
-
-- **Fixed: `_resolve_upload_dest()` creating hash-suffixed duplicate PDFs** — the previous implementation compared file bytes; multipart boundary differences caused identical PDFs re-uploaded through different clients to create `_8f7294f2`-suffixed copies. Simplified to filename-only check: reuse existing file if the name matches; write only if the name is new.
-
-- **Fixed: gap-fill stop condition hardcoded to `institution='IPOT'`** — the check `WHERE institution='IPOT'` in the gap-fill loop blocked forward-fill for BNI Sekuritas and Stockbit Sekuritas portfolios. Changed to `institution=?` parameterised with `result.bank`.
-
-- **Fixed: stale `mom_change_idr` after retroactive gold seeding** — adding gold to historical months after their net_worth_snapshots rows were already created left `mom_change_idr` comparing the new (gold-inclusive) month against an old (gold-absent) previous month. Fix: re-upsert all affected snapshots oldest-first via `POST /api/wealth/snapshot` so each month's MoM is recomputed against the corrected predecessor.
-
-#### Changed
-
-- **`parsers/router.py`** — detection expanded to 12 parsers in priority order: Permata CC → Permata Savings → BCA CC → BCA Savings → Maybank Consol → Maybank CC → CIMB CC → CIMB Consol → IPOT Portfolio → IPOT Statement → BNI Sekuritas (legacy) → BNI Sekuritas → Stockbit Sekuritas.
-- **`bridge/pdf_handler.py`** — `_run_job()` step 2.8 (`_upsert_investment_holdings`) now used for all brokerage portfolio parsers (IPOT, BNI Sekuritas, Stockbit Sekuritas), not only IPOT. Gap-fill institution check and log messages use `result.bank` dynamically. Note strings use `f"Auto-imported from {result.bank} portfolio"`.
-
----
-
-### v3.4.0 (2026-04-07)
-
-#### Security
-
-- **C1 — All GET endpoints now require auth** — `GET /api/health`, `/api/owners`, `/api/categories`, `/api/transactions`, `/api/transactions/foreign`, `/api/summary/*`, `/api/review-queue`, and all `/api/wealth/*` GET endpoints now carry `dependencies=[Depends(require_api_key)]`. The Docker healthcheck was updated to pass the `X-Api-Key` header. Previously, anyone with the server URL could read the full financial history.
-
-- **C2 — Rate limiter timezone fix** — `bridge/rate_limit.py` was computing the cutoff using naive `datetime.now()`, making rate limiting bypassable when comparing naive vs. UTC-aware timestamps. Fixed to `datetime.now(timezone.utc)`.
-
-- **C3 — GOOGLE_SPREADSHEET_ID now overridable via env var** — `finance/config.py` reads `os.environ.get("GOOGLE_SPREADSHEET_ID")` before falling back to `settings.toml`. `docker-compose.yml` passes `GOOGLE_SPREADSHEET_ID` from the `.env` file. `config/settings.toml` is now gitignored (use `config/settings.example.toml` as a template). The live Sheets ID is no longer committed to source control.
-
-- **C4 — SQL query builder now uses `_QueryParts` NamedTuple** — `_tx_where()` returns a typed `_QueryParts(clause, params)` instead of a plain tuple. The WHERE clause and params are always constructed together, making it impossible to accidentally pass unescaped input as a clause string.
-
-- **C5 — `.env.example` added** — template with all required env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `FINANCE_API_KEY`, `GOOGLE_SPREADSHEET_ID`). `.env` remains gitignored.
-
-- **C6 — API keys wrapped in `_SecretStr`** — `agent/app/providers/anthropic_provider.py` now stores `self._api_key = _SecretStr(...)`. The `_SecretStr` class returns `"****"` from `__repr__` and `__str__`, preventing accidental key leakage in logs or exception traces.
-
-- **C7 — AppleScript injection fixed** — `bridge/pdf_unlock.py` now calls `_escape_applescript_string()` on all three path variables (`pwd_file`, `src_path`, `dest_path`) before interpolating them into AppleScript strings. Prevents injection via filenames containing `"` or `\`.
-
-#### Bug Fixes
-
-- **W4 — `_float()` no longer discards `$0` transactions** — `finance/importer.py` previously returned `None` for zero-value transactions (`return f if f != 0.0 else None`). Fee waivers, zero-balance entries, and explicit zero amounts are now preserved.
-
-- **W6 — LIKE wildcards escaped** — `finance/api.py` `_tx_where()` now escapes `%` and `_` in search queries before passing them to SQLite `LIKE` clauses. Previously, a search for `100%` would match everything.
-
-- **W7 — Atomic PDF file creation** — `bridge/pdf_handler.py` `_resolve_upload_dest()` now uses `os.open(O_CREAT | O_EXCL)` to atomically create the destination file. Eliminates the TOCTOU race where two concurrent uploads of the same filename could overwrite each other.
-
-- **W9 — `parse_date_ddmmyyyy` returns `None` on no match** — `parsers/base.py` previously returned the raw input string when the date didn't match any known pattern, silently propagating invalid dates downstream. Now returns `None`.
-
-#### Changes
-
-- **W1/O3 — All `datetime.now()` calls are timezone-aware** — replaced all naive `datetime.now()` and `datetime.utcnow()` calls with `datetime.now(timezone.utc)` across `finance/models.py`, `finance/api.py`, `finance/sheets.py`, `bridge/attachment_scanner.py`, and `exporters/xls_writer.py`.
-
-- **W2 — `check_same_thread=False` removed from SQLite** — `finance/db.py` already uses WAL mode and per-request connections via `get_conn()`. Removing `check_same_thread=False` eliminates the risk of accidentally sharing a connection across threads.
-
-- **W3 — `_sheets` lazy-init** — `finance/api.py` `SheetsClient` is no longer instantiated at module import time. It is created on first use via `_get_sheets()`. This defers OAuth credential loading to the first write request.
-
-- **W5 — Transfer dedup no longer uses `id()`** — `finance/categorizer.py` `match_internal_transfers()` replaced `id(txn) in seen` with value-based tuple keys `(owner, account, date, amount)`. The previous approach relied on CPython object identity which is non-deterministic across GC cycles.
-
-- **W8 — `BridgeClient` fails with descriptive errors** — `agent/app/bridge_client.py` now raises `RuntimeError`, `FileNotFoundError`, or `ValueError` with clear messages when `BRIDGE_TOKEN_FILE` is unset, missing, or empty.
-
-- **O1 — Shared `extract_json()` utility** — `agent/app/utils.py` added with a three-strategy JSON extractor (direct parse → fenced block → brace extraction). `AnthropicProvider` and `OllamaProvider` now import and use it instead of duplicating the extraction logic.
-
-- **O2 — Provider constants derive from `schemas.py`** — `ALLOWED_CATEGORIES` and `ALLOWED_URGENCY` sets in both providers are now computed via `typing.get_args(Category)` / `typing.get_args(Urgency)` from `app/schemas.py`, eliminating the duplicate constant definitions.
-
-- **O6 — `_examples` uses `deque(maxlen=10)`** — `finance/categorizer.py` few-shot examples replaced `list` + manual slicing with `collections.deque(maxlen=10)`. Appending auto-evicts the oldest entry.
-
-- **O7 — Sync uses `BEGIN IMMEDIATE`** — `finance/sync.py` now executes `BEGIN IMMEDIATE` before the replace-all tables block to acquire an exclusive write lock upfront and prevent any interleaving with other writers during the sync window.
-
-- **O8 — `make_hash` extended to 128-bit** — `finance/models.py` hash fingerprint now uses `[:32]` (128 bits) instead of `[:16]` (64 bits), significantly reducing collision probability for large transaction sets. Existing rows keep their 16-char hashes; new rows use 32-char hashes.
-
-- **O10 — PWA dependencies updated** — `pwa/package.json` updated to latest patch versions within the current major line: `chart.js` ^4.4.9, `pinia` ^2.3.1, `vue` ^3.5.32, `vue-router` ^4.6.4, `@vitejs/plugin-vue` ^5.2.4, `vite` ^5.4.21. Major-version bumps (vite 8, pinia 3, vue-router 5) deferred pending testing.
-
-- **Settings example template** — `config/settings.example.toml` added as a redacted reference for new setups. Copy to `config/settings.toml` and fill in your paths and IDs. The live `settings.toml` is now gitignored.
-
-- **Docker image rebuilt** — `finance-api` image rebuilt with all above changes applied.
-
----
-
-### v3.3.0 (2026-04-06)
-
-#### Features
-
-- **Added: "Process Local PDFs" in Settings page** — a new section in `pwa/src/views/Settings.vue` (visible on Mac desktop only, detected via `navigator.platform` + `maxTouchPoints`) lets the user trigger server-side processing of all PDF files already in the `pdf_inbox` and `pdf_unlocked` data folders on the host. No file picker is required; paths are resolved entirely server-side.
-
-  Flow:
-  1. `GET /api/pdf/local-files` — finance-api scans `~/agentic-ai/data/pdf_inbox` and `~/agentic-ai/data/pdf_unlocked`, returns a sorted list of PDF filenames and their folder keys.
-  2. `POST /api/pdf/process-local` — sends `{ folder, filename }` to finance-api, which proxies to bridge `POST /pdf/process-file`.
-  3. Bridge resolves the file path from its own config, creates a job, and runs the PDF pipeline synchronously.
-  4. PWA polls the returned `job_id` until `done/error/skipped`.
-  5. Per-file status chips (`pending → processing → ok/skipped/error`) update in real time; a summary counter shows results on completion.
-
-- **Added: `POST /pdf/process-file` bridge endpoint** — handles `{ folder, filename }` payloads where `folder` is one of `pdf_inbox` / `pdf_unlocked`. The bridge resolves the full path from its `pdf_inbox_dir` / `pdf_unlocked_dir` config keys, so no file paths are ever transmitted from the browser. Implemented in `bridge/pdf_handler.py:handle_process_file()` and routed in `bridge/server.py`.
-
-- **Added: three PDF proxy endpoints to finance-api** (`finance/api.py`):
-  - `GET /api/pdf/local-files` — scans the two PDF folders and returns a list of `{ folder, filename }` objects.
-  - `POST /api/pdf/process-local` — proxies `{ folder, filename }` to bridge `/pdf/process-file`.
-  - `GET /api/pdf/local-status/{job_id}` — proxies to bridge `/pdf/status/:id`.
-  All three require `X-Api-Key` authentication.
-
-- **Confirmed: CIMB Niaga consolidated savings balances recorded automatically** — `parsers/cimb_niaga_consol.py` extracts both savings account closing balances from the "RINCIAN ASET / ASSET DETAIL" table on the accounts page (regex `_ACCT_SUM_RE`, multi-line). `bridge/pdf_handler.py:_upsert_closing_balance()` then writes each account to `account_balances` with `asset_group='Cash & Liquid'`. Confirmed for both XTRA Savers (account 707241000000) and XTRA Savers MANFAAT (account 701347791200) from Jan 2026 and Feb 2026 statements. No parser changes were required — the existing pipeline already handled the consol type correctly.
-
-#### Fixed
-
-- **Fixed: Maybank consolidated statement misidentified as CC** — the Maybank consol PDF lists "Maybank Kartu Kredit" as a product line on page 1, causing the router to match `maybank_cc.can_parse()` before reaching the consol detector. Two changes:
-  1. `parsers/maybank_consol.py` — strengthened `can_parse()` to require either `"RINGKASAN PORTOFOLIO"` or `"ALOKASI ASET"` (both are page-1 keywords unique to the consol statement).
-  2. `parsers/router.py` — moved the `maybank_consol.can_parse(combined)` check **before** `maybank_cc.can_parse(page1_text)` in both `detect_and_parse()` and `detect_bank_and_type()`. The `combined` variable (page1 + page2) is used so the consol check sees the full portfolio summary.
-  Result: 6 Maybank investment holdings (3 per month, Jan and Feb 2026) now correctly recorded in `finance.db`.
-
-- **Fixed: GET requests to PDF endpoints returning 401** — `pwa/src/api/client.js` `get()` helper was calling `fetch(url)` without the `Authorization` header object, causing all `GET` calls to PDF endpoints (and any future authenticated GET) to return 401. Added `{ headers: AUTH_HEADERS }` to the `fetch()` call in `get()`.
-
-#### Security
-
-- **HTTPS recommendation** — for production use, place the finance-api (port 8090) behind a reverse proxy that terminates TLS. On Synology NAS: Application Portal → Reverse Proxy → add a rule forwarding `https://finance.local` → `http://192.168.1.205:8090`. This enables `Secure` cookies and eliminates the mixed-content issue that blocks `showDirectoryPicker` in Chrome on HTTP origins.
-
----
-
-### v3.2.2 (2026-04-07)
-
-#### PDF Verification
-
-- **Added: post-parse PDF verification layer** — `bridge/pdf_verify.py` now runs after `detect_and_parse()` and before any WM side effects or XLS export. It combines deterministic checks (date-range, tx-type, FX-field, running-balance, and summary-reconciliation checks) with a structured Ollama review using `gemma4:e4b`.
-
-- **Added: warn/block verifier modes** — new `[pdf]` config keys control verifier behavior:
-  - `verify_enabled = true`
-  - `verify_mode = "warn"` by default
-  - `verify_ollama_host = "http://localhost:11434"`
-  - `verify_timeout_seconds = 120`
-  - `verify_model = "gemma4:e4b"`
-
-- **Changed: verifier now defaults to Gemma 4 E4B** — the local Ollama defaults for the mail agent, PDF parser fallback, finance categorizer, and PDF verifier now point to `gemma4:e4b`.
-
-- **Changed: verifier summaries are now deterministic-first** — job-log `Verifier:` headlines are generated from deterministic mismatches (for example running-balance or summary-reconciliation counts) instead of trusting raw model prose. Unsupported or invented model issues are filtered before they reach the log.
-
-- **Validated: live cross-parser verification runs** — the verifier path was exercised end-to-end against real BCA savings, Maybank consolidated, and Permata savings PDFs. BCA now degrades to a generic `warn` when model concerns are weak, while Maybank and Permata can still surface more specific review signals when deterministic checks are stronger.
-
-#### PDF Upload Behavior
-
-- **Changed: duplicate PDF uploads now reuse identical files** — `POST /pdf/upload` no longer creates a timestamp-suffixed copy when the uploaded bytes are identical to an existing file in `pdf_inbox_dir`. A new copy is only created when the filename matches but the content differs.
-
-- **Changed: verifier timeout increased** — `verify_timeout_seconds` default raised from 45 → 120 seconds to better accommodate `gemma4:e4b` on larger statements.
-
----
-
-### v3.2.3 (2026-04-07)
-
-#### Finance Sheets Auth
-
-- **Added: Google service-account auth support for finance sync** — `finance/sheets.py` now prefers a service-account JSON key when `google_sheets.service_account_file` is configured, and falls back to the older personal OAuth token flow only when no service-account file is set.
-
-- **Changed: Docker finance-api now passes a service-account path override** — `docker-compose.yml` sets `GOOGLE_SERVICE_ACCOUNT_FILE=/app/secrets/google_service_account.json` so the container can use the mounted secret file instead of a host-only absolute path.
-
-- **Changed: documentation now recommends service-account auth** — Stage 2 Sheets setup now treats `secrets/google_service_account.json` as the preferred production credential. Personal OAuth remains available only as a fallback / recovery path.
-
----
-
-### v3.2.1 (2026-04-06)
-
-#### Security & Hardening
-
-- **Fixed: tracked finance API key placeholders reset** — local `.env` and `pwa/.env.local` now ship with empty `FINANCE_API_KEY=` / `VITE_FINANCE_API_KEY=` placeholders instead of a populated sample value. If you previously used the old shared key, rotate it before redeploying.
-
-- **Fixed: command rate limit now enforced** — `agent/app/commands.py` now checks `max_commands_per_hour` before processing commands and records each processed command in `command_log`.
-
-- **Fixed: bridge token file permissions validated** — `bridge/auth.py` now refuses to start if the bridge token file grants any group/other permissions. Use `chmod 600 /path/to/bridge.token`.
-
-- **Fixed: PDF attachment map made thread-safe** — `bridge/pdf_handler.py` now protects the short-lived `attachment_id -> file_path` map with a lock so concurrent `/pdf/attachments` scans and `/pdf/process` requests cannot race on shared mutable state.
-
-- **Fixed: PDF downloads constrained to configured output directory** — `handle_download()` now resolves the job's `output_path` and rejects any file outside `pdf.xls_output_dir`.
-
-- **Fixed: authenticated API responses marked non-cacheable** — `finance/api.py` now adds `Cache-Control: no-store, no-cache, must-revalidate` and `Pragma: no-cache` to all `/api/*` responses so the PWA service worker and intermediaries do not cache sensitive finance data.
-
-- **Fixed: provider HTTP clients closed on shutdown** — `Classifier.close()` now closes the Ollama / Anthropic `httpx.Client` instances during agent shutdown.
-
-- **Changed: finance and PDF job timestamps now use timezone-aware UTC** — `finance/api.py`, `finance/sync.py`, and `bridge/pdf_handler.py` now emit ISO 8601 UTC timestamps instead of naive local/UTC datetimes.
-
-- **Changed: internal transfer pairs moved to config** — `finance.categorizer.match_internal_transfers()` now reads account-pair mappings from `[finance.internal_transfers]` in `config/settings.toml` instead of the old hardcoded `INTERNAL_ACCOUNT_PAIRS` constant.
-
-#### Configuration
-
-- **`config/settings.toml`** — added `[finance.internal_transfers]` with `pairs = [[["OwnerA","AccountA"],["OwnerB","AccountB"]], ...]` for cross-account transfer matching.
-
-#### Maintenance
-
-- **Removed: duplicate dead `/pdf/ui` route** — `bridge/server.py` no longer contains the second unreachable `/pdf/ui` branch after auth.
-
-- **Removed: runtime `sys.path.insert(...)` hacks from PDF handlers** — `bridge/pdf_handler.py` now relies on the project-root path setup performed once at bridge startup.
-
----
-
-### v3.2.0 (2026-04-05)
-
-#### Security & Bug Fixes (audit remediation)
-
-**Critical — confirmed runtime breakages**
-
-- **Fixed: `OperationalError` on all wealth writes** — `finance/db.py` schema was missing `exchange_rate` on both `account_balances` and `holdings`. Every `POST /api/wealth/balances` and `POST /api/wealth/holdings` call (including the PDF pipeline's `_upsert_closing_balance()` and `_upsert_bond_holdings()`) raised `OperationalError: table … has no column named exchange_rate`. Added `exchange_rate REAL DEFAULT 1.0` to both `CREATE TABLE IF NOT EXISTS` statements.
-
-- **Fixed: all PDF bridge endpoints returning 500** — `bridge/server.py` was calling `json.loads(body)` on the return values of every PDF handler (`handle_upload`, `handle_process`, `handle_status`, `handle_jobs`, `handle_attachments`). All handlers already return Python dicts, so `json.loads()` raised `TypeError` before a single response was sent. Removed the wrapping; handlers are now passed directly to `self._json()`.
-
-- **Fixed: XSS via `innerHTML` + bearer token in `localStorage`** — `bridge/static/pdf_ui.html` set `innerHTML` with server-controlled strings in `flash()`, `loadJobs()`, `loadAttachments()`, and `renderFileList()`, allowing a server-injected payload to steal the bridge token. All four functions rewritten to use `createElement` / `textContent` / `replaceChildren`. The `TOKEN` variable and `localStorage.setItem("bridge_token", …)` call removed; the token is now held in a plain `let token` scoped to the script and never written to storage.
-
-- **Added: API key authentication to finance API** — `finance/api.py` now requires an `X-Api-Key` header (HMAC-compared against `FINANCE_API_KEY` env var) on all 11 write endpoints: `POST /api/alias`, `PATCH /api/transaction/{hash}/category`, `POST /api/sync`, `POST /api/import`, and all six `POST`/`DELETE /api/wealth/*` routes. Read endpoints remain unauthenticated. If `FINANCE_API_KEY` is not set the server returns 500 on all protected routes rather than silently accepting any key.
-
-**Warning — broken behaviour and security weaknesses**
-
-- **Fixed: upload size limit bypass** — `/pdf/upload` in `bridge/server.py` read the full multipart body before applying any size check, bypassing the existing `MAX_REQUEST_BODY = 65536` guard used for JSON. Added `MAX_UPLOAD_BODY = 50 MB`; the handler now returns 413 immediately if `Content-Length` exceeds the limit or is absent.
-
-- **Fixed: attachment queue broken + host file paths leaked to browser** — `GET /pdf/attachments` was returning `file_path` (absolute macOS paths) to the browser, and the UI was POSTing them back as `source_path` — a field `handle_process` never read, so queuing always silently failed. Fixed end-to-end: `handle_attachments()` now generates a UUID `attachment_id` per result and stores a server-side `attachment_id → file_path` map; `handle_process()` resolves `attachment_id` on the server; no file path is ever sent to the browser. The scan map is rebuilt on every `GET /pdf/attachments` call so stale IDs expire naturally.
-
-- **Fixed: Google Sheets write failures silently swallowed** — `SheetsClient.append_alias()` and `update_alias_category()` caught `HttpError` and logged it, then returned `None`, causing the finance API to respond 200 while the authoritative sheet was never updated. The next sync could then overwrite the local SQLite edit with stale Sheets data. Both methods now `raise RuntimeError(…) from e`, propagating a 500 to the caller.
-
-- **Fixed: `command_log` table never created** — `AgentState.count_commands_last_hour()` and `record_command_processed()` queried/inserted into `command_log`, but `_init_db()` never created it. Wired in the `CREATE TABLE IF NOT EXISTS command_log` DDL alongside the other agent tables.
-
-**Optimisation**
-
-- **Replaced global shutdown flag with `threading.Event`** — `agent/app/main.py` used a mutable module-level `running = True` bool with `global` declarations in both `main()` and the signal handler. Replaced with `shutdown_event = Event()`; signal handlers call `shutdown_event.set()`; main loop tests `not shutdown_event.is_set()`. Eliminates the fragile global state and is safe for multi-threaded embedding.
-
-#### Configuration
-
-- **`docker-compose.yml`** — added `FINANCE_API_KEY: ${FINANCE_API_KEY}` to the `finance-api` environment block. The variable is read from `.env` at compose startup.
-- **`pwa/src/api/client.js`** — added `AUTH_HEADERS = { 'X-Api-Key': VITE_FINANCE_API_KEY }` (read from `import.meta.env` at build time); spread into `headers` of all `post()`, `patch()`, and `del()` calls.
-- **`.env`** — added `FINANCE_API_KEY=` placeholder alongside the existing API key entries.
-- **`pwa/.env.local`** — created with `VITE_FINANCE_API_KEY=` placeholder and generation instructions. Keep this file local-only and set it to the same value as `FINANCE_API_KEY` before running `npm run build`.
-
-#### Deployment
-
-```bash
-# Generate a key (run once; store the output)
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
-# Fill in .env  → FINANCE_API_KEY=<key>
-# Fill in pwa/.env.local locally only → VITE_FINANCE_API_KEY=<same key>
-
-cd pwa && npm run build
-cd ..
-docker compose up -d --build finance-api
-```
-
-#### Post-fix: Cleanup
-
-- **Deleted corrupt 2026-04-04 zero snapshot** — During schema migration (April 4), a net_worth_snapshot with all-zero values was created before the `exchange_rate` column fix. This phantom snapshot appeared in the wealth history API and could cause duplicate "April" entries in UI navigation despite correct JS deduplication. Deleted via: `sqlite3 data/finance.db "DELETE FROM net_worth_snapshots WHERE snapshot_date = '2026-04-04' AND net_worth_idr = 0.0;"`. The wealth pages now show a single April 2026 entry (`2026-04-30`) with real data.
-
----
-
-### v3.1.0 (2026-04-05)
-
-#### Features
-
-- **Added: Automatic IDR conversion for foreign-currency bank accounts** — non-IDR savings accounts (e.g. Permata Tabungan USD) now auto-convert to IDR using a 3-tier priority chain: (1) bank's own "Saldo Rupiah" from the PDF Ringkasan Rekening table, (2) historical FX rate from `fawazahmed0/currency-api`, (3) 0 (signals manual update needed). The implied exchange rate is stored in `account_balances.exchange_rate` and displayed in Holdings.vue as `USD 67,672.74 · 16,779/USD`.
-
-- **Added: `bridge/fx_rate.py`** — fetches historical exchange rates from the free `fawazahmed0/currency-api` (no API key). Primary URL: jsdelivr CDN; fallback: Cloudflare Pages. Module-level cache keyed by `(from, to, date)`. `get_rate_safe()` returns `0.0` on any network error.
-
-- **Added: Permata Bond Investment parser** — `parsers/permata_savings.py` now parses the "Rekening Investasi Obligasi" table from Permata consolidated PDF statements. Extracted fields: product name, currency, face value (quantity), market price, market value, IDR equivalent, unrealised P&L (amount + %), and implied FX rate (`market_value_idr / market_value` for USD bonds). Results are stored in the `holdings` table with `asset_class='bond'` via `bridge/pdf_handler.py:_upsert_bond_holdings()`.
-
-- **Added: `BondHolding` dataclass** (`parsers/base.py`) — 9-field structure: `product_name`, `currency`, `face_value`, `market_price`, `market_value`, `market_value_idr`, `unrealised_pl`, `unrealised_pl_pct`, `statement_fx_rate`. `StatementResult` carries a `bonds: list[BondHolding]` field.
-
-- **Added: `closing_balance_idr` field to `AccountSummary`** — carries the bank's own IDR equivalent through the parsing pipeline so PDF exchange rates take priority over the external API.
-
-- **Added: Government Bonds sub-group in Holdings.vue** — bond positions parsed from Permata PDFs are displayed under a "🏛 Government Bonds" sub-header within the Investments group. Each bond row shows a `.premium` (green) or `.discount` (red) badge with the market price, face value, IDR value, unrealised P&L, and FX rate for USD bonds.
-
-- **Changed: Month navigation on Wealth and Assets pages** — replaced horizontal scrollable chip-bar with `‹ Month Year ›` arrow navigation (matching the Dashboard/Flows page style). Left/right buttons disabled at oldest/newest boundary. Holdings page retains a `+` button in the centre to open an inline `<input type="month">` picker for jumping to any month.
-
-#### Fixed
-
-- **Permata ME Saver iB (account 4123968773) wrongly tagged as USD** — the parser read "Mata Uang: USD" from the PDF header, but the balance amounts (437 M, 563 M IDR) were in Indonesian notation. Fixed by: (1) auto-correction in `_parse_idr_summary()` — if `saldo_idr == closing_balance` the currency is forced to `IDR`; (2) one-time DB correction to `currency='IDR', balance_idr=balance, exchange_rate=1.0`.
-
-- **Bond snapshot dates showing 1st of following month** — Permata's "Tanggal Laporan" (print date) is the statement generation date (1st of the following month), not the period end. Fixed by using `accounts[0].period_end` as the bond snapshot date instead of `print_date`.
-
-#### Changed
-
-- **`bridge/pdf_handler.py`** — `_upsert_closing_balance()` implements the FX priority chain; new `_upsert_bond_holdings()` step wired into `_run_job()` as step 2.6.
-- **`parsers/permata_savings.py`** — imports `BondHolding`; adds `_parse_idr_summary()`, `_SUMMARY_ROW` regex, `_BOND_ROW` regex, `_parse_bond_section()`; wires bond results into `StatementResult`; auto-corrects false-USD currency tags.
-- **`parsers/base.py`** — `AccountSummary` gains `closing_balance_idr: float = 0.0`; `StatementResult` gains `bonds: list[BondHolding] = field(default_factory=list)`.
-- **`finance/api.py`** — `BalanceUpsertRequest` and `HoldingUpsertRequest` carry `exchange_rate: float = 0.0`; both upsert SQLs include the `exchange_rate` column.
-- **`pwa/src/views/Wealth.vue`** — chip-bar replaced with `.month-nav` arrow nav; `currentDateIndex`, `isNewestDate`, `isOldestDate`, `prevMonth()`, `nextMonth()` added to script; scoped chip-bar CSS removed (global `.month-nav` used).
-- **`pwa/src/views/Holdings.vue`** — chip-bar replaced with arrow nav + `+` / inline month picker; `filteredBonds` and `filteredOtherInvestments` computed refs for Government Bonds split; `.sub-header`, `.price-badge.premium`, `.price-badge.discount` styles added; `.asset-fx` span for non-IDR balance display.
-
----
-
-### v3.5.2 (2026-04-09)
-
-#### Stage 3 — Wealth page progressive loading
-
-- **Changed: `GET /api/wealth/explanation`** — added `ai: bool = False` query parameter. Without `?ai=1` the endpoint returns the deterministic fallback immediately (< 100 ms) without touching Ollama. With `?ai=1` it calls Ollama (timeout now 5 s, down from 60 s) and falls back to deterministic on failure. This ensures the old PWA bundle (served from service worker cache) no longer blocks the page load.
-- **Changed: `Wealth.vue` load strategy** — `load()` split into two phases. Phase 1 awaits `wealthSummary` + `wealthHistory` in parallel and renders the full dashboard immediately. Phase 2 fires `wealthExplanation?ai=1` as a non-blocking promise; a "Generating trend analysis…" spinner occupies the Net Worth Trend box until the result arrives or fails. Added `explanationLoading` reactive ref to control the spinner.
-- **Changed: `vite.config.js` service worker** — added `clientsClaim: true` and `skipWaiting: true` to the Workbox config so a newly deployed service worker takes control of all open tabs immediately without waiting for a full close/reopen cycle.
-- **Changed: `config/settings.toml`** — `[ollama_finance] timeout_seconds` reduced from 60 → 5. Faster failure and fallback for slow or unreachable Ollama instances.
-- **Deployment note:** backend code changes (`api.py`) are baked into the Docker image and require `docker compose up --build -d` to apply. A plain `docker compose restart` only restarts the existing image and does **not** pick up Python source changes. Config-file changes (settings.toml, mounted as a volume) do take effect on restart.
-
-### v3.5.1 (2026-04-08)
-
-#### Stage 3 — Wealth explanation + interactive Q&A
-
-- **Added: `GET /api/wealth/explanation`** — returns a monthly net worth explanation for the selected snapshot date. Uses local Ollama via the existing `[ollama_finance]` config and falls back to a deterministic explanation when the model is unavailable or returns invalid JSON.
-- **Added: `POST /api/wealth/explanation/query`** — follow-up Q&A endpoint for the Wealth screen. Answers questions like “What made Investments rise by Rp 1.7B?” from item-level month-over-month diffs across balances, holdings, and liabilities.
-- **Updated: `Wealth.vue` Net Worth Trend card** — now shows an explanation panel above the chart, suggested follow-up chips, a free-text ask box, and an in-card answer history for recent follow-up questions.
-- **Updated: `pwa/src/api/client.js`** — added `wealthExplanation()` and `wealthExplanationQuery()` client methods.
-- **Deployment note:** because the finance Docker image copies `pwa/dist/` at build time, frontend changes require both `npm run build --prefix pwa` and `docker compose up -d --build finance-api`; a plain container restart only refreshes backend Python code.
-
-#### Stage 3 — Legacy brokerage import fixes
-
-- **Added: legacy BNI Sekuritas parser** (`parsers/bni_sekuritas_legacy.py`) — parses older `CONSOLIDATE ACCOUNT STATEMENT` PDFs separately from the newer `CLIENT STATEMENT` parser. Extracts January-style BNI cash summary balance plus equity and mutual-fund holdings without changing the existing February/March BNI parser.
-- **Updated: `parsers/router.py`** — old-format BNI detection now runs before the current `bni_sekuritas.py` branch, so January legacy PDFs and February/March `CLIENT STATEMENT` PDFs route independently.
-- **Fixed: `finance/api.py` holdings upsert conflict target** — `POST /api/wealth/holdings` now uses `ON CONFLICT(snapshot_date, asset_class, asset_name, owner, institution)` to match the live SQLite unique constraint. This restores upsert behavior when the same asset name exists at multiple brokerages.
-- **Operational note: missing-month IPOT backfill** — when a current-month IPOT PDF is missing, the previous month's holding can be rolled forward into the current snapshot under the same institution/account/owner and then the month snapshot should be regenerated. Example applied: `BNGA` from IPOT `2026-01-31` → `2026-02-28`.
-
-### v3.0.0 (2026-04-04)
-
-#### Stage 3 — Wealth Management (fully built)
-
-- **Added: `account_balances` SQLite table** — tracks Cash & Liquid assets (savings, checking, money market, physical cash) per snapshot date, institution, owner, and currency. Unique constraint on `(snapshot_date, institution, account, owner)`. Indexed by date and owner.
-- **Added: `holdings` SQLite table** — tracks Investment Portfolio, Real Estate, and Physical Assets. Fields include `asset_class`, `asset_group` (auto-derived), `isin_or_code`, `quantity`, `unit_price`, `market_value_idr`, `cost_basis_idr`, `unrealised_pnl_idr`, `maturity_date`, `coupon_rate`. Unique on `(snapshot_date, asset_class, asset_name, owner)`.
-- **Added: `liabilities` SQLite table** — tracks all debts (mortgage, personal loan, credit card, taxes owed). Unique on `(snapshot_date, liability_type, liability_name, owner)`.
-- **Added: `net_worth_snapshots` SQLite table** — 24-column monthly rollup generated by aggregating the three asset/liability tables. Columns cover every asset sub-class individually plus totals and MoM delta. Generated on demand via `POST /api/wealth/snapshot`.
-- **Added: 13 new `/api/wealth/*` REST endpoints** — full CRUD (GET/POST/DELETE) for balances, holdings, and liabilities; `POST /api/wealth/snapshot` aggregates and upserts the rollup row; `GET /api/wealth/history` returns snapshots oldest-first for chart rendering; `GET /api/wealth/summary` returns the snapshot + all items for a date in a single call.
-- **Added: `Wealth.vue`** — net worth dashboard at `/wealth`. Horizontal snapshot date chip row; hero card (net worth + MoM change with ▲/▼ and %); Total Assets / Total Liabilities summary grid; tappable asset group breakdown rows (bar + %, sub-type chips, navigates to `/holdings?group=…`); liabilities row; Chart.js 12-month trend (values in IDR millions); "Refresh Snapshot" button.
-- **Added: `Holdings.vue`** — asset manager at `/holdings`. Six group filter tabs (All / Cash / Investments / Real Estate / Physical / Liabilities); snapshot date picker; grouped item rows showing name, type, institution, IDR value, owner badge, unrealised P&L (investments), delete button; "Save Snapshot" button with inline feedback; FAB → bottom-sheet modal with 3-tab type selector (Balance / Holding / Liability) and context-aware forms (bond fields: maturity date + coupon rate; liability fields: due date).
-- **Updated: `pwa/src/api/client.js`** — added `del()` HTTP helper and 13 new wealth API methods: `wealthSummary`, `wealthHistory`, `wealthSnapshotDates`, `createSnapshot`, `getBalances`, `upsertBalance`, `deleteBalance`, `getHoldings`, `upsertHolding`, `deleteHolding`, `getLiabilities`, `upsertLiability`, `deleteLiability`.
-- **Updated: `pwa/src/router/index.js`** — 2 new routes: `/wealth` → `Wealth.vue`, `/holdings` → `Holdings.vue`.
-- **Updated: `pwa/src/App.vue`** — bottom nav expanded from 5 to 6 tabs (Flows · 💰 Wealth · 🗂️ Assets · Txns · Review · More); app title changed to "Wealth".
-- **Updated: `finance/db.py`** — schema extended from 5 to 9 tables (4 new Stage 3 tables + 8 new indexes).
-- **Updated: `finance/api.py`** — endpoint count raised from 12 to 25; Stage 3 constants (`_ASSET_CLASS_GROUP`, `_ACCT_TYPE_COL`, `_HOLDING_CLASS_COL`, `_LIAB_TYPE_COL`) map taxonomy values to SQLite column names for snapshot aggregation.
-- **Built & deployed:** `npm run build` in `pwa/` (391 KB JS, 132 KB gzip); `docker compose build finance-api && docker compose up -d --no-deps finance-api` to deploy the new image.
-
-
-### v2.8.1 (2026-04-03)
-
-#### Fixed
-
-- **Category Overrides migration** — `finance/sync.py` now applies `migrate_category()` to override values read from the "Category Overrides" Google Sheet tab. Previously, legacy names stored in that tab (`Opening Balance`, `Internal Transfer`) were applied *after* the migration pass, re-introducing old names into SQLite. The override values are now migrated in place before being written to the DB.
-- **"Category Overrides" tab patched** — 8 override rows in the live Google Sheet updated directly: 4× `Opening Balance` → `Adjustment`, 4× `Internal Transfer` → `Transfer`.
-- **`data/finance.db` regenerated** — old SQLite DB deleted and sync re-run; DB now has zero legacy category names across all tables.
-
----
-
-### v2.8.0 (2026-04-03)
-
-#### Features
-
-- **Expanded category taxonomy: 22 → 31 categories across 8 groups** — categories are now organised into Groups with Subcategory metadata for richer reporting and filtering.
-
-  | Group | New Categories Added |
-  |---|---|
-  | Housing & Bills | Phone Bill, Internet |
-  | Food & Dining | Delivery & Takeout |
-  | Transportation | Rideshare (split from Auto) |
-  | System / Tracking | Dividends, Interest Income, Capital Gains, Other Income, Taxes |
-
-- **`category_group` and `subcategory` columns** — added to the Google Sheet "Categories" tab (columns F–G), the SQLite `categories` table, and the `/api/categories` API response.
-- **Helen BCA ATM → Household auto-rule** — transactions on Helen's BCA account `5500346622` with `TARIK TUNAI` / `ATM` in the raw description are now auto-categorized as `Household` at post-processing time (Layer 0, alongside the cross-account transfer matcher).
-- **Legacy category migration** — `finance/categorizer.py` exports a `migrate_category()` function that maps all retired category names forward. Applied at sync time to every transaction row and every Category Override row:
-
-  | Old name | New name |
-  |---|---|
-  | Internal Transfer | Transfer |
-  | External Transfer | Transfer |
-  | Opening Balance | Adjustment |
-  | Transport | Auto |
-  | Household Expenses | Household |
-  | Child Support | Family |
-  | Travel | Flights & Hotels |
-
-#### Changed
-
-- **`Transfer` replaces `Internal Transfer` + `External Transfer`** — all three cross-account transfer categories collapsed into one. `Adjustment` replaces `Opening Balance`.
-- **`finance/setup_sheets.py`** — `DEFAULT_CATEGORIES` expanded from 22 to 31 rows; seed range changed from `A:E` to `A:G`; `categories_tab` headers now include `category_group` and `subcategory`.
-- **`finance/db.py`** — `categories` table gains `category_group TEXT DEFAULT ''` and `subcategory TEXT DEFAULT ''` columns.
-- **`finance/sync.py`** — `_read_categories()` reads columns A–G; `INSERT INTO categories` includes the two new columns; migration pass added before override application.
-- **`finance/api.py`** — `/api/categories` returns `category_group` and `subcategory`; all `NOT IN (…)` exclusion sets updated to `('Transfer', 'Adjustment')`.
-- **`finance/_seed_aliases.py`** — 4 seeded aliases updated from `"Household Expenses"` → `"Household"`.
-- **`pwa/src/views/Dashboard.vue`** — `EXCLUDED_FROM_SPENDING` set updated to `['Transfer', 'Adjustment']`.
-- **`pwa/src/views/Transactions.vue`** — `EXCLUDE_CATS` set updated to `['Transfer', 'Adjustment']`.
-
----
-
-### v2.7.0 (2026-03-31)
-
-#### Features
-
-- **Added: Layer 3 AI categorization fixes** — fixed a critical bug where all Ollama calls silently failed when running on the Mac host: `settings.toml` had `host = "http://host.docker.internal:11434"` which only resolves inside Docker. Changed to `localhost:11434` for local runs. Added `OLLAMA_FINANCE_HOST` env var in `docker-compose.yml` so the Docker container still resolves via `host.docker.internal`. Result: L3 suggested went from 0 → 107–110 (all transactions now categorized; L4 review queue = 0).
-- **Added: qwen2.5:7b as the default Ollama model** — replaces `llama3.2:3b`. Scores 10/14 on the internal test set (vs 9/14 for llama3.2:3b); better merchant name cleanup and category nuance (Transport vs Travel, Shopping vs Household Expenses).
-- **Added: richer categorization prompt** — per-category guidance in `finance/categorizer.py` distinguishes Transport (daily commute: Grab, Gojek, fuel) from Travel (airlines, airports, hotels, Airbnb), Shopping (fashion, general retail) from Household Expenses (IKEA, ACE Hardware), and adds an "if airline name → always Travel, not Transport" hard rule.
-- **Added: permanent Layer 1b aliases for persistent LLM misclassifications** — 19 `contains` aliases seeded via `finance/_seed_aliases.py`. Merchants that both qwen2.5:7b and llama3.2:3b consistently miscategorize are now caught at Layer 1 before any LLM call:
-  - **Household Expenses:** IKEA, ACE HARDWARE, INFORMA, COURTS
-  - **Travel (airlines):** CATHAY, GARUDA, CITILINK, LION AIR, BATIK AIR, AIRASIA, SRIWIJAYA, SUPER AIR JET, WINGS AIR
-  - **Travel (booking/accommodation):** AIRBNB, BOOKING.COM, AGODA, TRAVELOKA, TIKET.COM, KLOOK
-
-#### Changed
-
-- `config/settings.toml` — `[ollama_finance]` host changed from `http://host.docker.internal:11434` → `http://localhost:11434`; model changed from `llama3.2:3b` → `qwen2.5:7b`.
-- `docker-compose.yml` — added `OLLAMA_FINANCE_HOST: http://host.docker.internal:11434` to `finance-api` environment so Docker containers still reach Ollama on the host.
-- `finance/config.py` — `get_ollama_finance_config()` now honours `OLLAMA_FINANCE_HOST` and `OLLAMA_FINANCE_MODEL` env vars (Docker override pattern consistent with other config values).
-- `finance/_seed_aliases.py` — new one-time utility script; safe to re-run (skips existing aliases by pattern+match_type key).
-
----
-
-### v2.6.0 (2026-03-31)
-
-#### Features
-
-- **Added: PDF Import Log tab** — new "PDF Import Log" Google Sheet tab provides a monthly checklist of expected vs. actually processed PDFs per bank/statement type. Shows `✓ Complete`, `⚠ Partial`, or `✗ Missing` status for all 14 expected monthly PDFs across Permata, BCA, CIMB Niaga, and Maybank. Implemented in `finance/pdf_log_sync.py`.
-- **Added: auto-sync of PDF Import Log on every import** — `finance/importer` now runs `pdf_log_sync.build_log_rows()` automatically as step 7, immediately after writing to the Import Log tab. No separate command needed.
-- **Added: transaction date cutoff (2026-01-01)** — transactions dated before 2026-01-01 are silently dropped during import. CC billing cycles can span two calendar months; this prevents December 2025 charges from appearing in the 2026 ledger.
-- **Added: filename-based month fallback for PDF Import Log** — for banks whose parsers do not populate `period_start`/`period_end` (Permata, CIMB Niaga), the statement month is extracted from the filename using Indonesian month names (`Februari 2026`) or embedded `DD-MM-YYYY` dates.
-- **Added: period-end date used for statement month** — the PDF Import Log uses the *end* date of the billing period (not the start) to assign a statement to its month, correctly placing multi-month CC cycles in their closing month.
-
-#### Changed
-
-- `finance/config.py` — `SheetsConfig` gains `pdf_import_log_tab` field (default: `"PDF Import Log"`).
-- `finance/sheets.py` — new `write_pdf_import_log()` method; new `PDF_IMPORT_LOG_HEADERS` constant.
-- `finance/setup_sheets.py` — "PDF Import Log" tab added to `TABS` dict and `tab_map`; created with header formatting on first run.
-- `config/settings.toml` — new `pdf_import_log_tab = "PDF Import Log"` under `[google_sheets]`.
-
----
-
-### v2.5.0 (2026-03-30)
-
-#### Features
-
-- **Added: household/account-aware finance rules** — extended the live Merchant Aliases setup for household expenses, child support, healthcare, and income patterns. Included account-aware salary cleanup so Gandrik salary is now represented by a single canonical alias: `PwC Indonesia Salary` → `KR OTOMATIS LLG-ANZ INDONESIA` on account `2171138631`.
-- **Added: transfer-aware internal matching hardening** — `finance/categorizer.py` now requires transfer-like descriptions before pairing same-date/same-amount debit and credit rows as `Internal Transfer`, reducing false positives from unrelated matching amounts.
-- **Added: full IDR formatting in the PWA** — Dashboard, Transactions, Review Queue, and Foreign Spend now render full Rupiah amounts such as `Rp 100,000,000` using comma thousand separators instead of compact `jt` / `M` notation.
-
-#### Changed
-
-- **`finance/setup_sheets.py`** — default Merchant Aliases headers now include `owner_filter` and `account_filter`; default categories expanded to 22, including `Cash Withdrawal`, `Internal Transfer`, `External Transfer`, `Household Expenses`, `Child Support`, and `Opening Balance`.
-- **`scripts/add_household_rules.py` / `scripts/apply_household_rules.py`** — updated to seed and backfill the newer household rules and the canonical PwC salary merchant naming.
-- **`scripts/cleanup_aliases.py`** — canonical Amazon digital-content alias updated from `Subscriptions` to `Entertainment` for `^AMAZON DIGI`.
-- **`scripts/fix_maybank_foreign_amounts.py`** — added one-time repair utility to patch already-imported Maybank foreign rows in XLSX, Google Sheets, and SQLite when Indonesian dot-thousands values had previously been interpreted as decimals.
-- **`pwa/src/utils/currency.js`** — introduced a shared IDR formatter using full `en-US`-style comma separators.
-
-#### UI behavior
-
-- **Amounts no longer show explicit signs in the PWA** — negative numbers no longer render with a leading minus sign; expense/income color is now the primary visual indicator.
-
-#### Bug fixes
-
-- **Fixed: Maybank foreign-currency rows parsed 1000× too small when statements used Indonesian dot-thousands formatting** — values such as `147.857` and `17.093` were previously parsed as decimal numbers instead of full IDR integers. `parse_idr_amount()` in `parsers/base.py` now treats dot-only multi-group values as thousands separators when each trailing group is exactly 3 digits, while still preserving decimal forms such as `8,65` and `1.705,00`.
-
-### v2.4.0 (2026-03-29)
-
-#### Features
-
-- **Added: Manual Category Overrides** — new Google Sheets tab (`Category Overrides`) with columns `hash`, `category`, `notes`, `updated_at`. Overrides survive re-imports and re-syncs; the sync engine applies them after deduplication, and `--overwrite` never touches the overrides tab. New `PATCH /api/transaction/{hash}/category` endpoint writes to both Sheets and SQLite atomically. The PWA Transactions view now includes an inline category editor (tap a transaction → select new category → Save).
-- **Added: Alias auto-update on category change** — the `PATCH /api/transaction/{hash}/category` endpoint now also creates or updates the Merchant Aliases tab, so future imports auto-categorise the same `raw_description` correctly. If an alias already exists with a different category, it is updated in place. All other transactions with the same `raw_description` are bulk-updated in SQLite immediately. The PWA shows feedback: "✓ Category & alias updated (+N similar)".
-- **Added: Stage 3 Wealth Management design** — comprehensive plan for net worth tracking across all asset classes (savings, bonds, stocks, properties). Includes 3 new Sheets tabs, 3 new SQLite tables, ~8 API endpoints, 2 PWA views, and a Permata portfolio PDF parser.
-- **Added: Opening Balance category** — new `🏦 Opening Balance` category (sort 19) for SALDO AWAL transactions. Excluded from income/expense calculations alongside Internal Transfer to prevent inflated income figures.
-- **Added: `contains` match type in categorizer** — `finance/categorizer.py` now supports a third match type (`contains`) between exact (Layer 1) and regex (Layer 2). Substring match: `alias.upper() in description.upper()`. This enables concise rules like `CHATIME → Dining Out` that catch any transaction mentioning the merchant, regardless of prefix (QR PAYMENT, KARTU DEBIT, etc.) or suffix (location, timestamp).
-- **Added: Merchant Aliases cleanup** — consolidated the Merchant Aliases tab from 212 → 189 rules. Removed 26 redundant exact matches already covered by regex; converted 79 exact matches to `contains` (merchant names like restaurants, shops, subscriptions); added 14 new regex patterns for date/month-specific strings (admin fees, home loan installments, bond coupons, Erha Clinic salary). Result: **100% auto-categorisation** (0 review queue items, up from 46).
-
-#### Bug fixes
-
-- **Fixed: SPA routes returning `{"detail":"Not Found"}`** — navigating directly to `/transactions` or `/settings` returned the FastAPI 404 JSON response instead of the Vue app. Root cause: `StaticFiles(html=True)` only serves `index.html` for directory-like paths, not Vue Router HTML5 history mode paths. Replaced with explicit static file mounts (`/assets`, `/icons`, service worker files) plus a catch-all `@app.get("/{full_path:path}")` that serves `index.html`.
-- **Fixed: OAuth token refresh failing in Docker** — `OSError: [Errno 30] Read-only file system` when the Google OAuth token expired inside the container. The `./secrets` volume was mounted `:ro`. Removed the read-only flag so the token file can be refreshed in place.
-- **Fixed: Credit card payments double-counting expenses** — 17 CC payment transactions (`PEMBAYARAN VIA AUTODEBET`, `BILLPAYMENT TO CCARD`, `PAYMENT-THANK YOU`, `PEMBAYARAN - MBCA`, `PAY KARTU KREDIT`, `PEMBAYARAN AD 596`, `PEMBAYARAN - DEBET OTOMATIS`) were categorised as "Fees & Interest", causing their amounts to appear as income/expense even though the individual CC charges were already recorded separately. Updated all 8 alias rules to map to "Internal Transfer" instead; re-imported with `--overwrite` to re-categorise existing rows.
-- **Fixed: Multi-account XLS dedup overwriting transactions** — `_update_all_transactions()` in `exporters/xls_writer.py` used `(owner, month_label, bank, stmt_type)` as the dedup key, which did not include account number. When multiple savings accounts for the same owner/bank/month were processed from separate PDFs (e.g. Helen's two Permata savings accounts from E-Statement and E-Statement-2), the second PDF's export deleted the first's rows. Fixed by scoping dedup to also match column 14 (account number). 71 previously lost transactions recovered across Jan/Feb/Mar 2026.
-- **Fixed: Review Queue showing "All caught up" with pending transactions** — `ReviewQueue.vue` set `items.value = data` but the `/api/review-queue` endpoint returns `{ total, limit, pending: [...] }`, not a plain array. Since the wrapper object has no `.length`, the empty-state check always triggered. Fixed to read `data.pending`. Also fixed a template typo (`v-else"` → `v-else`).
-
-#### Changed
-
-- **`finance/config.py`** — added `overrides_tab: str` to `SheetsConfig` dataclass.
-- **`config/settings.toml`** — added `overrides_tab = "Category Overrides"` under `[google_sheets]`.
-- **`finance/sheets.py`** — added `read_overrides()`, `write_override()`, `ensure_overrides_tab()`, `update_alias_category()` methods; added `OVERRIDES_HEADERS`.
-- **`finance/sync.py`** — reads overrides tab after currency codes; applies overrides after deduplication and before SQLite write.
-- **`finance/api.py`** — added `CategoryOverrideRequest` model (with `update_alias` flag) and `PATCH /api/transaction/{hash}/category` endpoint that writes override + creates/updates alias + bulk-updates similar transactions; replaced `StaticFiles` mount with explicit static routes + SPA catch-all; all 6 income/expense SQL aggregations now exclude both `Internal Transfer` and `Opening Balance` categories; `TRANSFER_CATS` set updated for expense-percentage calculation.
-- **`exporters/xls_writer.py`** — `_update_all_transactions()` dedup key now includes account numbers from the current result, preventing cross-account data loss.
-- **`pwa/src/api/client.js`** — added `patch()` helper and `patchCategory()` API method.
-- **`pwa/src/views/Transactions.vue`** — added inline category editor with dropdown, save button, success/error feedback; client-side income/expense totals now skip `Internal Transfer` and `Opening Balance` categories (matching API logic); category save passes `update_alias: true` and bulk-updates visible similar transactions.
-- **`pwa/src/views/ReviewQueue.vue`** — fixed `items.value = data` → `data.pending ?? data`; fixed `v-else"` template typo.
-- **`finance/categorizer.py`** — added `_contains` list and Layer 1b contains matching between exact and regex; `_load_aliases()` routes `match_type=contains` to `_contains` list; `reload_aliases()` clears `_contains`.
-- **`docker-compose.yml`** — removed `:ro` from secrets volume mount.
-- **`scripts/cleanup_aliases.py`** — one-time cleanup script that rebuilt the Merchant Aliases tab: 36 regex + 82 contains + 71 exact = 189 rules (was 22 regex + 0 contains + 190 exact = 212).
-
----
-
-### v2.3.0 (2026-03-28)
-
-#### Bug fixes
-
-- **Fixed: truncated transaction descriptions in BCA Savings parser** — `_SKIP_RE` included `[A-Z][a-z]` with `re.IGNORECASE`, which accidentally matched *any* two-letter sequence, causing merchant continuation lines such as `LIPPO GENERAL INSU` and `Pembayaran Klaim M` to break out of the look-ahead loop. Fixed by adding a targeted `_CONT_STOP_RE` (without the over-broad pattern) used only for continuation collection; also relaxed the secondary continuation filter from `^[A-Z0-9]` to exclude only pure-digit strings.
-- **Fixed: all other PDF parsers silently dropping multi-line descriptions** — four CC parsers and the CIMB Niaga consolidated parser only captured the first line of a wrapped description. All six parsers now collect continuation lines (non-date, non-structural lines following a transaction anchor) and join them with ` / `.
-
-#### Changed
-
-- **`parsers/bca_savings.py`** — added `_CONT_STOP_RE`; continuation loop uses it instead of `_SKIP_RE`; continuation filter now keeps any non-pure-digit line (including mixed-case and REF: lines).
-- **`parsers/cimb_niaga_consol.py`** — `description = desc_lines[0]` → `description = " / ".join(desc_lines)`.
-- **`parsers/bca_cc.py`** — converted `for` loop to indexed `while` with look-ahead; continuation lines appended with ` / ` separator.
-- **`parsers/permata_cc.py`** — converted `_parse_transactions_from_lines` to indexed `while` loop; look-ahead after each `_TX_PATTERN` match collects continuation lines before the next anchor or structural marker.
-- **`parsers/maybank_cc.py`** — extended existing EXCHANGE RATE look-ahead to also collect description continuation lines before the rate line.
-- **`parsers/cimb_niaga_cc.py`** — converted `_parse_transactions` to indexed `while` loop; look-ahead after each `_TX_PAT` match collects continuation lines.
-
----
-
-### v2.2.0 (2026-03-28)
-
-#### Bug fixes
-
-- **Fixed: Dashboard Income/Expense always showed Rp0** — `Dashboard.vue` was reading `summary.income` / `summary.expense` but the API returns `total_income` / `total_expense`. Corrected field names in the computed properties.
-- **Fixed: "No expense data this month" even with categorised transactions** — `topCats` filtered on `c.total` (always `undefined`); API returns `c.amount`. Corrected in filter and display.
-- **Fixed: Monthly trend chart empty** — `renderChart()` read `yearData.value.months`; API key is `by_month`. Corrected.
-- **Fixed: "By Owner" section never rendered / owner filter broken** — `GET /api/summary/{year}/{month}` returned `by_owner` as a plain dict (`{"Gandrik": {...}}`); frontend called `.find()` and checked `.length` — both undefined on a dict. Changed API to return `by_owner` as an array of objects each containing an `owner` field.
-- **Fixed: `--overwrite` failing silently on large imports** — `overwrite_transactions` made one `values().update()` API call per row (449 calls), hitting Google Sheets rate limits. Replaced with a single `values().batchUpdate()` call chunked at 500 rows.
-- **Fixed: duplicate rows in Sheets left with empty categories after `--overwrite`** — `read_existing_hashes_with_rows` returned `dict[str, int]` mapping each hash to its *last* occurrence; `sync.py` keeps the *first* occurrence, so overwrite and sync targeted different rows. Changed return type to `dict[str, list[int]]` so `overwrite_transactions` updates **all** rows sharing a hash (first and all duplicates).
-- **Fixed: rows not in XLSX (e.g. Permata transactions) never re-categorised by `--overwrite`** — added a direct-patch script that reads empty-category rows from Sheets and runs the categorizer in-place via `batchUpdate`, without requiring an XLSX round-trip.
-
-#### Features
-
-- **Added: Anthropic Claude fallback (Layer 3b)** — `finance/categorizer.py` now tries the Anthropic Messages API when Ollama is unreachable. Configured via `[anthropic]` block in `settings.toml`; enabled by setting `ANTHROPIC_API_KEY` in `.env`. Wired through `finance/config.py` (`AnthropicFinanceConfig`), `finance/importer.py`, and `finance/api.py`. `ANTHROPIC_API_KEY` added to `finance-api` Docker service environment.
-- **Added: Cash Withdrawal category** — new category `💵 Cash Withdrawal` (sort 15) for ATM transactions. Alias `^TARIKAN ATM` updated from `Other` to `Cash Withdrawal`; all 58 matching Sheets rows back-filled.
-- **Added: Internal Transfer / External Transfer categories** — `🔁 Internal Transfer` (sort 17) for transfers between Gandrik & Helen accounts; `↗️ External Transfer` (sort 18) for transfers to external people/accounts.
-- **Changed: Subscriptions icon** updated from 🔄 to 📱 (was too similar to 🔁 Internal Transfer).
-- **Populated: Merchant Aliases tab** — 207 alias rules (22 regex + 185 exact) covering all 273 unique transaction descriptions; 100% L1/L2 auto-categorisation with zero L4 fallbacks.
-
-#### Categories (superseded — see v2.8.0 for current taxonomy)
-
-| Sort | Category | Icon |
-|---|---|---|
-| 1 | Housing | 🏠 |
-| 2 | Utilities | ⚡ |
-| 3 | Groceries | 🛒 |
-| 4 | Dining Out | 🍽️ |
-| 5 | Transport | 🚗 |
-| 6 | Shopping | 🛍️ |
-| 7 | Healthcare | 🏥 |
-| 8 | Entertainment | 🎬 |
-| 9 | Subscriptions | 📱 |
-| 10 | Travel | ✈️ |
-| 11 | Education | 📚 |
-| 12 | Personal Care | 💇 |
-| 13 | Gifts & Donations | 🎁 |
-| 14 | Fees & Interest | 🏦 |
-| 15 | Cash Withdrawal | 💵 |
-| 16 | Income | 💰 |
-| 17 | Other | ❓ |
-| 18 | Internal Transfer | 🔁 |
-| 19 | External Transfer | ↗️ |
-
----
-
-### v2.1.0 (2026-03-28)
-
-- Added: `finance/db.py` — SQLite schema (5 tables: `transactions`, `merchant_aliases`, `categories`, `currency_codes`, `sync_log`); 5 indexes on common filter columns; WAL mode + foreign keys; `open_db()` creates parent dirs and applies schema idempotently
-- Added: `finance/sync.py` — Sheets → SQLite sync engine
-  - `sync(db_path, sheets_client) → dict` — atomic DELETE + INSERT per table in a single SQLite transaction; DB never in partial state
-  - Hash deduplication: 34 duplicate rows in Sheets detected and skipped (first occurrence wins); `log.warning()` emitted when duplicates found
-  - Appends to `sync_log` on every successful run (row counts + duration)
-  - CLI: `python3 -m finance.sync` / `--status` / `-v`
-  - First sync result: 449 Sheets rows → 415 unique SQLite rows, 1.72 s
-- Added: `finance/api.py` — FastAPI backend (12 endpoints)
-  - Module-level singletons: config, DB path, SheetsClient (lazy OAuth)
-  - CORS middleware from `[fastapi].cors_origins`
-  - `_db()` context manager: commit on clean exit, rollback on error
-  - `_tx_where()` helper: parameterized WHERE clause builder
-  - `GET /api/summary/{year}/{month}` — SQL aggregation: income, expense, net, transaction_count, needs_review, by_category (with `pct_of_expense`), by_owner
-  - `POST /api/alias` — writes alias to Sheets first; updates target row in SQLite; applies to all uncategorised rows with same `raw_description` when `apply_to_similar=true`
-  - `POST /api/import` — runs `finance.importer.run()` then auto-calls `finance.sync.sync()` if rows were added
-  - Static file mount: `app.mount("/", StaticFiles(..., html=True))` from `pwa/dist/` when present (last route — after all `/api/*` routes)
-- Added: `finance/server.py` — uvicorn entry point; `--host`, `--port`, `--reload` overrides; logs Swagger UI URL on startup
-- Added: `finance/Dockerfile` — `python:3.12-slim`; build context = project root; copies `finance/` and `pwa/dist/`; `EXPOSE 8090`; `CMD ["python3", "-m", "finance.server"]`
-- Updated: `finance/requirements.txt` — added `fastapi>=0.110.0`, `uvicorn[standard]>=0.27.0`
-- Updated: `docker-compose.yml` — added `finance-api` service before `mail-agent`; `mem_limit: 512m`; healthcheck via Python urllib on `/api/health`
-- Added: `pwa/` — Vue 3 PWA (Stage 2.1-C)
-  - Stack: Vue 3 (Composition API + `<script setup>`), Pinia, vue-router, Chart.js, vite-plugin-pwa (Workbox)
-  - 5 views: Dashboard, Transactions, ReviewQueue, ForeignSpend, Settings (see §29 for details)
-  - Production build: 346 KB JS (121 KB gzip), 12 KB CSS (3 KB gzip), service worker + workbox generated
-  - PWA manifest: standalone display, navy theme colour, start_url `/`
-  - Workbox NetworkFirst cache for all GET `/api/*` routes except `/sync`, `/import`, `/alias`
-- Added: §32 Stage 2 Operations Reference
-- Changed: GUIDE.md §3, §5, §24, §25, §26.6, §29, §31 updated to reflect fully-built status
-- Fixed: Design doc `docker-compose.yml` snippet in §25 corrected to match actual configuration
-- Fixed: Design doc SQLite schema in §26.6 corrected to actual (no `sheet_row` column; sync_log columns match implementation)
-- Fixed: `finance/config.py` — `get_finance_config()` and `get_sheets_config()` now check env var overrides before `settings.toml` values (`FINANCE_SQLITE_DB`, `FINANCE_XLSX_INPUT`, `GOOGLE_CREDENTIALS_FILE`, `GOOGLE_TOKEN_FILE`, `GOOGLE_SERVICE_ACCOUNT_FILE`); required because `settings.toml` stores host-absolute paths that are wrong inside Docker
-- Updated: `docker-compose.yml` `finance-api` environment block — path-override env vars added; the container reads `finance.db` from `/app/data/finance.db` and Google Sheets secrets from `/app/secrets/`
-- Deployed: `finance-api` container running and healthy; `docker compose ps` shows both `finance-api` and `mail-agent` as `(healthy)`
-
-### v2.0.0-design (2026-03-27) — superseded by v2.0.0
-
-Stage 2 design finalized — Personal Finance Dashboard.
-
-- Added: §24 Stage 2 Overview & Scope
-  - Two-tier source of truth: XLSX (immutable) → Google Sheets (working copy) → SQLite (read cache)
-  - Currency design: IDR always authoritative; exchange rate always derived; missing forex data acceptable
-  - Multi-owner support: Gandrik + Helen throughout all summaries and schemas
-  - Budget targets (`monthly_budget` column): reserved for Stage 2.x, not surfaced in Stage 2 UI
-- Added: §25 Stage 2 Architecture
-  - New `finance-api` Docker service added to existing `docker-compose.yml` (mail-agent untouched)
-  - New `settings.toml` sections: `[finance]`, `[google_sheets]`, `[fastapi]`, `[ollama_finance]`
-  - Logical data flow diagram: XLSX → import → Sheets → sync → SQLite → FastAPI → Vue PWA
-- Added: §26 Stage 2 Data Schemas
-  - Full XLSX-to-Sheets column mapping table (including sign convention and null handling)
-  - Google Sheets: Transactions tab (15 columns incl. `owner`), Merchant Aliases, Categories, Currency Codes, Import Log
-  - SQLite schema (`data/finance.db`): transactions table + 3 views + sync_log
-- Added: §27 Stage 2 Categorization Engine (4 layers)
-  - Layer 1: Exact match alias table (Google Sheet, auto-assigns)
-  - Layer 2: Regex patterns (same tab, auto-assigns)
-  - Layer 3: Ollama `llama3.2:3b` suggestion (pre-fills review queue, user confirms)
-  - Layer 4: Blank review queue fallback (user types manually)
-  - Confirmed entries always written back to Merchant Aliases tab (future auto-match)
-  - RapidFuzz fuzzy hint shown in review queue — never auto-assigned
-- Added: §28 Stage 2 Google Sheets Integration
-  - OAuth 2.0, personal Google account; token saved to `secrets/google_token.json`
-  - Write-back rules: importer writes on import; PWA writes on review confirm; SQLite never writes to Sheets
-  - Dedup by SHA-256 hash; safe re-import from XLSX with `--overwrite` flag
-- Added: §29 Stage 2 FastAPI Backend & PWA
-  - 11 REST endpoints (transactions, summary, narrative, review queue, sync, import)
-  - Deterministic monthly summary: IDR totals, per-owner split, category breakdown, foreign currency breakdown
-  - Ollama narrative: supplemental conversational paragraph, streaming, generated on demand
-  - Vue 3 PWA views: Dashboard, Category breakdown, Month-over-month, Foreign spending, Transaction list, Review queue, Monthly summary
-  - Offline read via service worker + IndexedDB
-- Added: §30 Stage 2 Monthly Workflow (7-step process, ~5–10 min/month)
-- Added: §31 Stage 2 Setup Checklist (14 one-time steps)
-- Changed: Guide title updated to "Agentic Mail Alert & Personal Finance System"
-- Changed: Table of Contents split into Stage 1 (complete) and Stage 2 (design) sections
-
-### v1.7.0
-
-- Added: `scripts/batch_process.py` — automatic, idempotent PDF→XLS batch processor (full rewrite)
-  - **Watch mode** (`--watch`): polls `pdf_inbox/` on a configurable interval (`--poll-secs`, default 10 s); processes new files as they arrive; clean shutdown on Ctrl-C / SIGTERM
-  - **SHA-256 deduplication**: every file is content-hashed before processing; the same file is never processed twice regardless of filename, copy count, or restart
-  - **Persistent registry**: `data/processed_files.db` (SQLite, WAL mode) stores hash, bank, period, transaction count, output filename, and status per file; survives restarts
-  - **File stability guard**: size sampled twice `--stable-secs` apart (default 5 s); files still being written are silently deferred to the next scan
-  - **ZIP support**: ZIPs extracted into `pdf_inbox/_extracted/`; each contained PDF subject to same hash dedup; parent ZIP recorded to prevent re-extraction
-  - **Auto-retry on error**: files with `status='error'` in registry are retried on the next run
-  - **`--status` flag**: prints registry summary (OK/error counts, total transactions, error details) without processing anything
-  - **`--reset-registry` flag**: wipes `processed_files.db` to force reprocessing of all files
-  - **`--dry-run` flag**: bank/type detection only; no parsing or XLS writing
-  - **`--clear-output` flag**: deletes all `.xlsx` files from `output/xls/` before starting
-  - **Dual logging**: INFO to stdout; DEBUG to `logs/batch_process.log` (appended across runs)
-  - Does not require the bridge HTTP server to be running
-- Added: `data/processed_files.db` — batch processor dedup registry (two tables: `processed_files`, `zip_members`)
-- Added: `data/pdf_inbox/_extracted/` — auto-created subdirectory for ZIP-extracted PDFs
-- Added: `logs/batch_process.log` — persistent batch processor log
-
-### v1.6.0
-
-- Added: `parsers/cimb_niaga_cc.py` — CIMB Niaga Credit Card (Billing Statement) parser
-  - Detection: `"CIMB Niaga"` + `"Tgl. Statement"` (CC-specific abbreviated form)
-  - Statement date from `Tgl. Statement DD/MM/YY`
-  - Multi-owner: card separator line switches active owner mid-statement; strips `DR ` prefix from supplementary cardholder name
-  - Foreign currency: inline FX annotation `BILLED AS USD X.XX(1 USD = XXXXX IDR)` extracted via regex
-  - Parses `LAST BALANCE` (opening) and `ENDING BALANCE` (closing) for `AccountSummary`
-- Added: `parsers/cimb_niaga_consol.py` — CIMB Niaga Consolidated (Combine Statement) parser
-  - Detection: `"CIMB Niaga"` + `"COMBINE STATEMENT"`
-  - Statement date from `Tanggal Laporan : DD Month YYYY`
-  - Uses `pdfplumber.extract_tables()` — column indices: 4=date, 7=description, 9=debit, 10=credit
-  - Account sections detected via `Nomor Rekening - Mata Uang` header line
-  - Running balance computed from `SALDO AWAL` + debit/credit deltas (balance column is `None` in extracted tables)
-  - Account summary parsed from asset summary table via regex (account number, name, currency, balances)
-- Changed: all `can_parse()` functions refactored to **bank-name-first detection strategy**
-  - Each function now anchors on the bank name (always stable) + one secondary regulatory/product term
-  - Replaced layout-label keywords (`REKENING KORAN`, `ALOKASI ASET`, etc.) that may change between PDF versions
-  - `bca_cc.py`: `"BCA"` or `"Bank Central Asia"` + `"KARTU KREDIT"`
-  - `bca_savings.py`: `"BCA"` or `"Bank Central Asia"` + `"TAHAPAN"`
-  - `maybank_cc.py`: `"Maybank"` + `"Kartu Kredit"`
-  - `maybank_consol.py`: `"Maybank"` + `"PORTFOLIO"`
-  - `permata_cc.py`: `"Permata"` + `"Kartu Kredit"`
-  - `permata_savings.py`: `"Permata"` + `"Rekening Koran"`
-- Changed: `parsers/router.py` — CIMB Niaga parsers registered; CIMB checks placed **before** Maybank consol to prevent false-positive (CIMB consol page 2 contains `ALOKASI ASET`, a former Maybank consol keyword)
-
-### v1.5.0
-
-- Added: `parsers/permata_cc.py` — Permata Credit Card (Rekening Tagihan) parser
-  - Date format: `DDMM` (4-digit, no separator); year from `Tanggal Cetak DD/MM/YY`
-  - Multi-owner: card separator line `NNNN-NNXX-XXXX-NNNN NAME 0` switches owner mid-statement
-  - Foreign currency: inline FX annotation line attached to preceding transaction
-  - Detection: `Rekening Tagihan` + `Credit Card Billing` + `DETIL TRANSAKSI` + `Permata`
-- Added: `parsers/permata_savings.py` — Permata Savings (Rekening Koran) parser
-  - Multi-account: parses multiple account sections per PDF, one `AccountSummary` per account
-  - Supports IDR and USD accounts (separate number format regex per currency)
-  - Debit/credit determined by direction of running balance change
-  - Detection: `Rekening Koran` + `Account Statement` + `Periode Laporan` + `Permata`
-- Changed: `parsers/base.py` — **full schema migration to English field names**
-  - `Transaction`: removed `is_credit`, `debit_original`, `credit_original`, `balance_idr`, `notes`; added `tx_type` ("Credit"/"Debit"), `balance`, `owner`
-  - `AccountSummary`: renamed `balance` → `closing_balance`; added `opening_balance`, `total_debit`, `total_credit`, `credit_limit` as first-class fields (removed from `extra`)
-  - `StatementResult`: renamed `report_date` → `print_date`; added `owner`, `sheet_name`, `summary` fields
-  - `parse_idr_amount`: updated to detect format by last-dot vs last-comma position (handles both Indonesian dot-thousands and Western comma-thousands)
-- Changed: `parsers/bca_cc.py`, `parsers/bca_savings.py`, `parsers/maybank_cc.py`, `parsers/maybank_consol.py` — updated to new schema
-- Changed: `exporters/xls_writer.py` — updated to new schema; uses `result.owner` and `result.sheet_name` when set by parser
-- Changed: `parsers/router.py` — Permata detection added before BCA; `detect_and_parse()` accepts `owner_mappings` and passes it to Permata parsers
-- Changed: `bridge/pdf_handler.py` — passes `owner_mappings` into `detect_and_parse()`
-- Changed: `bridge/attachment_scanner.py` — added `permatabank.com` and `permata.co.id` to `BANK_DOMAINS`; filename heuristic updated to return `"Permata"` (consistent with router)
-
-### v1.4.0
-
-- Added: `parsers/bca_cc.py` — BCA Credit Card (Rekening Kartu Kredit) parser
-  - Date format: `DD-MON`, year from `TANGGAL REKENING` header
-  - Year boundary fix for Dec/Jan crossover (`tx_month > report_month → year - 1`)
-  - Number format: dot thousands, no decimal (`1.791.583` = IDR 1,791,583)
-  - Detection: `REKENING KARTU KREDIT` + `TAGIHAN BARU` + `KUALITAS KREDIT`
-  - Source: email from `@klikbca.com`, password-protected
-- Added: `parsers/bca_savings.py` — BCA Savings (Rekening Tahapan) parser
-  - Date format: `DD/MM` + year from `PERIODE` header
-  - Number format: Western (`30,000,000.00`); debit rows end with `DB` suffix
-  - Multi-line transaction support: continuation lines merged into description
-  - Totals verified against statement summary
-- Added: `parsers/owner.py` — owner detection module (substring match, case-insensitive, first match wins; default: `Emanuel` → Gandrik, `Dian Pratiwi` → Helen)
-- Changed: `parsers/router.py` — BCA detection added before Maybank in router chain
-- Changed: `exporters/xls_writer.py` — redesigned for multi-owner output
-  - Output files renamed: `{Bank}_{Owner}.xlsx` (e.g. `Maybank_Gandrik.xlsx`, `BCA_Helen.xlsx`)
-  - `ALL_TRANSACTIONS.xlsx` — Owner column added as first column
-  - Sheet naming: `{Mon YYYY} CC` / `{Mon YYYY} Savings` / `{Mon YYYY} Consol`
-  - `export()` now returns `(per_person_path, all_tx_path)` tuple instead of a single path
-- Changed: `bridge/pdf_handler.py` — `_run_job()` passes `owner_mappings` from `_config` into `export()`
-- Changed: `bridge/server.py` — `pdf_config` dict includes `owner_mappings` loaded from `cfg["owners"]`
-- Added: `[owners]` section to `config/settings.toml`
-- Fixed: `/pdf/ui` now served without authentication so a browser can load the page directly; API calls within the UI still carry the bearer token
-
-### v1.3.0
-
-- Added: PDF statement processor integrated into bridge (§19)
-  - `bridge/pdf_handler.py` — `/pdf/*` endpoints
-  - `bridge/pdf_unlock.py` — pikepdf + AppleScript fallback unlock
-  - `bridge/attachment_scanner.py` — Mail.app attachment watcher
-  - `bridge/static/pdf_ui.html` — web UI at `/pdf/ui`
-  - `parsers/` — bank statement parser framework
-  - `parsers/maybank_cc.py` — Maybank credit card statement (3-layer: pdfplumber + regex + Ollama)
-  - `parsers/maybank_consol.py` — Maybank consolidated statement (3-layer)
-  - `parsers/router.py` — auto-detection of bank and statement type
-  - `parsers/base.py` — `Transaction`, `AccountSummary`, `StatementResult` dataclasses
-  - `exporters/xls_writer.py` — openpyxl export, one file per bank, one sheet per month
-- Added: `secrets/banks.toml` for bank PDF passwords (separate from bridge token, gitignored)
-- Added: `[pdf]` section to `config/settings.toml`
-- Added: `output/xls/` output directory (gitignored)
-- Added: Sheet naming uses print date (`Tgl. Cetak`) not transaction date range — CC statement for March billing cycle is always filed under `Mar 2026`
-- Added: `ALL_TRANSACTIONS` sheet in XLS — flat multi-currency table suitable as source for future PWA wealth management app
-- Added: PDF processor dependencies: `pikepdf`, `pdfplumber`, `openpyxl` (install via Homebrew pip, no `--break-system-packages` needed)
-- Fixed: Reset procedure documented — bridge.db must not be deleted while bridge is running; always stop services in order (agent → bridge → delete → start bridge → start agent)
-- Fixed: §1 updated — PDF attachment processing is now implemented (removed from "What it does NOT do")
-
-### v2.0.0
-
-- Added: `finance/` package — Stage 2 import module + categorization engine
-  - `finance/config.py` — typed config loaders for four new `settings.toml` sections
-  - `finance/models.py` — `FinanceTransaction` dataclass, SHA-256 dedup hash, XLSX date parser
-  - `finance/sheets.py` — Google Sheets API v4 client; OAuth 2.0 personal account flow; read/write transactions, aliases, categories, currency hints, import log
-  - `finance/categorizer.py` — 4-layer pipeline: exact alias → regex → Ollama `llama3.2:3b` suggestion → review queue flag
-  - `finance/importer.py` — CLI entry point (`python3 -m finance.importer`); reads `ALL_TRANSACTIONS.xlsx`, maps all columns, generates hashes, deduplicates, batch-appends to Sheets; `--dry-run`, `--overwrite`, `--file`, `-v` flags
-  - `finance/setup_sheets.py` — one-time Sheet initializer; creates missing tabs, writes formatted headers (dark-blue, frozen row 1), seeds Categories (16) and Currency Codes (18)
-  - `finance/requirements.txt` — `google-auth`, `google-auth-oauthlib`, `google-api-python-client`, `rapidfuzz`
-- Added: `[finance]`, `[google_sheets]`, `[fastapi]`, `[ollama_finance]` sections to `config/settings.toml`
-- Added: `data/finance.db` to project layout (Stage 2 SQLite read cache, pending)
-- Added: `secrets/google_credentials.json` and `secrets/google_token.json` to project layout
-- Changed: GUIDE.md §3, §5, §24, §31 updated to reflect built vs. pending status
-- Note: Google OAuth app stays in "Testing" mode permanently for personal use; add Gmail address as test user in Cloud Console → OAuth consent screen
-
-### v1.2.0
-
-- Added: `com.agentic.agent` LaunchAgent — Docker agent container auto-starts on reboot via `scripts/start_agent.sh`
-- Added: `scripts/start_agent.sh` — waits up to 120 s for Docker Desktop before calling `docker compose up -d`
-- Changed: Bridge LaunchAgent `ProgramArguments` updated to `/opt/homebrew/bin/python3.13` (versioned symlink)
-- Changed: Python prerequisites — Homebrew `python@3.13` only; Miniconda and python.org PKG installer explicitly unsupported
-- Changed: Full Disk Access instructions — correct procedure is drag-and-drop of actual Cellar/Frameworks binary (TCC does not follow symlinks); added post-upgrade reminder
-- Fixed: Documented that `python3` unversioned symlink must be created manually when only `python@3.13` is installed
-- Fixed: Post-reboot startup order updated to include agent LaunchAgent step
-
-### v1.1.3
-
-- Added: LaunchAgent plists for bridge, Mail.app, Ollama
-- Added: Full Disk Access requirement documented for launchd-launched Python binary
-- Added: Startup troubleshooting table with common failure modes and fixes
-- Added: Bridge launchd log paths (`bridge-launchd.log`, `bridge-launchd-err.log`)
-- Added: Warning about system Python 3.9 incompatibility (`tomllib` requirement)
-- Added: Security note on FDA scope when granting to Python binary
-- Fixed: `bridge/mail_source.py` — `discover_mail_db` was a reference, not a call
-- Fixed: `bridge/mail_source.py` — `verify_schema()` body had incorrect indentation (lines 98–164)
-- Fixed: `agent/app/state.py` — `_init_db()` migration referenced nonexistent `command_log` table; corrected to `processed_commands(processed_at)`
-- Clarified: Python path requirements for LaunchAgent plist
-- Clarified: TCC behavior differences between Terminal and launchd contexts
-- Clarified: Mail.app must be running for DB currency
-
-### v1.1.2
-
-- Host bridge + Docker agent architecture
-- Ollama primary classifier
-- Anthropic optional fallback
-- Apple Mail prefilter
-- Message-ID deduplication
-- Persistent `paused` and `quiet` flags
-- Bridge rotating logs
-- Container healthcheck
-- Placeholder OpenAI / Gemini provider files
-- Command set: help, status, summary, test, scan, pause, resume, quiet on/off, health, last 5
-
----
+- Stage 1 mail alerting, bridge services, PDF processing, and launchd automation are fully operational.
+- Stage 2 finance import, categorisation, FastAPI backend, and Vue PWA are fully operational.
+- Stage 3 wealth tracking, holdings management, net-worth snapshots, AI explanation endpoints, and brokerage PDF parsers are fully operational.
+- The PWA now supports both the original mobile shell and a desktop shell with a sidebar, desktop transactions table, desktop review workspace, and a manual Desktop View toggle.
+- `SYSTEM_DESIGN.md` should be treated as the current-state reference document; commit-level history belongs in git, not here.
 
 ## 24. Stage 2 Overview & Scope
 
@@ -2983,8 +2171,8 @@ Stage 2 adds a personal finance dashboard on top of the existing PDF parsing pip
 | Categorization engine | ✅ Built | 4-layer: alias exact match → regex → Ollama AI suggestion → user review queue |
 | Google Sheets source of truth | ✅ Live | All enriched transaction data; user edits freely on phone or desktop |
 | SQLite read cache | ✅ Built | `data/finance.db` — atomic sync via `finance.sync`; 415 unique transactions on first run |
-| FastAPI backend | ✅ Built | 12 REST endpoints, monthly summary, alias write-back; serves PWA at `/` |
-| Vue 3 PWA | ✅ Built | Mobile-first: Dashboard, Transactions, Review Queue, Foreign Spend, Settings |
+| FastAPI backend | ✅ Built | Core finance API plus `/api/pdf/*` and `/api/wealth/*`; monthly/annual summaries, review actions, AI explanations; serves PWA at `/` |
+| Vue 3 PWA | ✅ Built | Responsive shell with mobile and desktop layouts: Flows, Transactions, Review, Foreign Spend, Settings, Wealth, Holdings |
 | Docker service | ✅ Built | `finance-api` service in `docker-compose.yml`; port 8090; healthcheck configured |
 
 ### What Stage 2 does NOT do (deferred)
@@ -3652,9 +2840,9 @@ python3 -m finance.pdf_log_sync --registry /path/to/processed_files.db
 
 ## 29. Stage 2 FastAPI Backend & PWA
 
-### FastAPI endpoints (actual — 12 routes)
+### FastAPI endpoints (current core routes)
 
-Port `8090` (from `[fastapi]` in `settings.toml`). All read endpoints query SQLite only; write endpoints also touch Google Sheets.
+Port `8090` (from `[fastapi]` in `settings.toml`). All read endpoints query SQLite only; write endpoints also touch Google Sheets. The API surface has grown beyond the original Stage 2 launch, so the table below lists the core transaction/dashboard routes rather than every endpoint in the file.
 
 | Method | Path | Query params | Description |
 |---|---|---|---|
@@ -3664,12 +2852,16 @@ Port `8090` (from `[fastapi]` in `settings.toml`). All read endpoints query SQLi
 | `GET` | `/api/transactions` | `year`, `month`, `owner`, `category`, `q`, `limit` (max 1000), `offset` | Paginated; `q` searches raw_description + merchant |
 | `GET` | `/api/transactions/foreign` | `year`, `month`, `owner` | Foreign-currency transactions only |
 | `GET` | `/api/summary/years` | — | `[2024, 2025, …]` |
-| `GET` | `/api/summary/year/{year}` | — | `{ year, months: [{ month, income, expense, net, transaction_count }] }` |
+| `GET` | `/api/summary/year/{year}` | — | `{ year, by_month: [{ month, income, expense, net, transaction_count }] }` |
 | `GET` | `/api/summary/{year}/{month}` | — | Full monthly breakdown: income, expense, net, needs_review, by_category (with pct_of_expense), by_owner |
+| `GET` | `/api/summary/{year}/{month}/explanation` | `ai` | Monthly flows explanation. Without `?ai=1` returns deterministic fallback instantly; with `?ai=1` calls local Ollama and falls back on failure |
 | `GET` | `/api/review-queue` | `limit` (default 50) | Transactions where merchant IS NULL or category IS NULL |
 | `POST` | `/api/alias` | — | Body: `{ hash, alias, merchant, category, match_type, apply_to_similar }` → writes to Sheets + updates SQLite |
+| `PATCH` | `/api/transaction/{hash}/category` | — | Manual category override + optional alias update |
 | `POST` | `/api/sync` | — | Pull all data from Google Sheets → SQLite; returns stats dict |
 | `POST` | `/api/import` | — | Body: `{ dry_run, overwrite }` → run importer; auto-syncs on success |
+
+Additional operational endpoints are also live for PDF processing (`/api/pdf/*`) and wealth management (`/api/wealth/*`), covered later in this document.
 
 **Static file serving:** `finance/api.py` mounts `pwa/dist/` at `/` (after all `/api/*` routes) when that directory exists. In Docker the Dockerfile copies the pre-built PWA. In dev, run `npm run dev` in `pwa/` instead (Vite proxies `/api` → `:8090`).
 
@@ -3702,23 +2894,27 @@ Flagged:             $95 charge from 'XYZ Corp' — first occurrence
 
 AI narrative (via Ollama `gemma4:e4b`) runs after the deterministic summary and provides a conversational paragraph. It is always supplemental — the deterministic summary is the primary output.
 
-### Vue 3 PWA views (actual — 5 routes)
+### Vue 3 PWA views (current shell + routes)
 
 | Route | View | Key features |
 |---|---|---|
-| `/` | Dashboard | Month/year ‹ › navigation; All / Gandrik / Helen owner toggle; Income + Expense + Net + Txn count cards; CSS horizontal bars for top 8 expense categories (with % and budget overflow highlight); Chart.js grouped bar chart (12-month income vs expense); Owner split table |
-| `/transactions` | Transactions | Year, month, owner, category dropdowns; debounced text search; paginated list (50/page) with expandable detail rows (raw_description, institution, account, foreign fields, hash) |
-| `/review` | Review Queue | Ordered list of uncategorised transactions; tap to expand inline alias form (merchant input, category dropdown, match type radio, apply-to-similar checkbox); POST /api/alias on save; removes affected rows from list + decrements nav badge; green toast notification |
-| `/foreign` | Foreign Spend | Year/month/owner filters; transactions grouped by `original_currency`; per-group subtotal row; summary cards (unique currencies, total IDR equivalent); flag emoji per currency |
-| `/settings` | Settings | API health status (live); Sync button (POST /api/sync) with result display; Import button (POST /api/import) with dry_run + overwrite checkboxes and result display; About section |
+| `/` | Dashboard / Flows | Month/year navigation clamped to Jan 2026+, owner toggle, summary cards, spending-by-group rollup, trend explanation panel, Chart.js monthly trend, owner split table |
+| `/transactions` | Transactions | Year/month/owner/category/search filters; paginated list (50/page); mobile expandable detail rows; desktop sortable table with separate detail/editor pane |
+| `/review` | Review Queue | Mobile accordion review flow plus desktop two-pane workspace; alias form writes via `POST /api/alias`; removes affected rows locally and decrements badge |
+| `/foreign` | Foreign Spend | Year/month/owner filters; transactions grouped by `original_currency`; per-group subtotal row; summary cards (unique currencies, total IDR equivalent) |
+| `/settings` | Settings | API health, sync/import actions, local PDF processing controls, desktop-only embedded bridge PDF workspace (`/pdf/ui`) |
+| `/group-drilldown` | Group Drilldown | Group → categories breakdown for the selected month |
+| `/category-drilldown` | Category Drilldown | Category → transactions with inline edit flow |
+| `/wealth` | Wealth | Net worth dashboard, MoM movement, AI explanation panel, trend chart, snapshot refresh |
+| `/holdings` | Holdings / Assets | Holdings manager, month navigation, group tabs, edit/delete flows, snapshot generation |
 
-**Navigation:** dark navy (`#1e3a5f`) top bar + 5-item bottom nav bar; review item shows orange/red badge with pending count. Mobile-first layout, max-width 640 px, safe-area-inset padding.
+**Navigation and layout:** the PWA now has both a mobile shell and a desktop shell. Mobile keeps the dark navy top bar plus 6-tab bottom nav. Desktop switches to a sidebar layout with wider content areas, desktop transaction/review workspaces, and a manual `Desktop View` toggle persisted in local storage.
 
 **IDR formatting:** PWA views render full Rupiah amounts such as `Rp 92,600,000` using comma thousand separators (`en-US` style). Negative values do not show a leading minus sign; income remains green (`#22c55e`), expense red (`#ef4444`).
 
 ### Offline behavior (service worker)
 
-vite-plugin-pwa generates a Workbox service worker. API GET routes (except `/sync`, `/import`, `/alias`) use NetworkFirst strategy with 5-minute cache and 8-second network timeout. Stale data is served offline when the network is unavailable. Write operations require connectivity.
+vite-plugin-pwa generates a Workbox service worker. API GET routes (except write operations such as `/sync`, `/import`, `/alias`) use NetworkFirst caching. The service worker is configured with `clientsClaim: true` and `skipWaiting: true`, so newly deployed builds take control immediately after refresh. If the browser still shows stale UI after deployment, clear site data or unregister the service worker.
 
 ---
 
@@ -4143,13 +3339,15 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 - **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
 - **Hero card** — large Net Worth figure on dark gradient; MoM change with ▲/▼ indicator + percentage
 - **Assets / Liabilities cards** — side-by-side summary grid
+- **Monthly Movement card** — deterministic month-over-month comparison rows for cash, investments, real estate, physical assets, liabilities, and net worth
 - **Asset group breakdown** — tappable rows per group (Cash & Liquid, Investments, Real Estate, Physical Assets) with bar, % of total, and sub-type chips; tapping navigates to `/holdings?group=…`
 - **Liabilities row** — shown when liabilities > 0; sub-chips list mortgage/CC/loans/taxes
-- **Net worth explanation panel** — above the chart, explains why monthly net worth changed. Loads in two phases: Phase 1 (blocking) fetches summary + history and renders the full page immediately; Phase 2 (non-blocking) fetches `?ai=1` explanation asynchronously and fills in the trend box when ready with a “Generating trend analysis…” spinner. Without AI the deterministic fallback is shown instantly.
+- **Net worth explanation panel** — above the chart, explains why monthly net worth changed. Loads in two phases: Phase 1 fetches summary + history plus the deterministic fallback and renders immediately; Phase 2 fetches `?ai=1` asynchronously when a previous month exists. First-month snapshots show a friendly non-comparison state instead of a blank panel.
 - **Interactive Ask AI follow-up** — suggested question chips plus a free-text input allow drill-down questions such as “What made Investments rise by Rp 1.7B?” and “Which cash accounts fell?”
 - **12-month trend chart** — Chart.js line chart of net worth in IDR millions, oldest-to-newest
 - **Refresh Snapshot button** — calls `POST /api/wealth/snapshot` for the selected date and reloads
 - **FAB (+)** — links to `/holdings` to add data
+- **Desktop polish** — wider hero, taller chart, and desktop shell compatibility when `Desktop View` is enabled
 
 ### `Holdings.vue` — Asset Manager (`/holdings`)
 
@@ -4164,10 +3362,11 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
   - **Balance tab** — institution, account, account type (savings/checking/money market/physical cash), owner, balance IDR, notes
   - **Holding tab** — asset class dropdown (grouped by Investments/Real Estate/Physical Assets), name, ticker/ISIN, institution, owner, market value IDR, quantity, unit price, cost basis; bond-specific: maturity date + coupon rate
   - **Liability tab** — type (mortgage/personal loan/credit card/taxes owed/other), name, institution, owner, balance IDR, due date, notes
+- **Desktop polish** — denser rows, wider modal sheet, and better use of horizontal space inside the desktop shell
 
 ### Navigation
 
-Bottom nav expanded from 5 to **6 tabs**:
+Mobile bottom nav uses **6 tabs**:
 
 | Tab | Icon | Route |
 |---|---|---|
@@ -4177,6 +3376,8 @@ Bottom nav expanded from 5 to **6 tabs**:
 | Txns | 🧾 | `/transactions` |
 | Review | 🔎 | `/review` |
 | More | ⚙︎ | `/settings` |
+
+Desktop layout replaces the bottom nav with a persistent sidebar. The app can switch automatically at desktop widths or be forced with the manual `Desktop View` toggle in the header; the sidebar includes an `Auto Layout` button to return to responsive mode.
 
 ---
 
@@ -4228,7 +3429,7 @@ Monthly wealth management cycle (1st–5th of each month):
 - [x] `pwa/src/views/Holdings.vue` — asset manager with arrow navigation, group tabs, non-IDR FX display, Government Bonds sub-group, per-item delete, FAB → 3-mode modal form
 - [x] `pwa/src/api/client.js` — wealth API calls for CRUD, snapshots, history, summary, explanation, follow-up Q&A, and `del()` helper
 - [x] `pwa/src/router/index.js` — `/wealth` and `/holdings` routes
-- [x] `pwa/src/App.vue` — 6-tab bottom nav; app title changed to "Wealth"
+- [x] `pwa/src/App.vue` — shell switcher for mobile and desktop layouts; route-aware header title; manual Desktop View override
 - [x] `bridge/fx_rate.py` — automatic historical FX rate fetching via `fawazahmed0/currency-api` (jsdelivr CDN primary, Cloudflare Pages fallback); module-level cache; returns 0.0 on failure
 - [x] `bridge/pdf_handler.py` — FX priority chain (bank PDF rate → FX API → 0); `_upsert_bond_holdings()` maps bond fields to `holdings` table using `period_end` as snapshot date
 - [x] `parsers/permata_savings.py` — `BondHolding` dataclass; `_parse_idr_summary()` reads Saldo Rupiah from Ringkasan Rekening table; `_parse_bond_section()` parses Rekening Investasi Obligasi; auto-corrects false-USD currency tags; `StatementResult` carries `bonds` list

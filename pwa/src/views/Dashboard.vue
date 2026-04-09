@@ -2,7 +2,7 @@
   <div>
     <!-- Month navigation -->
     <div class="month-nav">
-      <button class="nav-btn" @click="prevMonth">‹</button>
+      <button class="nav-btn" @click="prevMonth" :disabled="isEarliestMonth">‹</button>
       <span class="month-label">{{ monthLabel }}</span>
       <button class="nav-btn" @click="nextMonth" :disabled="isCurrentMonth">›</button>
     </div>
@@ -62,78 +62,79 @@
         </div>
       </div>
 
-      <!-- Spending by Group -->
-      <div class="card">
-        <div class="card-title">Spending by Group</div>
-        <div v-if="!spendingGroups.length" class="empty-state" style="padding:16px 0">
-          <div class="e-sub">No expense data this month</div>
-        </div>
-        <div v-else>
-          <div
-            v-for="grp in spendingGroups"
-            :key="grp.group"
-            class="cat-row cat-row-tappable"
-            @click="drillToGroup(grp)"
-            role="button"
-            :aria-label="`View ${grp.group} spending`"
-          >
-            <div class="cat-header">
-              <span class="cat-name">
-                <span>{{ grp.icon }}</span>
-                {{ grp.group }}
-              </span>
-              <span style="display:flex;align-items:center;gap:4px">
-                <span class="cat-amount">{{ fmt(grp.total) }}</span>
-                <span class="cat-pct">{{ grp.pct }}%</span>
-                <span class="cat-drill-chevron">›</span>
-              </span>
-            </div>
-            <div class="cat-bar-bg">
-              <div
-                class="cat-bar-fill"
-                :style="{ width: grp.pct + '%' }"
-              ></div>
-            </div>
-            <!-- Category chips -->
-            <div class="grp-cats">
-              <span
-                v-for="c in grp.topCats"
-                :key="c"
-                class="grp-cat-chip"
-              >{{ catIcon(c) }} {{ c }}</span>
-              <span v-if="grp.moreCats > 0" class="grp-cat-chip grp-cat-more">
-                +{{ grp.moreCats }} more
-              </span>
+      <div class="dashboard-two-col">
+        <!-- Spending by Group -->
+        <div class="card">
+          <div class="card-title">Spending by Group</div>
+          <div v-if="!spendingGroups.length" class="empty-state" style="padding:16px 0">
+            <div class="e-sub">No expense data this month</div>
+          </div>
+          <div v-else>
+            <div
+              v-for="grp in spendingGroups"
+              :key="grp.group"
+              class="cat-row cat-row-tappable"
+              @click="drillToGroup(grp)"
+              role="button"
+              :aria-label="`View ${grp.group} spending`"
+            >
+              <div class="cat-header">
+                <span class="cat-name">
+                  <span>{{ grp.icon }}</span>
+                  {{ grp.group }}
+                </span>
+                <span style="display:flex;align-items:center;gap:4px">
+                  <span class="cat-amount">{{ fmt(grp.total) }}</span>
+                  <span class="cat-pct">{{ grp.pct }}%</span>
+                  <span class="cat-drill-chevron">›</span>
+                </span>
+              </div>
+              <div class="cat-bar-bg">
+                <div
+                  class="cat-bar-fill"
+                  :style="{ width: grp.pct + '%' }"
+                ></div>
+              </div>
+              <div class="grp-cats">
+                <span
+                  v-for="c in grp.topCats"
+                  :key="c"
+                  class="grp-cat-chip"
+                >{{ catIcon(c) }} {{ c }}</span>
+                <span v-if="grp.moreCats > 0" class="grp-cat-chip grp-cat-more">
+                  +{{ grp.moreCats }} more
+                </span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- Monthly trend chart -->
-      <div class="card">
-        <div class="card-title">{{ store.selectedYear }} — Monthly Trend</div>
-        <div v-if="trendExplanation?.available" class="trend-explanation">
-          <div class="trend-explanation-topline">
-            <div class="trend-explanation-headline">{{ trendExplanation.headline }}</div>
-            <div v-if="trendExplanationLoading" class="trend-explanation-status">
-              <span class="spinner spinner-sm"></span>
-              Refining with AI…
+        <!-- Monthly trend chart -->
+        <div class="card">
+          <div class="card-title">{{ store.selectedYear }} — Monthly Trend</div>
+          <div v-if="trendExplanation?.available" class="trend-explanation">
+            <div class="trend-explanation-topline">
+              <div class="trend-explanation-headline">{{ trendExplanation.headline }}</div>
+              <div v-if="trendExplanationLoading" class="trend-explanation-status">
+                <span class="spinner spinner-sm"></span>
+                Refining with AI…
+              </div>
+            </div>
+            <div class="trend-explanation-summary">{{ trendExplanation.summary }}</div>
+            <div v-if="trendExplanation.drivers?.length" class="trend-driver-list">
+              <div v-for="driver in trendExplanation.drivers" :key="driver" class="trend-driver-item">
+                {{ driver }}
+              </div>
             </div>
           </div>
-          <div class="trend-explanation-summary">{{ trendExplanation.summary }}</div>
-          <div v-if="trendExplanation.drivers?.length" class="trend-driver-list">
-            <div v-for="driver in trendExplanation.drivers" :key="driver" class="trend-driver-item">
-              {{ driver }}
-            </div>
+          <div v-else-if="trendExplanationLoading" class="trend-explanation-loading">
+            <span class="spinner spinner-sm"></span>
+            Building monthly trend analysis…
           </div>
-        </div>
-        <div v-else-if="trendExplanationLoading" class="trend-explanation-loading">
-          <span class="spinner spinner-sm"></span>
-          Building monthly trend analysis…
-        </div>
-        <div v-if="!yearData" class="loading" style="padding:20px"><div class="spinner"></div></div>
-        <div v-else class="chart-wrap">
-          <canvas ref="trendRef"></canvas>
+          <div v-if="!yearData" class="loading" style="padding:20px"><div class="spinner"></div></div>
+          <div v-else class="chart-wrap">
+            <canvas ref="trendRef"></canvas>
+          </div>
         </div>
       </div>
 
@@ -186,10 +187,17 @@ let loadToken = 0
 
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const MONTHS_LONG  = ['January','February','March','April','May','June','July','August','September','October','November','December']
+const MIN_FLOW_YEAR = 2026
+const MIN_FLOW_MONTH = 1
 
 // ── Computed ────────────────────────────────────────────────────────────────
 const monthLabel = computed(() =>
   `${MONTHS_LONG[store.selectedMonth - 1]} ${store.selectedYear}`
+)
+
+const isEarliestMonth = computed(() =>
+  store.selectedYear < MIN_FLOW_YEAR ||
+  (store.selectedYear === MIN_FLOW_YEAR && store.selectedMonth <= MIN_FLOW_MONTH)
 )
 
 const isCurrentMonth = computed(() => {
@@ -280,7 +288,18 @@ function drillToGroup(grp) {
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
+function clampToFlowMinimum() {
+  if (
+    store.selectedYear < MIN_FLOW_YEAR ||
+    (store.selectedYear === MIN_FLOW_YEAR && store.selectedMonth < MIN_FLOW_MONTH)
+  ) {
+    store.selectedYear = MIN_FLOW_YEAR
+    store.selectedMonth = MIN_FLOW_MONTH
+  }
+}
+
 function prevMonth() {
+  if (isEarliestMonth.value) return
   if (store.selectedMonth === 1) { store.selectedMonth = 12; store.selectedYear-- }
   else store.selectedMonth--
 }
@@ -292,6 +311,7 @@ function nextMonth() {
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 async function load() {
+  clampToFlowMinimum()
   const token = ++loadToken
   loading.value = true
   error.value   = null
@@ -500,5 +520,24 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
   left: 0;
   color: var(--primary);
   font-weight: 700;
+}
+
+@media (min-width: 1024px) {
+  .summary-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .chart-wrap {
+    height: 300px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .dashboard-two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
 }
 </style>

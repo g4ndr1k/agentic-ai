@@ -26,44 +26,37 @@
     <!-- Queue items -->
     <div v-else>
       <div class="alert alert-info" style="font-size:12px">
-        💡 Tap a transaction to assign a merchant name and category.
+        💡 Select a transaction to assign a merchant name and category.
         If you turn on "Apply to similar", all uncategorised rows with the same
         raw description will be updated at once.
       </div>
 
-      <div v-for="item in items" :key="item.hash" class="review-item">
-        <!-- Header: click to expand -->
-        <div class="review-header" @click="toggle(item)">
-          <div class="review-meta">
-            <div class="review-desc">{{ item.raw_description }}</div>
-            <div class="review-sub">
-              {{ item.date }} · {{ item.owner }} · {{ item.institution }}
-              <template v-if="countSimilar(item) > 1">
-                · <strong>{{ countSimilar(item) }} similar</strong>
-              </template>
-            </div>
+      <ReviewWorkspace
+        v-if="isDesktop && items.length"
+        :items="items"
+        :selected-hash="expandedHash"
+        @select="toggle"
+      >
+        <div v-if="selectedItem">
+          <div class="review-desc" style="font-weight:700;font-size:15px;margin-bottom:12px">
+            {{ selectedItem.raw_description }}
           </div>
-          <div
-            class="review-amount"
-            :class="item.amount >= 0 ? 'text-income' : 'text-expense'"
-          >{{ fmt(item.amount) }}</div>
-        </div>
-
-        <!-- Expanded alias form -->
-        <div v-if="expandedHash === item.hash" class="review-body">
+          <div class="review-sub" style="margin-bottom:14px">
+            {{ selectedItem.date }} · {{ selectedItem.owner }} · {{ selectedItem.institution }}
+            <template v-if="countSimilar(selectedItem) > 1">
+              · <strong>{{ countSimilar(selectedItem) }} similar</strong>
+            </template>
+          </div>
           <div class="alias-form">
-            <!-- Merchant name -->
             <div class="form-row">
               <label class="form-label">Merchant name</label>
               <input
                 class="form-input"
                 v-model="form.merchant"
                 placeholder="e.g. Grab Food, Indomaret…"
-                @keyup.enter="save(item)"
+                @keyup.enter="save(selectedItem)"
               />
             </div>
-
-            <!-- Category -->
             <div class="form-row">
               <label class="form-label">Category</label>
               <select class="form-input" v-model="form.category">
@@ -73,8 +66,6 @@
                 </option>
               </select>
             </div>
-
-            <!-- Match type -->
             <div class="form-row">
               <label class="form-label">Match type</label>
               <div class="radio-group">
@@ -89,26 +80,98 @@
                 </label>
               </div>
             </div>
-
-            <!-- Apply to similar -->
             <div class="form-row">
               <label class="check-label">
                 <input type="checkbox" v-model="form.apply_to_similar" />
-                Apply to all {{ countSimilar(item) }} similar transactions
+                Apply to all {{ countSimilar(selectedItem) }} similar transactions
               </label>
             </div>
-
-            <!-- Actions -->
             <div class="form-actions">
               <button
                 class="btn btn-primary"
                 :disabled="!form.merchant || !form.category || saving"
-                @click="save(item)"
+                @click="save(selectedItem)"
               >
                 <span v-if="saving"><span class="spinner" style="width:12px;height:12px;border-width:2px"></span></span>
                 <span v-else>💾 Save</span>
               </button>
               <button class="btn btn-ghost" @click="expandedHash = null">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state" style="padding:40px 0">
+          <div class="e-icon">👆</div>
+          <div class="e-msg">Select a transaction</div>
+          <div class="e-sub">Click an item on the left to review it</div>
+        </div>
+      </ReviewWorkspace>
+
+      <div v-else-if="items.length">
+        <div v-for="item in items" :key="item.hash" class="review-item">
+          <div class="review-header" @click="toggle(item)">
+            <div class="review-meta">
+              <div class="review-desc">{{ item.raw_description }}</div>
+              <div class="review-sub">
+                {{ item.date }} · {{ item.owner }} · {{ item.institution }}
+                <template v-if="countSimilar(item) > 1">
+                  · <strong>{{ countSimilar(item) }} similar</strong>
+                </template>
+              </div>
+            </div>
+            <div class="review-amount" :class="item.amount >= 0 ? 'text-income' : 'text-expense'">{{ fmt(item.amount) }}</div>
+          </div>
+
+          <div v-if="expandedHash === item.hash" class="review-body">
+            <div class="alias-form">
+              <div class="form-row">
+                <label class="form-label">Merchant name</label>
+                <input
+                  class="form-input"
+                  v-model="form.merchant"
+                  placeholder="e.g. Grab Food, Indomaret…"
+                  @keyup.enter="save(item)"
+                />
+              </div>
+              <div class="form-row">
+                <label class="form-label">Category</label>
+                <select class="form-input" v-model="form.category">
+                  <option value="">— select —</option>
+                  <option v-for="c in store.categoryNames" :key="c" :value="c">
+                    {{ store.categoryMap[c]?.icon || '' }} {{ c }}
+                  </option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Match type</label>
+                <div class="radio-group">
+                  <label class="radio-label">
+                    <input type="radio" v-model="form.match_type" value="exact" /> Exact
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" v-model="form.match_type" value="contains" /> Contains
+                  </label>
+                  <label class="radio-label">
+                    <input type="radio" v-model="form.match_type" value="regex" /> Regex
+                  </label>
+                </div>
+              </div>
+              <div class="form-row">
+                <label class="check-label">
+                  <input type="checkbox" v-model="form.apply_to_similar" />
+                  Apply to all {{ countSimilar(item) }} similar transactions
+                </label>
+              </div>
+              <div class="form-actions">
+                <button
+                  class="btn btn-primary"
+                  :disabled="!form.merchant || !form.category || saving"
+                  @click="save(item)"
+                >
+                  <span v-if="saving"><span class="spinner" style="width:12px;height:12px;border-width:2px"></span></span>
+                  <span v-else>💾 Save</span>
+                </button>
+                <button class="btn btn-ghost" @click="expandedHash = null">Cancel</button>
+              </div>
             </div>
           </div>
         </div>
@@ -131,12 +194,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { formatIDR } from '../utils/currency.js'
+import { useLayout } from '../composables/useLayout.js'
+import ReviewWorkspace from '../components/ReviewWorkspace.vue'
 
 const store = useFinanceStore()
+const { isDesktop } = useLayout()
 
 const LIMIT = 100
 const items       = ref([])
@@ -155,6 +221,10 @@ const form = ref({
   match_type:      'exact',
   apply_to_similar: true,
 })
+
+const selectedItem = computed(() =>
+  items.value.find(i => i.hash === expandedHash.value) || null
+)
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(n) {

@@ -177,3 +177,20 @@ async function load() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+@media (min-width: 1024px) {
+  .filter-bar {
+    flex-wrap: nowrap;
+  }
+
+  .fx-table {
+    font-size: 13px;
+  }
+
+  .fx-table td,
+  .fx-table th {
+    padding: 10px 14px;
+  }
+}
+</style>

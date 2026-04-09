@@ -1150,4 +1150,27 @@ onMounted(async () => {
 }
 .form-body input:focus,
 .form-body select:focus { border-color: var(--primary); background: #fff; }
+
+@media (min-width: 1024px) {
+  .group-tabs {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .asset-item {
+    padding: 10px 14px;
+  }
+
+  .asset-value {
+    min-width: 140px;
+    text-align: right;
+  }
+
+  .modal-sheet {
+    max-width: 600px;
+    margin: 0 auto;
+    border-radius: var(--radius-lg);
+  }
+}
 </style>
