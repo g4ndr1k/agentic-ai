@@ -11,12 +11,14 @@ Registers these routes into bridge/server.py:
 
 All endpoints require the same bearer token as the rest of the bridge.
 
-Jobs run synchronously (the bridge is single-threaded). For large PDFs the
-/pdf/process call may take a few seconds — the UI polls /pdf/status.
+Jobs are queued and executed in background worker threads. Clients submit work
+then poll /pdf/status for progress instead of blocking the HTTP request until
+PDF parsing/export completes.
 """
 import os
 import json
 import uuid
+import queue
 import logging
 import sqlite3
 import threading
@@ -35,6 +37,13 @@ _db_path = ""
 # Populated by handle_attachments(); consumed by handle_process().
 _attachment_paths: dict[str, str] = {}
 _attachment_paths_lock = threading.Lock()
+_running_jobs: set[str] = set()
+_running_jobs_lock = threading.Lock()
+_queued_jobs: set[str] = set()
+_queued_jobs_lock = threading.Lock()
+_job_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+_job_worker_started = False
+_job_worker_lock = threading.Lock()
 
 
 def init_pdf_handler(config: dict, db_path: str):
@@ -43,6 +52,7 @@ def init_pdf_handler(config: dict, db_path: str):
     _config = config
     _db_path = db_path
     _init_jobs_db()
+    _ensure_job_worker()
 
 
 def _get_attachment_path(attachment_id: str) -> Optional[str]:
@@ -54,6 +64,58 @@ def _replace_attachment_paths(paths: dict[str, str]) -> None:
     global _attachment_paths
     with _attachment_paths_lock:
         _attachment_paths = paths
+
+
+def _mark_job_running(job_id: str) -> bool:
+    with _running_jobs_lock:
+        if job_id in _running_jobs:
+            return False
+        _running_jobs.add(job_id)
+        return True
+
+
+def _mark_job_finished(job_id: str) -> None:
+    with _running_jobs_lock:
+        _running_jobs.discard(job_id)
+
+
+def _mark_job_queued(job_id: str) -> bool:
+    with _queued_jobs_lock:
+        if job_id in _queued_jobs:
+            return False
+        _queued_jobs.add(job_id)
+        return True
+
+
+def _mark_job_dequeued(job_id: str) -> None:
+    with _queued_jobs_lock:
+        _queued_jobs.discard(job_id)
+
+
+def _ensure_job_worker() -> None:
+    global _job_worker_started
+    with _job_worker_lock:
+        if _job_worker_started:
+            return
+        worker = threading.Thread(
+            target=_job_worker_loop,
+            name="pdf-job-worker",
+            daemon=True,
+        )
+        worker.start()
+        _job_worker_started = True
+
+
+def _job_worker_loop() -> None:
+    while True:
+        job_id, password = _job_queue.get()
+        try:
+            _mark_job_dequeued(job_id)
+            _run_job(job_id, password)
+        except Exception:
+            log.exception("Unhandled exception while processing queued PDF job %s", job_id)
+        finally:
+            _job_queue.task_done()
 
 
 def _utc_now_iso() -> str:
@@ -322,9 +384,9 @@ def handle_upload(request_body: bytes, content_type: str) -> tuple[int, dict]:
     }
     _upsert_job(job)
 
-    # If password provided at upload time, process immediately
+    # If password provided at upload time, queue processing immediately.
     if password:
-        _run_job(job_id, password)
+        _queue_job(job_id, password)
         job = _get_job(job_id)
 
     return 200, {
@@ -359,7 +421,7 @@ def handle_process(body: dict) -> tuple[int, dict]:
             "output_path": "", "error": "", "log": "",
         }
         _upsert_job(job)
-        _run_job(job_id, password)
+        _queue_job(job_id, password)
         job = _get_job(job_id)
         return 200, {"job_id": job_id, "status": job["status"], "error": job.get("error", "")}
 
@@ -373,7 +435,7 @@ def handle_process(body: dict) -> tuple[int, dict]:
     if job["status"] == "done":
         return 200, {"job_id": job_id, "status": "done", "output_path": job["output_path"]}
 
-    _run_job(job_id, password)
+    _queue_job(job_id, password)
     job = _get_job(job_id)
     return 200, {"job_id": job_id, "status": job["status"], "error": job.get("error", "")}
 
@@ -382,7 +444,7 @@ def handle_process_file(body: dict) -> tuple[int, dict]:
     """
     POST /pdf/process-file  {"folder": "pdf_inbox", "filename": "foo.pdf", "password": ""}
     Resolves the file from the configured inbox/unlocked directories — no upload needed.
-    Immediately queues and runs the job; returns {job_id, status}.
+    Queues the job for background execution; returns {job_id, status}.
     """
     folder   = body.get("folder", "").strip()
     filename = body.get("filename", "").strip()
@@ -427,7 +489,7 @@ def handle_process_file(body: dict) -> tuple[int, dict]:
         "log":         "",
     }
     _upsert_job(job)
-    _run_job(job_id, password)
+    _queue_job(job_id, password)
     job = _get_job(job_id)
     return 200, {
         "job_id":   job_id,
@@ -443,7 +505,10 @@ def handle_status(job_id: str) -> tuple[int, dict]:
     job = _get_job(job_id)
     if not job:
         return 404, {"error": "job not found"}
-    result = {k: job[k] for k in ("job_id","status","bank","stmt_type","period","error")}
+    result = {
+        k: job[k]
+        for k in ("job_id", "created_at", "status", "bank", "stmt_type", "period", "error", "log")
+    }
     if job["status"] == "done":
         result["download_url"] = f"/pdf/download/{job_id}"
     return 200, result
@@ -482,6 +547,7 @@ def handle_jobs(limit: int = 50) -> tuple[int, dict]:
             "bank": j["bank"],
             "stmt_type": j["stmt_type"],
             "period": j["period"],
+            "folder": Path(j["source_path"] or "").parent.name,
             "filename": Path(j["source_path"] or "").name,
             "error": j["error"],
         })
@@ -519,8 +585,12 @@ def handle_attachments() -> tuple[int, dict]:
 # ── Job runner ────────────────────────────────────────────────────────────────
 def _run_job(job_id: str, password: str):
     """Execute the full PDF→XLS pipeline for a job. Updates DB in place."""
+    if not _mark_job_running(job_id):
+        return
+
     job = _get_job(job_id)
     if not job:
+        _mark_job_finished(job_id)
         return
 
     job["status"] = "running"
@@ -543,8 +613,27 @@ def _run_job(job_id: str, password: str):
         job["status"] = "error"
         job["error"] = str(e)
         job["log"] = traceback.format_exc()
+    finally:
+        _upsert_job(job)
+        _mark_job_finished(job_id)
 
-    _upsert_job(job)
+
+def _queue_job(job_id: str, password: str) -> None:
+    """Enqueue a job for single-worker background processing."""
+    _ensure_job_worker()
+    job = _get_job(job_id)
+    if not job:
+        return
+    if job["status"] == "done":
+        return
+    if job["status"] == "running":
+        return
+    if not _mark_job_queued(job_id):
+        return
+    if job["status"] != "pending":
+        job["status"] = "pending"
+        _upsert_job(job)
+    _job_queue.put((job_id, password))
 
 
 # ── Savings-account classification helpers ────────────────────────────────────
@@ -714,6 +803,7 @@ def _upsert_closing_balance(result, logs: list):
                 DO UPDATE SET
                     balance        = excluded.balance,
                     balance_idr    = excluded.balance_idr,
+                    currency       = excluded.currency,
                     exchange_rate  = excluded.exchange_rate,
                     notes          = excluded.notes,
                     import_date    = excluded.import_date

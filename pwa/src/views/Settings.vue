@@ -192,119 +192,180 @@
       <div class="setting-desc">
         Scan <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">data/pdf_inbox</code>
         and <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">data/pdf_unlocked</code>
-        for bank statement PDFs. Each file is sent to the bridge for parsing —
-        duplicates are automatically skipped via hash-check.
+        for bank statement PDFs. Review the list, see when each file was last processed,
+        and run only the PDFs you select.
       </div>
-
-      <!-- Restricted to desktop Mac — tooltip on wrapper for disabled button -->
-      <span
-        class="pdf-btn-wrapper"
-        :title="!isDesktopMac ? 'This feature is only available on the Desktop controller.' : ''"
-      >
-        <button
-          class="btn btn-primary btn-block"
-          :disabled="!isDesktopMac || pdf.phase !== 'idle'"
-          :class="{ 'btn-disabled-look': !isDesktopMac }"
-          @click="doScanAndProcess"
-        >
-          <span v-if="pdf.phase === 'scanning'">
-            <span class="spinner" style="width:14px;height:14px;border-width:2px"></span>
-            Scanning folders…
-          </span>
-          <span v-else-if="pdf.phase === 'processing'">
-            <span class="spinner" style="width:14px;height:14px;border-width:2px"></span>
-            Processing {{ pdf.processed }}&thinsp;/&thinsp;{{ pdf.total }}…
-          </span>
-          <span v-else>
-            🔍 Scan &amp; Process PDFs
-          </span>
-        </button>
-      </span>
 
       <!-- Non-Mac notice -->
       <div v-if="!isDesktopMac" class="pdf-unavail-note">
         Only available on macOS desktop. Open this app on your Mac controller.
       </div>
 
-      <!-- Progress bar -->
-      <div v-if="pdf.phase === 'processing' && pdf.total > 0" class="pdf-progress-bar-wrap">
-        <div
-          class="pdf-progress-bar"
-          :style="{ width: Math.round(100 * pdf.processed / pdf.total) + '%' }"
-        ></div>
-      </div>
-
-      <!-- Current file -->
-      <div v-if="pdf.phase === 'processing' && pdf.current" class="pdf-current-file">
-        ↳ {{ pdf.current }}
-      </div>
-
-      <!-- Fatal error -->
-      <div v-if="pdf.fatalError" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ pdf.fatalError }}
-      </div>
-
-      <!-- Per-file results -->
-      <div v-if="pdf.files.length > 0" style="margin-top:12px">
-        <div class="pdf-summary-bar">
-          <span class="pdf-badge pdf-badge-ok">✅ {{ pdfCounts.ok }}</span>
-          <span v-if="pdfCounts.skipped > 0" class="pdf-badge pdf-badge-skip">⏭ {{ pdfCounts.skipped }} skipped</span>
-          <span v-if="pdfCounts.error > 0"   class="pdf-badge pdf-badge-err">❌ {{ pdfCounts.error }} failed</span>
-          <span v-if="pdf.phase !== 'idle'"   class="pdf-badge pdf-badge-pend">⏳ {{ pdfCounts.pending }} pending</span>
-          <span class="pdf-badge" style="background:rgba(120,120,128,.1);color:var(--text-muted,#888)">
-            {{ pdf.total }} total
-          </span>
-        </div>
-
-        <div class="pdf-file-list">
-          <div
-            v-for="f in pdf.files"
-            :key="f.key"
-            :class="['pdf-file-row', `pdf-row-${f.status}`]"
-          >
-            <span class="pdf-file-icon">{{ FILE_ICONS[f.status] }}</span>
-            <div class="pdf-file-info">
-              <span class="pdf-file-name">{{ f.filename }}</span>
-              <span class="pdf-file-folder">{{ f.folder }}</span>
-            </div>
-            <span class="pdf-file-meta">{{ f.meta }}</span>
-          </div>
-        </div>
-
-        <button
-          v-if="pdf.phase === 'idle'"
-          class="btn btn-ghost btn-sm"
-          style="margin-top:8px"
-          @click="resetPdf"
-        >
-          🗑 Clear results
-        </button>
-      </div>
-
-      <div v-if="isDesktopMac" class="pdf-desktop-tools">
-        <div class="setting-desc" style="margin-bottom:10px">
-          Desktop-only PDF workspace from the bridge controller.
-        </div>
+      <div class="pdf-desktop-tools">
         <div class="pdf-desktop-actions">
-          <button class="btn btn-ghost btn-sm" @click="showPdfWorkspace = !showPdfWorkspace">
-            {{ showPdfWorkspace ? 'Hide PDF Workspace' : 'Open PDF Workspace' }}
-          </button>
+          <span
+            class="pdf-btn-wrapper"
+            :title="!isDesktopMac ? 'This feature is only available on the Desktop controller.' : ''"
+          >
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="!isDesktopMac"
+              :class="{ 'btn-disabled-look': !isDesktopMac }"
+              @click="togglePdfWorkspace"
+            >
+              {{ showPdfWorkspace ? 'Hide PDF Workspace' : 'Open PDF Workspace' }}
+            </button>
+          </span>
           <a
+            v-if="isDesktopMac"
             class="btn btn-ghost btn-sm"
             :href="bridgePdfUiUrl"
             target="_blank"
             rel="noopener noreferrer"
           >
-            Open in New Tab
+            Open Legacy Workspace
           </a>
         </div>
-        <div v-if="showPdfWorkspace" class="pdf-ui-wrap">
-          <iframe
-            class="pdf-ui-frame"
-            :src="bridgePdfUiUrl"
-            title="PDF Workspace"
-            loading="lazy"
-          ></iframe>
+
+        <div v-if="showPdfWorkspace" class="pdf-workspace">
+          <div class="pdf-workspace-toolbar">
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="pdfWorkspace.loading || pdf.phase === 'processing'"
+              @click="loadPdfWorkspace"
+            >
+              {{ pdfWorkspace.loading ? 'Refreshing…' : 'Refresh' }}
+            </button>
+            <input
+              v-model.trim="pdfWorkspace.search"
+              class="pdf-search"
+              type="search"
+              placeholder="Search filename…"
+              :disabled="pdfWorkspace.loading"
+            />
+            <select
+              v-model="pdfWorkspace.folder"
+              class="pdf-filter"
+              :disabled="pdfWorkspace.loading"
+            >
+              <option value="all">All folders</option>
+              <option value="pdf_inbox">pdf_inbox</option>
+              <option value="pdf_unlocked">pdf_unlocked</option>
+            </select>
+          </div>
+
+          <div v-if="pdf.fatalError" class="alert alert-error" style="margin-top:10px">
+            ❌ {{ pdf.fatalError }}
+          </div>
+          <div v-else-if="pdfWorkspace.error" class="alert alert-error" style="margin-top:10px">
+            ❌ {{ pdfWorkspace.error }}
+          </div>
+
+          <div v-if="pdf.phase === 'processing' && pdf.total > 0" style="margin-top:12px">
+            <div class="pdf-summary-bar">
+              <span class="pdf-badge pdf-badge-ok">✅ {{ pdfCounts.ok }}</span>
+              <span v-if="pdfCounts.skipped > 0" class="pdf-badge pdf-badge-skip">⏭ {{ pdfCounts.skipped }} skipped</span>
+              <span v-if="pdfCounts.error > 0" class="pdf-badge pdf-badge-err">❌ {{ pdfCounts.error }} failed</span>
+              <span class="pdf-badge pdf-badge-pend">⏳ {{ pdf.processed }} / {{ pdf.total }}</span>
+            </div>
+            <div class="pdf-progress-bar-wrap">
+              <div
+                class="pdf-progress-bar"
+                :style="{ width: Math.round(100 * pdf.processed / pdf.total) + '%' }"
+              ></div>
+            </div>
+            <div v-if="pdf.current" class="pdf-current-file">↳ {{ pdf.current }}</div>
+          </div>
+
+          <div v-if="pdfWorkspace.loading" class="pdf-empty-state">
+            <span class="spinner" style="width:16px;height:16px;border-width:2px"></span>
+            Loading local PDFs…
+          </div>
+
+          <template v-else>
+            <div v-if="visiblePdfFiles.length === 0" class="pdf-empty-state">
+              {{ pdfWorkspace.files.length === 0 ? 'No PDF files found in pdf_inbox or pdf_unlocked.' : 'No PDFs match the current search or folder filter.' }}
+            </div>
+
+            <div v-else class="pdf-table-wrap">
+              <table class="pdf-table">
+                <thead>
+                  <tr>
+                    <th class="pdf-checkbox-col">
+                      <input
+                        type="checkbox"
+                        :checked="allVisibleSelected"
+                        :disabled="pdf.phase === 'processing'"
+                        @change="toggleVisibleSelection($event.target.checked)"
+                      />
+                    </th>
+                    <th>PDF File</th>
+                    <th>Folder</th>
+                    <th>Last Processed</th>
+                    <th>Status</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="file in visiblePdfFiles" :key="file.key">
+                    <td class="pdf-checkbox-col">
+                      <input
+                        v-model="file.selected"
+                        type="checkbox"
+                        :disabled="pdf.phase === 'processing'"
+                      />
+                    </td>
+                    <td>
+                      <div class="pdf-name-cell">
+                        <div class="pdf-name-main">{{ file.filename }}</div>
+                        <div class="pdf-name-sub">
+                          {{ formatPdfSize(file.sizeKb) }} · Modified {{ formatPdfDate(file.mtime) }}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="pdf-folder-pill">{{ file.folder }}</span>
+                    </td>
+                    <td>{{ formatPdfDate(file.lastProcessedAt, true) }}</td>
+                    <td>
+                      <span :class="['pdf-status-chip', `pdf-status-${getPdfStatusClass(file)}`]">
+                        {{ getPdfStatusLabel(file) }}
+                      </span>
+                    </td>
+                    <td class="pdf-detail-cell">{{ getPdfDetail(file) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <div class="pdf-workspace-footer">
+            <div class="pdf-selection-note">
+              {{ selectedPdfCount }} selected · {{ visiblePdfFiles.length }} shown · {{ pdfWorkspace.files.length }} total
+            </div>
+            <div class="pdf-workspace-footer-actions">
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="selectedPdfCount === 0 || pdf.phase === 'processing'"
+                @click="clearPdfSelection"
+              >
+                Clear Selection
+              </button>
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="selectedPdfCount === 0 || pdf.phase === 'processing' || pdfWorkspace.loading"
+                @click="processSelectedPdfs"
+              >
+                <span v-if="pdf.phase === 'processing'">
+                  <span class="spinner" style="width:14px;height:14px;border-width:2px"></span>
+                  Processing {{ pdf.processed }} / {{ pdf.total }}…
+                </span>
+                <span v-else>
+                  Process Selected
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -352,114 +413,242 @@ const bridgePdfUiUrl = computed(() =>
 )
 
 // ── PDF processing state ─────────────────────────────────────────────────────
-const FILE_ICONS = { pending: '⏳', processing: '⚙️', ok: '✅', skipped: '⏭', error: '❌' }
-
 const EMPTY_PDF_STATE = () => ({
-  phase:     'idle',   // 'idle' | 'scanning' | 'processing'
-  files:     [],       // [{ key, folder, filename, status, meta }]
-  current:   '',
+  phase: 'idle',   // 'idle' | 'processing'
+  current: '',
   processed: 0,
-  total:     0,
+  total: 0,
   fatalError: null,
 })
 const pdf = ref(EMPTY_PDF_STATE())
-
-const pdfCounts = computed(() => {
-  const c = { ok: 0, skipped: 0, error: 0, pending: 0 }
-  for (const f of pdf.value.files) {
-    if      (f.status === 'ok')      c.ok++
-    else if (f.status === 'skipped') c.skipped++
-    else if (f.status === 'error')   c.error++
-    else                             c.pending++
-  }
-  return c
+const pdfWorkspace = ref({
+  loading: false,
+  error: null,
+  loaded: false,
+  search: '',
+  folder: 'all',
+  files: [],
 })
 
-function resetPdf() { pdf.value = EMPTY_PDF_STATE() }
+const visiblePdfFiles = computed(() => {
+  const q = pdfWorkspace.value.search.trim().toLowerCase()
+  return pdfWorkspace.value.files
+    .filter((file) => {
+      const matchesFolder = pdfWorkspace.value.folder === 'all' || file.folder === pdfWorkspace.value.folder
+      const matchesSearch = !q || file.filename.toLowerCase().includes(q)
+      return matchesFolder && matchesSearch
+    })
+    .slice()
+    .sort((a, b) => {
+      const byName = a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' })
+      if (byName !== 0) return byName
+      return a.folder.localeCompare(b.folder, undefined, { sensitivity: 'base' })
+    })
+})
+
+const selectedPdfCount = computed(() =>
+  pdfWorkspace.value.files.filter(file => file.selected).length
+)
+
+const allVisibleSelected = computed(() =>
+  visiblePdfFiles.value.length > 0 && visiblePdfFiles.value.every(file => file.selected)
+)
+
+const pdfCounts = computed(() => {
+  const counts = { ok: 0, skipped: 0, error: 0 }
+  for (const file of pdfWorkspace.value.files) {
+    const status = getPdfStatusClass(file)
+    if (status === 'ok') counts.ok++
+    else if (status === 'skipped') counts.skipped++
+    else if (status === 'error') counts.error++
+  }
+  return counts
+})
+
+function resetPdf() {
+  pdf.value = EMPTY_PDF_STATE()
+}
 
 // ── Poll /api/pdf/local-status until done (max 3 min) ───────────────────────
 async function pollStatus(jobId, timeoutMs = 180_000) {
   const deadline = Date.now() + timeoutMs
+  let transientErrors = 0
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2500))
-    const s = await api.pdfLocalStatus(jobId)
-    if (s.status === 'done' || s.status === 'error') return s
+    try {
+      const s = await api.pdfLocalStatus(jobId)
+      transientErrors = 0
+      if (s.status === 'done' || s.status === 'error') return s
+    } catch (err) {
+      const message = String(err?.message || '')
+      const isTransient = message.includes('502') || message.includes('503') || message.includes('504') || message.includes('Bridge unreachable')
+      if (isTransient && transientErrors < 5) {
+        transientErrors += 1
+        continue
+      }
+      throw err
+    }
   }
   throw new Error('Timed out after 3 min')
 }
 
-// ── Main flow: scan server folders → process each file sequentially ──────────
-async function doScanAndProcess() {
-  pdf.value = EMPTY_PDF_STATE()
-  pdf.value.phase = 'scanning'
+function formatPdfDate(value, includeTime = false) {
+  if (!value) return 'Never'
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Never'
+  return date.toLocaleString([], includeTime
+    ? { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+    : { year: 'numeric', month: 'short', day: 'numeric' })
+}
 
-  // Step 1: ask the finance-api for the list of PDFs on disk
-  let discovered = []
+function formatPdfSize(sizeKb) {
+  return `${Number(sizeKb || 0).toFixed(1)} KB`
+}
+
+function truncateText(text, max = 80) {
+  return text && text.length > max ? `${text.slice(0, max - 1)}…` : (text || '')
+}
+
+function mapWorkspaceFile(file, previous) {
+  return {
+    key: `${file.folder}/${file.filename}`,
+    folder: file.folder,
+    filename: file.filename,
+    sizeKb: file.size_kb,
+    mtime: file.mtime,
+    lastProcessedAt: file.last_processed_at,
+    lastStatus: file.last_status,
+    lastError: file.last_error || '',
+    selected: previous?.selected || false,
+    processingState: previous?.processingState || null,
+    processingMeta: previous?.processingMeta || '',
+  }
+}
+
+async function loadPdfWorkspace() {
+  pdfWorkspace.value.loading = true
+  pdfWorkspace.value.error = null
+  pdf.value.fatalError = null
   try {
-    discovered = await api.pdfLocalFiles()
+    const res = await api.pdfLocalWorkspace()
+    const previousByKey = new Map(pdfWorkspace.value.files.map(file => [file.key, file]))
+    pdfWorkspace.value.files = (res.files || []).map(file =>
+      mapWorkspaceFile(file, previousByKey.get(`${file.folder}/${file.filename}`))
+    )
+    pdfWorkspace.value.loaded = true
   } catch (err) {
-    pdf.value.fatalError = `Could not list local PDFs: ${err.message}`
-    pdf.value.phase = 'idle'
+    pdfWorkspace.value.error = err.message
+  } finally {
+    pdfWorkspace.value.loading = false
+  }
+}
+
+async function togglePdfWorkspace() {
+  showPdfWorkspace.value = !showPdfWorkspace.value
+  if (showPdfWorkspace.value && !pdfWorkspace.value.loaded) {
+    await loadPdfWorkspace()
+  }
+}
+
+function clearPdfSelection() {
+  pdfWorkspace.value.files.forEach(file => { file.selected = false })
+}
+
+function toggleVisibleSelection(checked) {
+  visiblePdfFiles.value.forEach(file => { file.selected = checked })
+}
+
+function getPdfStatusClass(file) {
+  if (file.processingState) return file.processingState
+  if (file.lastStatus === 'done') return 'ok'
+  if (file.lastStatus === 'error') return 'error'
+  if (file.lastStatus === 'pending') return 'pending'
+  return 'new'
+}
+
+function getPdfStatusLabel(file) {
+  const status = getPdfStatusClass(file)
+  return {
+    new: 'New',
+    pending: 'Pending',
+    processing: 'Processing',
+    ok: 'Done',
+    skipped: 'Skipped',
+    error: 'Failed',
+  }[status] || 'New'
+}
+
+function getPdfDetail(file) {
+  if (file.processingState === 'processing') return 'Processing now…'
+  if (file.processingMeta) return file.processingMeta
+  if (file.lastStatus === 'error' && file.lastError) return truncateText(file.lastError, 120)
+  if (file.lastStatus === 'done') return 'Processed previously'
+  return 'Ready to process'
+}
+
+function applyPdfRunResult(file, final) {
+  file.lastProcessedAt = final.created_at || new Date().toISOString()
+  const log = String(final.log || '').toLowerCase()
+  if (final.status === 'error') {
+    file.processingState = 'error'
+    file.processingMeta = truncateText(final.error || 'Parser error')
+    file.lastStatus = 'error'
+    file.lastError = final.error || 'Parser error'
     return
   }
 
-  if (discovered.length === 0) {
-    pdf.value.fatalError = 'No PDF files found in pdf_inbox or pdf_unlocked.'
-    pdf.value.phase = 'idle'
+  file.lastStatus = 'done'
+  file.lastError = ''
+
+  if (log.includes('duplicate') || log.includes('skipped') || log.includes('already imported')) {
+    file.processingState = 'skipped'
+    file.processingMeta = 'Already imported'
     return
   }
 
-  // Populate list (all pending)
-  pdf.value.files = discovered.map(f => ({
-    key:      `${f.folder}/${f.filename}`,
-    folder:   f.folder,
-    filename: f.filename,
-    status:   'pending',
-    meta:     `${f.size_kb} KB`,
-  }))
-  pdf.value.total     = discovered.length
-  pdf.value.processed = 0
-  pdf.value.phase     = 'processing'
+  file.processingState = 'ok'
+  const match = String(final.log || '').match(/(?:rows added|upserted|bond|fund)[^\n]*/i)
+  file.processingMeta = match ? truncateText(match[0].trim(), 80) : 'Imported'
+}
 
-  // Step 2: process sequentially
-  for (let i = 0; i < pdf.value.files.length; i++) {
-    const f = pdf.value.files[i]
-    f.status = 'processing'
-    pdf.value.current = f.filename
+async function processSelectedPdfs() {
+  const selected = pdfWorkspace.value.files.filter(file => file.selected)
+  if (selected.length === 0) return
+
+  resetPdf()
+  pdf.value.phase = 'processing'
+  pdf.value.total = selected.length
+
+  for (let i = 0; i < selected.length; i++) {
+    const file = selected[i]
+    file.processingState = 'processing'
+    file.processingMeta = ''
+    pdf.value.current = file.filename
 
     try {
-      // Submit to bridge via finance-api proxy
-      const res = await api.processLocalPdf(f.folder, f.filename)
+      const res = await api.processLocalPdf(file.folder, file.filename)
       const jobId = res.job_id
       if (!jobId) throw new Error('No job_id returned')
-
-      // Poll until bridge finishes
       const final = await pollStatus(jobId)
-
-      if (final.status === 'error') {
-        f.status = 'error'
-        f.meta   = final.error || 'Parser error'
-      } else {
-        const log = (final.log || '').toLowerCase()
-        if (log.includes('duplicate') || log.includes('skipped') || log.includes('already imported')) {
-          f.status = 'skipped'
-          f.meta   = 'Already imported'
-        } else {
-          f.status = 'ok'
-          const m = (final.log || '').match(/(?:rows added|upserted|bond|fund)[^\n]*/i)
-          f.meta = m ? m[0].trim().slice(0, 60) : 'Imported'
-        }
-      }
+      applyPdfRunResult(file, final)
     } catch (err) {
-      f.status = 'error'
-      f.meta   = err.message.slice(0, 80)
+      await loadPdfWorkspace()
+      const refreshed = pdfWorkspace.value.files.find(candidate => candidate.key === file.key)
+      if (refreshed && refreshed.lastStatus === 'done') {
+        continue
+      }
+      file.processingState = 'error'
+      file.processingMeta = truncateText(err.message)
+      file.lastStatus = 'error'
+      file.lastError = err.message
     }
 
     pdf.value.processed = i + 1
   }
 
-  pdf.value.phase   = 'idle'
+  pdf.value.phase = 'idle'
   pdf.value.current = ''
+  await loadPdfWorkspace()
 }
 
 // ── Existing actions ─────────────────────────────────────────────────────────
@@ -535,7 +724,7 @@ onMounted(async () => {
 
 /* Wrapper around the button so title tooltip works when button is :disabled */
 .pdf-btn-wrapper {
-  display: block;
+  display: inline-flex;
 }
 
 .pipeline-grid {
@@ -599,63 +788,161 @@ onMounted(async () => {
 .pdf-badge-err  { background: rgba(255,59,48,.12);  color: #a0200c; }
 .pdf-badge-pend { background: rgba(120,120,128,.1); color: var(--text-muted,#888); }
 
-/* Scrollable file result list */
-.pdf-file-list {
-  max-height: 260px;
-  overflow-y: auto;
-  border: 1px solid var(--border, #e0e0e0);
-  border-radius: 6px;
+/* Workspace */
+.pdf-workspace {
+  margin-top: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(17,27,43,0.96) 0%, rgba(11,19,33,0.98) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 18px 36px rgba(5,10,18,0.28);
+  backdrop-filter: blur(16px);
+}
+
+.pdf-workspace-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pdf-search,
+.pdf-filter {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.92);
+  font-size: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.pdf-search::placeholder {
+  color: rgba(255,255,255,0.40);
+}
+
+.pdf-search:focus,
+.pdf-filter:focus {
+  outline: none;
+  border-color: rgba(96,165,250,0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    0 0 0 3px rgba(59,130,246,0.14);
+}
+
+.pdf-search {
+  flex: 1 1 220px;
+}
+
+.pdf-filter {
+  flex: 0 0 auto;
+}
+
+.pdf-empty-state {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(255,255,255,0.62);
+  font-size: 12px;
+  text-align: center;
+}
+
+.pdf-table-wrap {
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 8px;
+  background: rgba(7,14,25,0.82);
+}
+
+.pdf-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
   font-size: 12px;
 }
-.pdf-file-row {
-  display: grid;
-  grid-template-columns: 20px 1fr auto;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border, #f0f0f0);
+
+.pdf-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 11px;
+  color: rgba(191,219,254,0.72);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
 }
-.pdf-file-row:last-child { border-bottom: none; }
 
-/* Row tint per status */
-.pdf-row-ok        { background: rgba(52,199,89,.05); }
-.pdf-row-skipped   { background: rgba(255,204,0,.06); }
-.pdf-row-error     { background: rgba(255,59,48,.06); }
-.pdf-row-processing{ background: rgba(78,143,255,.07); }
-.pdf-row-pending   { background: transparent; }
+.pdf-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  vertical-align: middle;
+  color: rgba(255,255,255,0.82);
+}
 
-.pdf-file-icon { font-size: 13px; }
-.pdf-file-info {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.pdf-table tbody tr:hover td {
+  background: rgba(59,130,246,0.10);
+}
+
+.pdf-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pdf-checkbox-col {
+  width: 38px;
+}
+
+.pdf-name-cell {
   min-width: 0;
 }
-.pdf-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text, #222);
-}
-.pdf-file-folder {
-  font-size: 10px;
-  color: var(--text-muted, #aaa);
-  white-space: nowrap;
-}
-.pdf-file-meta {
-  font-size: 10px;
-  color: var(--text-muted, #888);
-  white-space: nowrap;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
+
+.pdf-name-main {
+  font-weight: 600;
+  color: rgba(255,255,255,0.95);
+  word-break: break-word;
 }
 
-.pdf-desktop-tools {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border, #e0e0e0);
+.pdf-name-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.54);
+}
+
+.pdf-folder-pill,
+.pdf-status-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pdf-folder-pill {
+  background: rgba(148,163,184,0.14);
+  color: rgba(191,219,254,0.90);
+}
+
+.pdf-status-new        { background: rgba(148,163,184,0.18); color: rgba(226,232,240,0.95); }
+.pdf-status-pending    { background: rgba(59,130,246,0.18); color: #93c5fd; }
+.pdf-status-processing { background: rgba(96,165,250,0.24); color: #dbeafe; }
+.pdf-status-ok         { background: rgba(34,197,94,0.18); color: #86efac; }
+.pdf-status-skipped    { background: rgba(245,158,11,0.18); color: #fcd34d; }
+.pdf-status-error      { background: rgba(239,68,68,0.18); color: #fca5a5; }
+
+.pdf-detail-cell {
+  max-width: 240px;
+  color: rgba(255,255,255,0.62);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pdf-desktop-actions {
@@ -664,20 +951,53 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
-.pdf-ui-wrap {
+.pdf-desktop-tools {
   margin-top: 12px;
-  border: 1px solid var(--border, #e0e0e0);
-  border-radius: 10px;
-  overflow: hidden;
-  background: #fff;
 }
 
-.pdf-ui-frame {
-  display: block;
-  width: 100%;
-  min-height: 720px;
-  border: 0;
-  background: #fff;
+.pdf-workspace-footer {
+  margin-top: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pdf-workspace-footer-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pdf-selection-note {
+  font-size: 12px;
+  color: rgba(255,255,255,0.62);
+}
+
+.pdf-workspace :deep(input[type="checkbox"]) {
+  accent-color: #60a5fa;
+}
+
+@media (max-width: 820px) {
+  .pdf-workspace {
+    padding: 10px;
+  }
+
+  .pdf-workspace-toolbar,
+  .pdf-workspace-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pdf-workspace-footer-actions {
+    justify-content: stretch;
+  }
+
+  .pdf-workspace-footer-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 @media (min-width: 1024px) {

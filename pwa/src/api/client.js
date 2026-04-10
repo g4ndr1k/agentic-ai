@@ -112,9 +112,11 @@ export const api = {
   // PWA never needs to open a second origin or use the File System Access API.
   //
   //   pdfLocalFiles()              GET  /api/pdf/local-files
+  //   pdfLocalWorkspace()          GET  /api/pdf/local-workspace
   //   processLocalPdf(folder, fn)  POST /api/pdf/process-local
   //   pdfLocalStatus(jobId)        GET  /api/pdf/local-status/:id
-  pdfLocalFiles:   ()                      => get('/pdf/local-files'),
-  processLocalPdf: (folder, filename)      => post('/pdf/process-local', { folder, filename }),
-  pdfLocalStatus:  (jobId)                 => get(`/pdf/local-status/${jobId}`),
+  pdfLocalFiles:     ()                    => get('/pdf/local-files'),
+  pdfLocalWorkspace: ()                    => get('/pdf/local-workspace'),
+  processLocalPdf:   (folder, filename)    => post('/pdf/process-local', { folder, filename }),
+  pdfLocalStatus:    (jobId)               => get(`/pdf/local-status/${jobId}`),
 }

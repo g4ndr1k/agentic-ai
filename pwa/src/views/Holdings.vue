@@ -267,7 +267,7 @@
       <!-- Physical Assets -->
       <template v-if="activeTab === 'all' || activeTab === 'physical'">
         <div class="section-header">
-          <span>🚗 Physical Assets</span>
+          <span>🟡 Physical Assets</span>
           <span class="section-total">{{ fmt(totals.physical) }}</span>
         </div>
         <div v-if="!filteredPhysical.length" class="empty-state-inline">No entries yet</div>
@@ -284,33 +284,6 @@
             <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
           </div>
           <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-        </div>
-      </template>
-
-      <!-- Liabilities -->
-      <template v-if="activeTab === 'all' || activeTab === 'liabilities'">
-        <div class="section-header section-header-liab">
-          <span>🔴 Liabilities</span>
-          <span class="section-total text-expense">{{ fmt(totals.liabilities) }}</span>
-        </div>
-        <div v-if="!filteredLiabilities.length" class="empty-state-inline">No entries yet</div>
-        <div
-          v-for="l in filteredLiabilities"
-          :key="`liab-${l.id}`"
-          class="asset-item"
-        >
-          <div class="asset-main">
-            <span class="asset-name">{{ l.liability_name }}</span>
-            <span class="asset-sub">
-              {{ formatLiabType(l.liability_type) }}
-              <template v-if="l.institution"> · {{ l.institution }}</template>
-              <template v-if="l.due_date"> · due {{ l.due_date }}</template>
-            </span>
-          </div>
-          <div class="asset-right">
-            <span class="asset-value text-expense">{{ fmt(l.balance_idr) }}</span>
-          </div>
-          <button class="asset-del" @click.stop="deleteItem('liability', l.id)" title="Delete">✕</button>
         </div>
       </template>
 
@@ -340,7 +313,7 @@
         <div class="modal-header">
           <span class="modal-title">
             {{ editingId ? 'Edit' : 'Add' }}
-            {{ formMode === 'balance' ? 'Balance' : formMode === 'liability' ? 'Liability' : 'Holding' }}
+            {{ formMode === 'balance' ? 'Balance' : 'Holding' }}
           </span>
           <button class="modal-close" @click="showForm = false">✕</button>
         </div>
@@ -349,7 +322,6 @@
         <div v-if="!editingId" class="form-type-tabs">
           <button :class="['form-type-tab', formMode === 'balance'   && 'active']" @click="formMode = 'balance'">💰 Balance</button>
           <button :class="['form-type-tab', formMode === 'holding'   && 'active']" @click="formMode = 'holding'">📈 Holding</button>
-          <button :class="['form-type-tab', formMode === 'liability' && 'active']" @click="formMode = 'liability'">🔴 Liability</button>
         </div>
 
         <!-- Balance form -->
@@ -450,33 +422,6 @@
           <input v-model="form.notes" placeholder="Optional" />
         </div>
 
-        <!-- Liability form -->
-        <div v-if="formMode === 'liability'" class="form-body">
-          <label>Type *</label>
-          <select v-model="form.liability_type">
-            <option value="mortgage">Mortgage (KPR)</option>
-            <option value="personal_loan">Personal Loan</option>
-            <option value="credit_card">Credit Card Outstanding</option>
-            <option value="taxes_owed">Taxes Owed</option>
-            <option value="other">Other</option>
-          </select>
-          <label>Name / Label *</label>
-          <input v-model="form.liability_name" placeholder="e.g. BCA Credit Card, KPR Mandiri" />
-          <label>Institution</label>
-          <input v-model="form.institution" placeholder="e.g. BCA, Mandiri" />
-          <label>Owner</label>
-          <select v-model="form.owner">
-            <option value="">— All —</option>
-            <option v-for="o in owners" :key="o" :value="o">{{ o }}</option>
-          </select>
-          <label>Outstanding Balance (IDR) *</label>
-          <input type="number" v-model.number="form.balance_idr" placeholder="0" min="0" />
-          <label>Due Date</label>
-          <input type="date" v-model="form.due_date" />
-          <label>Notes</label>
-          <input v-model="form.notes" placeholder="Optional" />
-        </div>
-
         <!-- Save button -->
         <div style="padding:16px">
           <button class="btn btn-primary" style="width:100%" @click="saveForm" :disabled="saving">
@@ -507,8 +452,7 @@ const TABS = [
   { key: 'cash',        label: 'Cash',         icon: '🏦' },
   { key: 'investments', label: 'Investments',  icon: '📈' },
   { key: 'realestate',  label: 'Real Estate',  icon: '🏠' },
-  { key: 'physical',    label: 'Physical',     icon: '🚗' },
-  { key: 'liabilities', label: 'Liabilities',  icon: '🔴' },
+  { key: 'physical',    label: 'Physical',     icon: '🟡' },
 ]
 
 const GROUP_TO_TAB = {
@@ -516,7 +460,6 @@ const GROUP_TO_TAB = {
   'Investments':     'investments',
   'Real Estate':     'realestate',
   'Physical Assets': 'physical',
-  'Liabilities':     'liabilities',
 }
 
 const activeTab = ref(GROUP_TO_TAB[route.query.group] || 'all')
@@ -544,7 +487,6 @@ const editingId    = ref(null)        // null = add mode, number = edit mode (ro
 
 const balances    = ref([])
 const holdings    = ref([])
-const liabilities = ref([])
 
 const owners = computed(() => store.owners)
 
@@ -631,10 +573,6 @@ function formatAssetClass(t) {
     real_estate: 'Real Estate', vehicle: 'Vehicle', gold: 'Gold', other: 'Other',
   }[t] || t
 }
-function formatLiabType(t) {
-  return { mortgage: 'Mortgage', personal_loan: 'Personal Loan', credit_card: 'Credit Card', taxes_owed: 'Taxes Owed', other: 'Other' }[t] || t
-}
-
 // ── Month navigation ──────────────────────────────────────────────────────────
 // snapshotDates is sorted DESC (newest first); index 0 = most recent
 const currentDateIndex = computed(() => snapshotDates.value.indexOf(snapshotDate.value))
@@ -695,14 +633,11 @@ const filteredMutualFunds      = computed(() => filteredInvestments.value.filter
 const filteredOtherInvestments = computed(() => filteredInvestments.value.filter(h => !['bond','stock','mutual_fund'].includes(h.asset_class)))
 const filteredRealEstate       = computed(() => holdings.value.filter(h => h.asset_group === 'Real Estate'))
 const filteredPhysical         = computed(() => holdings.value.filter(h => h.asset_group === 'Physical Assets'))
-const filteredLiabilities      = computed(() => liabilities.value)
-
 const totals = computed(() => ({
   liquid:      filteredBalances.value.reduce((s, b) => s + (b.balance_idr || 0), 0),
   investments: filteredInvestments.value.reduce((s, h) => s + (h.market_value_idr || 0), 0),
   realestate:  filteredRealEstate.value.reduce((s, h) => s + (h.market_value_idr || 0), 0),
   physical:    filteredPhysical.value.reduce((s, h) => s + (h.market_value_idr || 0), 0),
-  liabilities: filteredLiabilities.value.reduce((s, l) => s + (l.balance_idr || 0), 0),
 }))
 
 // ── Data loading ──────────────────────────────────────────────────────────────
@@ -711,14 +646,12 @@ async function loadItems() {
   loading.value   = true
   loadError.value = null
   try {
-    const [bals, holds, liabs] = await Promise.all([
+    const [bals, holds] = await Promise.all([
       api.getBalances({ snapshot_date: snapshotDate.value }),
       api.getHoldings({ snapshot_date: snapshotDate.value }),
-      api.getLiabilities({ snapshot_date: snapshotDate.value }),
     ])
     balances.value    = bals
     holdings.value    = holds
-    liabilities.value = liabs
 
     // Auto-carry-forward stable assets (retirement, real_estate, vehicle, gold, other)
     // if any carry-forward class is missing and a prior month exists
@@ -757,7 +690,6 @@ function openForm(mode) {
   formError.value = ''
   editingId.value = null
   if (activeTab.value === 'cash') formMode.value = 'balance'
-  else if (activeTab.value === 'liabilities') formMode.value = 'liability'
   else formMode.value = 'holding'
   showForm.value = true
 }

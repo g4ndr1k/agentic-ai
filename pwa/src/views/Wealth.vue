@@ -134,14 +134,11 @@
         <div
           v-if="snap.total_liabilities_idr > 0"
           class="wealth-row wealth-row-liab"
-          @click="router.push({ path: '/holdings', query: { group: 'Liabilities' } })"
-          role="button"
         >
           <div class="wealth-row-header">
             <span class="wealth-icon">🔴</span>
             <span class="wealth-label">Liabilities</span>
             <span class="wealth-value text-expense">{{ fmt(snap.total_liabilities_idr) }}</span>
-            <span class="cat-drill-chevron">›</span>
           </div>
           <div v-if="liabSubs.length" class="grp-cats">
             <span v-for="s in liabSubs" :key="s.label" class="grp-cat-chip">
@@ -390,7 +387,7 @@ const momRows = computed(() => {
       isLiability: false,
     },
     {
-      icon: '🚗',
+      icon: '🟡',
       label: 'Physical Assets',
       prev: (p.vehicles_idr||0) + (p.gold_idr||0) + (p.other_assets_idr||0),
       curr: s.vehicles_idr + s.gold_idr + s.other_assets_idr,
@@ -455,7 +452,7 @@ const assetGroups = computed(() => {
       subs: [],
     },
     {
-      label: 'Physical Assets', icon: '🚗',
+      label: 'Physical Assets', icon: '🟡',
       total: s.vehicles_idr + s.gold_idr + s.other_assets_idr,
       subs: [
         s.vehicles_idr     > 0 && { label: 'Vehicles', total: s.vehicles_idr },

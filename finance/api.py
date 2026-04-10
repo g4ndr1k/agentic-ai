@@ -2590,6 +2590,61 @@ async def pdf_local_files(_auth=Depends(require_api_key)):
     return results
 
 
+@app.get("/api/pdf/local-workspace")
+async def pdf_local_workspace(_auth=Depends(require_api_key)):
+    """
+    List local PDFs together with their most recent processing attempt from the bridge.
+
+    Returns:
+      {
+        "files": [
+          {
+            "folder": "pdf_inbox",
+            "filename": "statement.pdf",
+            "size_kb": 123.4,
+            "mtime": 1712700000.0,
+            "last_processed_at": "2026-04-08T11:22:33+00:00" | null,
+            "last_status": "done" | "error" | "pending" | null,
+            "last_error": "..." | ""
+          }
+        ]
+      }
+    """
+    files = await pdf_local_files(_auth)
+
+    token = _read_bridge_token()
+    try:
+        jobs_res = await _asyncio.to_thread(_bridge_get, "/pdf/jobs?limit=200", token)
+        jobs = jobs_res.get("jobs", [])
+    except Exception as exc:
+        log.warning("Could not load bridge PDF job history: %s", exc)
+        jobs = []
+
+    latest_by_key: dict[tuple[str, str], dict] = {}
+    for job in jobs:
+        folder = str(job.get("folder", "")).strip()
+        filename = str(job.get("filename", "")).strip()
+        created_at = str(job.get("created_at", "")).strip()
+        if not folder or not filename or not created_at:
+            continue
+        key = (folder, filename)
+        current = latest_by_key.get(key)
+        if current is None or created_at > str(current.get("created_at", "")):
+            latest_by_key[key] = job
+
+    merged = []
+    for item in files:
+        job = latest_by_key.get((item["folder"], item["filename"]))
+        merged.append({
+            **item,
+            "last_processed_at": job.get("created_at") if job else None,
+            "last_status": job.get("status") if job else None,
+            "last_error": job.get("error", "") if job else "",
+        })
+
+    return {"files": merged}
+
+
 class _ProcessLocalReq(BaseModel):
     folder:   str   # "pdf_inbox" or "pdf_unlocked"
     filename: str

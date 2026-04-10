@@ -226,7 +226,7 @@ The system alerts on:
   - `scripts/seed_gold_holdings.py` — one-time (and repeatable) seeder for 14 Antam Logam Mulia gold bars in three weight classes (100 gr × 5, 50 gr × 5, 25 gr × 4). Fetches end-of-month XAU/IDR spot prices for every month from 2026-01 to today, inserts 3 `holdings` rows per month (`asset_class="gold"`, `institution="Physical"`), stores certificate numbers in `notes`. Supports `--dry-run`, `--owner`, `--from YYYY-MM`, `--db` flags. Re-running refreshes prices (ON CONFLICT DO UPDATE).
 - Stage 3 Vue 3 PWA additions (`pwa/`) — see §37
   - `pwa/src/views/Wealth.vue` — net worth dashboard: arrow month navigation, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, month-over-month movement card, AI explanation panel, Chart.js trend, "Refresh Snapshot" button, FAB to Assets
-  - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical/Liabilities), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 3-mode entry form (Balance / Holding / Liability), "Save Snapshot" button; ↺ inline refresh button in month-nav bar
+  - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 2-mode entry form (Balance / Holding), "Save Snapshot" button; ↺ inline refresh button in month-nav bar
   - `pwa/src/api/client.js` — extended with 13 new wealth API calls + `del()` helper
   - `pwa/src/router/index.js` — 2 new routes: `/wealth`, `/holdings`
   - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; 6-tab mobile nav and desktop sidebar
@@ -443,7 +443,7 @@ agentic-ai/
 │       └── views/
 │           ├── Dashboard.vue         # Month nav, summary cards, spending-by-group, Chart.js trend, owner table
 │           ├── Wealth.vue            # Net worth dashboard: arrow month nav, hero card, movement card, AI explanation, trend chart
-│           ├── Holdings.vue          # Asset manager: group tabs, snapshot date, FAB → 3-mode entry form (Balance/Holding/Liability)
+│           ├── Holdings.vue          # Asset manager: group tabs, snapshot date, FAB → 2-mode entry form (Balance/Holding)
 │           ├── GroupDrilldown.vue    # Level 1 drill-down: group → categories (amounts, tx count, mini bars)
 │           ├── CategoryDrilldown.vue # Level 2 drill-down: category → transactions + inline edit + breadcrumb
 │           ├── Transactions.vue      # Mobile expandable list + desktop table/detail workspace
@@ -3367,7 +3367,7 @@ Stage 3 extends the system into a full **Wealth Management dashboard** that trac
 ┌──────────────────────────────────────────────────────────────────┐
 │                   Vue 3 PWA                                       │
 │   /wealth    Wealth.vue   — hero, breakdown, explanation, chart   │
-│   /holdings  Holdings.vue — asset list, group tabs, entry modal   │
+│   /holdings  Holdings.vue — asset list, group tabs, asset entry modal │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -3506,12 +3506,12 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 ### `Wealth.vue` — Net Worth Dashboard (`/wealth`)
 
 - **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
-- **Hero card** — large Net Worth figure on dark gradient; MoM change with ▲/▼ indicator + percentage
+- **Hero card** — large Net Worth figure on dark gradient; MoM change with ▲/▼ indicator + percentage. January 2026 is treated as the start month and shows a non-comparison state instead of comparing against December 2025.
 - **Assets / Liabilities cards** — side-by-side summary grid
 - **Monthly Movement card** — deterministic month-over-month comparison rows for cash, investments, real estate, physical assets, liabilities, and net worth
 - **Asset group breakdown** — tappable rows per group (Cash & Liquid, Investments, Real Estate, Physical Assets) with bar, % of total, and sub-type chips; tapping navigates to `/holdings?group=…`
-- **Liabilities row** — shown when liabilities > 0; sub-chips list mortgage/CC/loans/taxes
-- **Net worth explanation panel** — above the chart, explains why monthly net worth changed. Loads in two phases: Phase 1 fetches summary + history plus the deterministic fallback and renders immediately; Phase 2 fetches `?ai=1` asynchronously when a previous month exists. First-month snapshots show a friendly non-comparison state instead of a blank panel.
+- **Liabilities row** — shown when liabilities > 0; sub-chips list mortgage/CC/loans/taxes. This row is informational only and no longer links into `/holdings`.
+- **Net worth explanation panel** — above the chart, explains why monthly net worth changed. Loads in two phases: Phase 1 fetches summary + history plus the deterministic fallback and renders immediately; Phase 2 fetches `?ai=1` asynchronously only when a prior comparison month exists and no cached AI result already matches the same comparison signature. First-month snapshots show a friendly non-comparison state instead of a blank panel.
 - **Interactive Ask AI follow-up** — suggested question chips plus a free-text input allow drill-down questions such as “What made Investments rise by Rp 1.7B?” and “Which cash accounts fell?”
 - **12-month trend chart** — Chart.js line chart of net worth in IDR millions, oldest-to-newest
 - **Refresh Snapshot button** — calls `POST /api/wealth/snapshot` for the selected date and reloads
@@ -3521,16 +3521,17 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 ### `Holdings.vue` — Asset Manager (`/holdings`)
 
 - **Month navigation** — `‹ Month Year ›` arrow buttons. Centre area also shows a `+` button to open an inline `<input type="month">` for jumping directly to any month.
-- **Group filter tabs** — All · 🏦 Cash · 📈 Investments · 🏠 Real Estate · 🚗 Physical · 🔴 Liabilities
+- **Group filter tabs** — All · 🏦 Cash · 📈 Investments · 🏠 Real Estate · 🟡 Physical
+- **Focused section banner** — when a single asset group is selected, an inline banner shows the current section and a `Back to Condensed` action to return to the `All` view
 - **Per-section item rows** — institution/name, sub-label (type · institution · maturity), IDR value, owner badge, ✕ delete button
 - **Non-IDR balance display** — USD (and other foreign currency) accounts show original amount + implied FX rate (e.g. `USD 67,672.74 · 16,779/USD`) beneath the IDR balance
 - **Government Bonds sub-group** — inside Investments, bonds parsed from Permata PDF are listed under a "🏛 Government Bonds" sub-header. Each row shows a green `.premium` or red `.discount` badge with the market price (e.g. `104.734` above par / `96.651` below par).
 - **Unrealised P&L** — shown on investment rows (green/red)
 - **Save Snapshot button** — calls `POST /api/wealth/snapshot` and shows success/error message inline
-- **FAB (+)** — opens bottom-sheet modal with 3-tab type selector:
+- **FAB (+)** — opens bottom-sheet modal with 2-tab type selector:
   - **Balance tab** — institution, account, account type (savings/checking/money market/physical cash), owner, balance IDR, notes
   - **Holding tab** — asset class dropdown (grouped by Investments/Real Estate/Physical Assets), name, ticker/ISIN, institution, owner, market value IDR, quantity, unit price, cost basis; bond-specific: maturity date + coupon rate
-  - **Liability tab** — type (mortgage/personal loan/credit card/taxes owed/other), name, institution, owner, balance IDR, due date, notes
+- **Scope** — `/holdings` is asset-only. Liabilities remain part of the wealth summary and net-worth calculations, but are no longer listed or edited in the asset manager UI.
 - **Desktop polish** — denser rows, wider modal sheet, and better use of horizontal space inside the desktop shell
 
 ### Navigation
@@ -3595,7 +3596,7 @@ Monthly wealth management cycle (1st–5th of each month):
 - [x] 4 new SQLite tables in `finance/db.py` (`account_balances`, `holdings`, `liabilities`, `net_worth_snapshots`)
 - [x] 15 wealth API endpoints in `finance/api.py` (full CRUD for all 3 asset tables + snapshot generation + history + summary + explanation + follow-up Q&A)
 - [x] `pwa/src/views/Wealth.vue` — net worth dashboard with `‹ Month Year ›` arrow navigation, hero card, asset breakdown, local-AI explanation panel, interactive Ask AI follow-up flow, Chart.js trend, and snapshot button
-- [x] `pwa/src/views/Holdings.vue` — asset manager with arrow navigation, group tabs, non-IDR FX display, Government Bonds sub-group, per-item delete, FAB → 3-mode modal form
+- [x] `pwa/src/views/Holdings.vue` — asset manager with arrow navigation, group tabs, non-IDR FX display, Government Bonds sub-group, per-item delete, focused-section banner, FAB → 2-mode modal form
 - [x] `pwa/src/api/client.js` — wealth API calls for CRUD, snapshots, history, summary, explanation, follow-up Q&A, and `del()` helper
 - [x] `pwa/src/router/index.js` — `/wealth` and `/holdings` routes
 - [x] `pwa/src/App.vue` — shell switcher for mobile and desktop layouts; route-aware header title; manual Desktop View override
