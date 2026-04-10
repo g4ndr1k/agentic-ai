@@ -161,6 +161,26 @@ def _previous_year_month(year: int, month: int) -> tuple[int, int]:
     return (year, month - 1)
 
 
+MIN_COMPARISON_YEAR = 2026
+MIN_COMPARISON_MONTH = 1
+
+
+def _is_first_comparison_month(year: int, month: int) -> bool:
+    return year == MIN_COMPARISON_YEAR and month == MIN_COMPARISON_MONTH
+
+
+def _comparison_period_started(year: int, month: int) -> bool:
+    return (year, month) > (MIN_COMPARISON_YEAR, MIN_COMPARISON_MONTH)
+
+
+def _snapshot_date_allows_comparison(snapshot_date: str) -> bool:
+    key = (snapshot_date or "")[:7]
+    if not key or "-" not in key:
+        return False
+    year, month = key.split("-", 1)
+    return _comparison_period_started(int(year), int(month))
+
+
 def _get_monthly_summary_data(conn: sqlite3.Connection, year: int, month: int) -> dict:
     if not (1 <= month <= 12):
         raise HTTPException(400, f"month must be 1–12, got {month}")
@@ -472,6 +492,8 @@ def _build_monthly_flow_explanation(
     use_ai: bool = False,
 ) -> dict:
     curr = _get_monthly_summary_data(conn, year, month)
+    if not _comparison_period_started(year, month):
+        return {"available": False, "reason": "no_previous_month", "period": curr["period"]}
     prev_year, prev_month = _previous_year_month(year, month)
     prev = _get_monthly_summary_data(conn, prev_year, prev_month)
     fallback = _monthly_flow_explanation_fallback(curr, prev)
@@ -485,6 +507,224 @@ def _build_monthly_flow_explanation(
     except Exception as exc:
         log.warning("Unexpected monthly flow explanation error, using fallback: %s", exc)
         return fallback
+
+
+def _fetch_monthly_label_amounts(
+    conn: sqlite3.Connection,
+    year: int,
+    month: int,
+    *,
+    positive: bool,
+) -> list[dict]:
+    comparator = ">" if positive else "<"
+    rows = conn.execute(
+        f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(merchant), ''), NULLIF(TRIM(raw_description), ''), 'Unknown') AS label,
+            SUM(CASE WHEN amount {comparator} 0 THEN ABS(amount) ELSE 0 END) AS total_amount
+        FROM transactions
+        WHERE strftime('%Y', date) = ?
+          AND strftime('%m', date) = ?
+          AND amount {comparator} 0
+          AND (category IS NULL OR category NOT IN ('Transfer','Adjustment'))
+        GROUP BY label
+        HAVING ABS(total_amount) >= 0.5
+        ORDER BY total_amount DESC, label
+        """,
+        (str(year), f"{month:02d}"),
+    ).fetchall()
+    return [{"label": row["label"], "amount": float(row["total_amount"] or 0)} for row in rows]
+
+
+def _diff_monthly_amount_maps(curr_rows: list[dict], prev_rows: list[dict]) -> list[dict]:
+    curr_map = {row["label"]: float(row.get("amount", 0) or 0) for row in curr_rows}
+    prev_map = {row["label"]: float(row.get("amount", 0) or 0) for row in prev_rows}
+    out: list[dict] = []
+    for label in sorted(set(curr_map) | set(prev_map)):
+        curr_amount = curr_map.get(label, 0.0)
+        prev_amount = prev_map.get(label, 0.0)
+        delta = curr_amount - prev_amount
+        if abs(delta) < 0.5:
+            continue
+        out.append({
+            "label": label,
+            "prev": prev_amount,
+            "curr": curr_amount,
+            "delta": delta,
+        })
+    return sorted(out, key=lambda row: abs(row["delta"]), reverse=True)
+
+
+def _build_monthly_flow_question_context(conn: sqlite3.Connection, year: int, month: int) -> dict:
+    curr = _get_monthly_summary_data(conn, year, month)
+    if not _comparison_period_started(year, month):
+        return {"available": False, "reason": "no_previous_month", "period": curr["period"]}
+    prev_year, prev_month = _previous_year_month(year, month)
+    prev = _get_monthly_summary_data(conn, prev_year, prev_month)
+
+    expense_item_diffs = _diff_monthly_amount_maps(
+        _fetch_monthly_label_amounts(conn, year, month, positive=False),
+        _fetch_monthly_label_amounts(conn, prev_year, prev_month, positive=False),
+    )
+    income_item_diffs = _diff_monthly_amount_maps(
+        _fetch_monthly_label_amounts(conn, year, month, positive=True),
+        _fetch_monthly_label_amounts(conn, prev_year, prev_month, positive=True),
+    )
+
+    category_deltas = _monthly_flow_category_deltas(curr, prev)
+    expense_category_deltas = [row for row in category_deltas if row["delta"] > 0]
+    spending_relief_deltas = [row for row in category_deltas if row["delta"] < 0]
+
+    income_categories_curr = [
+        {"label": row["category"], "amount": float(row["amount"] or 0)}
+        for row in curr["by_category"]
+        if row["amount"] > 0 and row["category"] not in {"Transfer", "Adjustment", "Uncategorised"}
+    ]
+    income_categories_prev = [
+        {"label": row["category"], "amount": float(row["amount"] or 0)}
+        for row in prev["by_category"]
+        if row["amount"] > 0 and row["category"] not in {"Transfer", "Adjustment", "Uncategorised"}
+    ]
+    income_category_deltas = _diff_monthly_amount_maps(income_categories_curr, income_categories_prev)
+
+    return {
+        "available": True,
+        "current_period": curr["period"],
+        "previous_period": prev["period"],
+        "summary_rows": _monthly_flow_delta_rows(curr, prev),
+        "category_deltas": category_deltas,
+        "expense_category_deltas": expense_category_deltas,
+        "spending_relief_deltas": spending_relief_deltas,
+        "income_category_deltas": income_category_deltas,
+        "expense_item_diffs": expense_item_diffs,
+        "income_item_diffs": income_item_diffs,
+    }
+
+
+def _fallback_monthly_flow_question_answer(question: str, context: dict) -> dict:
+    q = (question or "").lower()
+    if any(term in q for term in ("income", "salary", "bonus", "revenue", "earned")):
+        candidates = context["income_item_diffs"] or context["income_category_deltas"]
+        title = "Income drivers"
+    elif any(term in q for term in ("shopping", "spend", "spending", "expense", "category")):
+        candidates = (
+            context["expense_item_diffs"]
+            or context["expense_category_deltas"]
+            or context["category_deltas"]
+        )
+        title = "Spending drivers"
+    elif any(term in q for term in ("top item", "item-level", "biggest", "largest", "what changed")):
+        candidates = sorted(
+            context["expense_item_diffs"] + context["income_item_diffs"],
+            key=lambda row: abs(row["delta"]),
+            reverse=True,
+        )
+        title = "Top item-level changes"
+    else:
+        candidates = sorted(
+            context["expense_item_diffs"]
+            + context["income_item_diffs"]
+            + context["category_deltas"],
+            key=lambda row: abs(row["delta"]),
+            reverse=True,
+        )
+        title = "Top drivers"
+
+    top = candidates[:5]
+    if not top:
+        return {
+            "available": True,
+            "source": "fallback",
+            "model": None,
+            "title": title,
+            "answer": "I could not find any month-over-month detail rows for that question in the selected monthly trend.",
+            "bullets": [],
+            "references": [],
+        }
+
+    bullets = []
+    references = []
+    for row in top:
+        direction = "up" if row["delta"] > 0 else "down"
+        bullets.append(
+            f"{row['label']} was {direction} {_fmt_idr_compact(abs(row['delta']))} "
+            f"from {_fmt_idr_compact(row['prev'])} to {_fmt_idr_compact(row['curr'])}."
+        )
+        references.append(row["label"])
+
+    return {
+        "available": True,
+        "source": "fallback",
+        "model": None,
+        "title": title,
+        "answer": (
+            f"Here are the biggest month-over-month changes I found from "
+            f"{context['previous_period']} to {context['current_period']} for that question."
+        ),
+        "bullets": bullets,
+        "references": references,
+    }
+
+
+def _ask_monthly_flow_question_with_ollama(question: str, context: dict, history: list[dict]) -> dict:
+    compact_context = {
+        "current_period": context["current_period"],
+        "previous_period": context["previous_period"],
+        "summary_rows": context["summary_rows"],
+        "top_expense_category_deltas": context["expense_category_deltas"][:10],
+        "top_spending_relief_deltas": context["spending_relief_deltas"][:10],
+        "top_income_category_deltas": context["income_category_deltas"][:10],
+        "top_expense_item_diffs": context["expense_item_diffs"][:12],
+        "top_income_item_diffs": context["income_item_diffs"][:12],
+    }
+    prompt = (
+        "You answer follow-up questions about a user's monthly cash-flow change using only provided month-over-month data.\n"
+        "Return JSON only with keys: title, answer, bullets, references.\n"
+        "Rules:\n"
+        "- answer: 2 to 4 sentences.\n"
+        "- bullets: array of 2 to 5 short factual bullets with numbers when helpful.\n"
+        "- references: array of categories or item names you relied on.\n"
+        "- If the user asks what caused a rise or fall, name the biggest month-over-month drivers.\n"
+        "- Do not invent transactions or reasons beyond the data.\n\n"
+        f"Conversation history: {json.dumps(history[-4:], ensure_ascii=True)}\n"
+        f"Question: {question}\n"
+        f"Context JSON: {json.dumps(compact_context, ensure_ascii=True)}"
+    )
+    payload = json.dumps({
+        "model": _ollama_cfg.model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+            "num_predict": 450,
+        },
+    }).encode()
+    req = urllib.request.Request(
+        f"{_ollama_cfg.host.rstrip('/')}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=_ollama_cfg.timeout_seconds) as resp:
+        data = json.loads(resp.read())
+
+    raw = (data.get("response") or "").strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("No JSON object in Ollama response")
+    parsed = json.loads(raw[start:end + 1])
+
+    bullets = parsed.get("bullets")
+    references = parsed.get("references")
+    return {
+        "available": True,
+        "source": "ollama",
+        "model": _ollama_cfg.model,
+        "title": str(parsed.get("title") or "AI explanation").strip()[:80],
+        "answer": str(parsed.get("answer") or "").strip(),
+        "bullets": [str(item).strip() for item in bullets if str(item).strip()][:5] if isinstance(bullets, list) else [],
+        "references": [str(item).strip() for item in references if str(item).strip()][:8] if isinstance(references, list) else [],
+    }
 
 
 def _wealth_delta_rows(curr: dict, prev: dict) -> list[dict]:
@@ -662,6 +902,17 @@ def _fetch_snapshot_detail_rows(
     return ([_row(r) for r in balances], [_row(r) for r in holdings], [_row(r) for r in liabilities])
 
 
+def _get_previous_month_snapshot(conn: sqlite3.Connection, snapshot_date: str):
+    if not _snapshot_date_allows_comparison(snapshot_date):
+        return None
+    return conn.execute(
+        "SELECT * FROM net_worth_snapshots "
+        "WHERE snapshot_date < ? AND strftime('%Y-%m', snapshot_date) < strftime('%Y-%m', ?) "
+        "ORDER BY snapshot_date DESC LIMIT 1",
+        (snapshot_date, snapshot_date),
+    ).fetchone()
+
+
 def _diff_named_rows(
     curr_rows: list[dict],
     prev_rows: list[dict],
@@ -709,10 +960,7 @@ def _build_wealth_question_context(conn: sqlite3.Connection, snapshot_date: Opti
     if not curr:
         return {"available": False, "reason": "no_snapshot"}
 
-    prev = conn.execute(
-        "SELECT * FROM net_worth_snapshots WHERE snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1",
-        (curr["snapshot_date"],),
-    ).fetchone()
+    prev = _get_previous_month_snapshot(conn, curr["snapshot_date"])
     if not prev:
         return {"available": False, "reason": "no_previous_month", "snapshot_date": curr["snapshot_date"]}
 
@@ -897,10 +1145,7 @@ def _build_wealth_explanation(conn: sqlite3.Connection, snapshot_date: Optional[
     if not curr:
         return {"available": False, "reason": "no_snapshot"}
 
-    prev = conn.execute(
-        "SELECT * FROM net_worth_snapshots WHERE snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1",
-        (curr["snapshot_date"],),
-    ).fetchone()
+    prev = _get_previous_month_snapshot(conn, curr["snapshot_date"])
     if not prev:
         return {"available": False, "reason": "no_previous_month", "snapshot_date": curr["snapshot_date"]}
 
@@ -945,6 +1190,11 @@ class CategoryOverrideRequest(BaseModel):
 
 class WealthQuestionRequest(BaseModel):
     snapshot_date: Optional[str] = None
+    question: str
+    history: list[dict] = []
+
+
+class MonthlyFlowQuestionRequest(BaseModel):
     question: str
     history: list[dict] = []
 
@@ -1188,6 +1438,27 @@ def get_monthly_flow_explanation(year: int, month: int, ai: bool = Query(False))
     """
     with _db() as conn:
         return _build_monthly_flow_explanation(conn, year, month, use_ai=ai)
+
+
+@app.post("/api/summary/{year}/{month}/explanation/query", dependencies=[Depends(require_api_key)])
+def query_monthly_flow_explanation(year: int, month: int, req: MonthlyFlowQuestionRequest):
+    with _db() as conn:
+        context = _build_monthly_flow_question_context(conn, year, month)
+    if not context.get("available"):
+        return context
+
+    fallback = _fallback_monthly_flow_question_answer(req.question, context)
+    try:
+        answer = _ask_monthly_flow_question_with_ollama(req.question, context, req.history)
+        if not answer.get("answer"):
+            return fallback
+        return answer
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        log.info("Monthly flow question falling back to deterministic answer: %s", exc)
+        return fallback
+    except Exception as exc:
+        log.warning("Unexpected monthly flow question error, using fallback: %s", exc)
+        return fallback
 
 
 # ── /api/review-queue ─────────────────────────────────────────────────────────
@@ -2034,12 +2305,12 @@ def create_snapshot(req: SnapshotRequest):
 
         net_worth = total_assets - total_liabilities
 
-        # MoM: previous snapshot
-        prev = conn.execute(
-            "SELECT net_worth_idr FROM net_worth_snapshots "
-            "WHERE snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1",
-            (sd,),
-        ).fetchone()
+        # MoM: most recent snapshot in a PRIOR calendar month.
+        # Using the immediately preceding snapshot would compare against intermediate
+        # savings/CC-statement-date snapshots that have partial data (e.g. assets=0),
+        # producing meaningless deltas.  Restricting to a different YYYY-MM ensures
+        # the baseline is always the last complete snapshot of the previous month.
+        prev = _get_previous_month_snapshot(conn, sd)
         mom = net_worth - (prev["net_worth_idr"] if prev else 0.0)
 
         conn.execute(

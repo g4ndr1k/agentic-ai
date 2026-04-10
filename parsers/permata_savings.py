@@ -237,9 +237,11 @@ def _parse_sections(
                     current_product = raw
                 continue
 
-            # Currency
+            # Currency — only update while account section is still active
+            # (section_done=True means the Total line was already seen;
+            #  bond / investment sections that follow must not override savings currency)
             curr_m = _CURRENCY.match(line_s)
-            if curr_m and current_acct:
+            if curr_m and current_acct and not section_done:
                 current_currency = curr_m.group(1)
                 continue
 

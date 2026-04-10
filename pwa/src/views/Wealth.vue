@@ -48,11 +48,14 @@
       <div class="nw-hero">
         <div class="nw-hero-label">Net Worth · {{ fmtDateChip(snap.snapshot_date) }}</div>
         <div class="nw-hero-value">{{ fmt(snap.net_worth_idr) }}</div>
-        <div class="nw-hero-mom" :class="snap.mom_change_idr >= 0 ? 'positive' : 'negative'">
+        <div v-if="wealthComparisonAvailable" class="nw-hero-mom" :class="snap.mom_change_idr >= 0 ? 'positive' : 'negative'">
           <span>{{ snap.mom_change_idr >= 0 ? '▲' : '▼' }}</span>
           {{ fmt(Math.abs(snap.mom_change_idr)) }}
           <span class="mom-pct" v-if="prevNetWorth > 0">({{ momPct }}%)</span>
           <span class="mom-label">vs prev month</span>
+        </div>
+        <div v-else class="nw-hero-mom neutral">
+          <span class="mom-label">Tracking starts in Jan 2026</span>
         </div>
       </div>
 
@@ -156,6 +159,7 @@
           Generating trend analysis…
         </div>
         <div v-else-if="explanation?.available" class="trend-explanation">
+          <div v-if="explanationPeriodLabel" class="trend-explanation-period">{{ explanationPeriodLabel }}</div>
           <div class="trend-explanation-headline">{{ explanation.headline }}</div>
           <div class="trend-explanation-summary">{{ explanation.summary }}</div>
           <div v-if="explanation.drivers?.length" class="trend-driver-list">
@@ -237,6 +241,8 @@ import { api } from '../api/client.js'
 import { useLayout } from '../composables/useLayout.js'
 import { formatIDR } from '../utils/currency.js'
 
+const wealthExplanationAiCache = new Map()
+
 const router = useRouter()
 const { isDesktop } = useLayout()
 
@@ -260,6 +266,21 @@ const selectedDate = ref('')
 const trendRef = ref(null)
 let trendChart = null
 let loadToken = 0
+
+function buildWealthExplanationSignature(explanation) {
+  if (!explanation?.available) return ''
+  return JSON.stringify({
+    current_snapshot_date: explanation.current_snapshot_date || '',
+    previous_snapshot_date: explanation.previous_snapshot_date || '',
+    net_change_idr: Math.round(explanation.net_change_idr || 0),
+    rows: (explanation.rows || []).map(row => ({
+      label: row.label,
+      curr: Math.round(row.curr || 0),
+      prev: Math.round(row.prev || 0),
+      delta: Math.round(row.delta || 0),
+    })),
+  })
+}
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 function fmt(n) { return formatIDR(n ?? 0) }
@@ -308,8 +329,13 @@ function fmtM(n) {
 }
 
 // ── Computed ──────────────────────────────────────────────────────────────────
+const wealthComparisonAvailable = computed(() => {
+  const month = monthKey(snap.value?.snapshot_date)
+  return Boolean(month && month > '2026-01')
+})
+
 const prevNetWorth = computed(() => {
-  if (!snap.value || !history.value.length) return 0
+  if (!wealthComparisonAvailable.value || !snap.value || !history.value.length) return 0
   const idx = history.value.findIndex(h => h.snapshot_date === snap.value.snapshot_date)
   return idx > 0 ? history.value[idx - 1].net_worth_idr : 0
 })
@@ -325,7 +351,7 @@ const momPct = computed(() => {
 // An extra guard ensures we never compare a month to itself (which would
 // happen if two snapshots share a calendar month).
 const prevSnap = computed(() => {
-  if (!snap.value || !history.value.length) return null
+  if (!wealthComparisonAvailable.value || !snap.value || !history.value.length) return null
   const currentMonth = monthKey(snap.value.snapshot_date)
   const idx = history.value.findIndex(h => monthKey(h.snapshot_date) === currentMonth)
   if (idx <= 0) return null
@@ -484,6 +510,14 @@ const explanationEmptyMessage = computed(() => {
   return ''
 })
 
+const explanationPeriodLabel = computed(() => {
+  if (!explanation.value?.available) return ''
+  const prev = explanation.value.previous_snapshot_date
+  const curr = explanation.value.current_snapshot_date
+  if (!prev || !curr) return ''
+  return `${fmtDateChip(prev)} -> ${fmtDateChip(curr)}`
+})
+
 // ── Chart ─────────────────────────────────────────────────────────────────────
 function destroyChart() {
   if (trendChart) { trendChart.destroy(); trendChart = null }
@@ -572,15 +606,29 @@ async function load() {
   }
 
   const dateForExplanation = selectedDate.value
+  if (monthKey(dateForExplanation) <= '2026-01') {
+    explanation.value = { available: false, reason: 'no_previous_month', snapshot_date: dateForExplanation || '' }
+    explanationLoading.value = false
+    return
+  }
   api.wealthExplanation({ snapshot_date: dateForExplanation || undefined })
     .then(res => {
       if (token !== loadToken || selectedDate.value !== dateForExplanation) return null
       explanation.value = res
       if (!res?.available) return null
+      if (Math.abs(res.net_change_idr || 0) < 0.5) return null
+      const signature = buildWealthExplanationSignature(res)
+      const cachedAi = wealthExplanationAiCache.get(signature)
+      if (cachedAi) {
+        explanation.value = cachedAi
+        return null
+      }
       return api.wealthExplanation({ snapshot_date: dateForExplanation || undefined, ai: true })
     })
     .then(res => {
       if (!res || token !== loadToken || selectedDate.value !== dateForExplanation) return
+      const signature = buildWealthExplanationSignature(res)
+      if (signature) wealthExplanationAiCache.set(signature, res)
       explanation.value = res
     })
     .catch(() => {
@@ -781,6 +829,14 @@ onUnmounted(destroyChart)
   border: 1px solid rgba(30, 58, 95, 0.1);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(30, 58, 95, 0.04), rgba(30, 58, 95, 0.02));
+}
+.trend-explanation-period {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 .trend-explanation-headline {
   font-size: 13px;

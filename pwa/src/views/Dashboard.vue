@@ -126,10 +126,56 @@
                 {{ driver }}
               </div>
             </div>
+            <div class="trend-ai">
+              <div class="trend-ai-label">Ask AI to explain further</div>
+              <div v-if="trendSuggestedQuestions.length" class="trend-suggestion-list">
+                <button
+                  v-for="question in trendSuggestedQuestions"
+                  :key="question"
+                  class="trend-suggestion-chip"
+                  @click="askTrendFollowUp(question)"
+                  :disabled="trendAskingAi"
+                >
+                  {{ question }}
+                </button>
+              </div>
+              <div class="trend-ask-row">
+                <input
+                  v-model="trendFollowUpQuestion"
+                  class="form-input trend-ask-input"
+                  placeholder="Ask about the Shopping increase or income drop..."
+                  @keydown.enter.prevent="submitTrendFollowUp"
+                />
+                <button
+                  class="btn btn-primary btn-sm"
+                  @click="submitTrendFollowUp"
+                  :disabled="trendAskingAi || !trendFollowUpQuestion.trim()"
+                >
+                  {{ trendAskingAi ? 'Asking…' : 'Ask' }}
+                </button>
+              </div>
+              <div v-if="trendQaHistory.length" class="trend-qa-list">
+                <div v-for="(item, idx) in trendQaHistory" :key="idx" class="trend-qa-item">
+                  <div class="trend-qa-question">{{ item.question }}</div>
+                  <div v-if="item.answer?.title" class="trend-qa-answer-title">{{ item.answer.title }}</div>
+                  <div class="trend-qa-answer">{{ item.answer?.answer }}</div>
+                  <div v-if="item.answer?.bullets?.length" class="trend-qa-bullets">
+                    <div v-for="bullet in item.answer.bullets" :key="bullet" class="trend-qa-bullet">{{ bullet }}</div>
+                  </div>
+                  <div v-if="item.answer?.references?.length" class="trend-qa-refs">
+                    Based on: {{ item.answer.references.join(', ') }}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-else-if="trendExplanationLoading" class="trend-explanation-loading">
             <span class="spinner spinner-sm"></span>
             Building monthly trend analysis…
+          </div>
+          <div v-else-if="trendExplanationEmptyMessage" class="trend-explanation trend-explanation-empty">
+            <div class="trend-explanation-headline">{{ trendExplanationEmptyTitle }}</div>
+            <div class="trend-explanation-summary">{{ trendExplanationEmptyMessage }}</div>
           </div>
           <div v-if="!yearData" class="loading" style="padding:20px"><div class="spinner"></div></div>
           <div v-else class="chart-wrap">
@@ -173,11 +219,36 @@ import { useLayout } from '../composables/useLayout.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { formatIDR } from '../utils/currency.js'
 
+const flowExplanationAiCache = new Map()
+
 const router = useRouter()
 const store  = useFinanceStore()
 const { isDesktop } = useLayout()
 const trendRef = ref(null)
 let trendChart = null
+
+function buildFlowExplanationSignature(explanation) {
+  if (!explanation?.available) return ''
+  return JSON.stringify({
+    current_period: explanation.current_period || '',
+    previous_period: explanation.previous_period || '',
+    net_change: Math.round(explanation.net_change || 0),
+    income_change: Math.round(explanation.income_change || 0),
+    expense_change: Math.round(explanation.expense_change || 0),
+    rows: (explanation.rows || []).map(row => ({
+      label: row.label,
+      curr: Math.round(row.curr || 0),
+      prev: Math.round(row.prev || 0),
+      delta: Math.round(row.delta || 0),
+    })),
+    category_deltas: (explanation.category_deltas || []).map(row => ({
+      label: row.label,
+      curr: Math.round(row.curr || 0),
+      prev: Math.round(row.prev || 0),
+      delta: Math.round(row.delta || 0),
+    })),
+  })
+}
 
 const summary  = ref(null)
 const yearData = ref(null)
@@ -185,6 +256,9 @@ const loading  = ref(false)
 const error    = ref(null)
 const trendExplanation = ref(null)
 const trendExplanationLoading = ref(false)
+const trendFollowUpQuestion = ref('')
+const trendAskingAi = ref(false)
+const trendQaHistory = ref([])
 let loadToken = 0
 
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -259,6 +333,34 @@ const spendingGroups = computed(() => {
     }))
 })
 
+const trendSuggestedQuestions = computed(() => {
+  if (!trendExplanation.value?.available) return []
+  const categoryDeltas = trendExplanation.value.category_deltas || []
+  const rows = trendExplanation.value.rows || []
+  const topSpendUp = categoryDeltas.find(row => row.delta > 0)
+  const topSpendDown = categoryDeltas.find(row => row.delta < 0)
+  const incomeRow = rows.find(row => row.label === 'Income')
+
+  return [
+    topSpendUp ? `What made ${topSpendUp.label} spending rise by ${fmtCompact(topSpendUp.delta)}?` : null,
+    'Show the top item-level changes this month',
+    incomeRow?.delta < 0 ? `Why did income fall by ${fmtCompact(incomeRow.delta)}?` : null,
+    topSpendDown ? `What changed in ${topSpendDown.label} after it fell by ${fmtCompact(topSpendDown.delta)}?` : null,
+  ].filter(Boolean)
+})
+
+const trendExplanationEmptyTitle = computed(() => {
+  if (trendExplanation.value?.reason === 'no_previous_month') return 'AI analysis starts next month'
+  return ''
+})
+
+const trendExplanationEmptyMessage = computed(() => {
+  if (trendExplanation.value?.reason === 'no_previous_month') {
+    return `${monthLabel.value} is the first available flows month, so there is no prior month to compare against yet.`
+  }
+  return ''
+})
+
 // ── Formatters ───────────────────────────────────────────────────────────────
 function fmt(n) {
   return formatIDR(n)
@@ -266,6 +368,14 @@ function fmt(n) {
 
 function fmtShort(n) {
   return formatIDR(n)
+}
+
+function fmtCompact(n) {
+  const abs = Math.abs(n ?? 0)
+  if (abs >= 1_000_000_000) return `Rp ${(abs / 1_000_000_000).toFixed(1)}B`
+  if (abs >= 1_000_000) return `Rp ${(abs / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `Rp ${(abs / 1_000).toFixed(0)}K`
+  return `Rp ${Math.round(abs).toLocaleString()}`
 }
 
 function catIcon(name) {
@@ -319,6 +429,9 @@ async function load() {
   error.value   = null
   trendExplanation.value = null
   trendExplanationLoading.value = true
+  trendAskingAi.value = false
+  trendFollowUpQuestion.value = ''
+  trendQaHistory.value = []
   try {
     const [s, y] = await Promise.all([
       api.summaryMonth(store.selectedYear, store.selectedMonth),
@@ -338,20 +451,80 @@ async function load() {
     if (token === loadToken) loading.value = false
   }
 
+  if (store.selectedYear === 2026 && store.selectedMonth === 1) {
+    trendExplanation.value = { available: false, reason: 'no_previous_month', period: '2026-01' }
+    trendExplanationLoading.value = false
+    return
+  }
+
   api.summaryExplanation(store.selectedYear, store.selectedMonth)
     .then(res => {
       if (token !== loadToken) return
       trendExplanation.value = res
+      if (!res?.available) return null
+      if (Math.abs(res.net_change || 0) < 0.5) return null
+      const signature = buildFlowExplanationSignature(res)
+      const cachedAi = flowExplanationAiCache.get(signature)
+      if (cachedAi) {
+        trendExplanation.value = cachedAi
+        return null
+      }
       return api.summaryExplanation(store.selectedYear, store.selectedMonth, { ai: true })
     })
     .then(res => {
       if (!res || token !== loadToken) return
+      const signature = buildFlowExplanationSignature(res)
+      if (signature) flowExplanationAiCache.set(signature, res)
       trendExplanation.value = res
     })
     .catch(() => {})
     .finally(() => {
       if (token === loadToken) trendExplanationLoading.value = false
     })
+}
+
+async function askTrendFollowUp(question) {
+  if (!question?.trim()) return
+  const requestYear = store.selectedYear
+  const requestMonth = store.selectedMonth
+  trendAskingAi.value = true
+  const pending = { question, answer: { title: '', answer: 'Thinking…', bullets: [], references: [] } }
+  trendQaHistory.value = [pending, ...trendQaHistory.value].slice(0, 4)
+  try {
+    const answer = await api.summaryExplanationQuery(requestYear, requestMonth, {
+      question,
+      history: trendQaHistory.value.slice(1).map(item => ({
+        question: item.question,
+        answer: item.answer?.answer || '',
+      })),
+    })
+    if (store.selectedYear !== requestYear || store.selectedMonth !== requestMonth) return
+    trendQaHistory.value[0] = { question, answer }
+    trendQaHistory.value = [...trendQaHistory.value]
+  } catch (e) {
+    if (store.selectedYear !== requestYear || store.selectedMonth !== requestMonth) return
+    trendQaHistory.value[0] = {
+      question,
+      answer: {
+        title: 'Unable to answer',
+        answer: e.message || 'The AI explainer could not answer that question right now.',
+        bullets: [],
+        references: [],
+      },
+    }
+    trendQaHistory.value = [...trendQaHistory.value]
+  } finally {
+    if (store.selectedYear === requestYear && store.selectedMonth === requestMonth) {
+      trendAskingAi.value = false
+    }
+  }
+}
+
+async function submitTrendFollowUp() {
+  const question = trendFollowUpQuestion.value.trim()
+  if (!question) return
+  trendFollowUpQuestion.value = ''
+  await askTrendFollowUp(question)
 }
 
 function renderChart() {
@@ -526,6 +699,115 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
   font-weight: 700;
 }
 
+.trend-ai {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.trend-ai-label {
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.trend-suggestion-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.trend-suggestion-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trend-suggestion-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.trend-ask-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.trend-ask-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.trend-qa-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.trend-qa-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.trend-qa-question {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.trend-qa-answer-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.trend-qa-answer {
+  color: var(--neutral);
+  line-height: 1.45;
+}
+
+.trend-qa-bullets {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.trend-qa-bullet {
+  position: relative;
+  padding-left: 14px;
+  color: var(--neutral);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.trend-qa-bullet::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.trend-qa-refs {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 @media (min-width: 1024px) {
   .summary-grid {
     grid-template-columns: repeat(4, 1fr);
@@ -533,6 +815,10 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
 
   .chart-wrap {
     height: 300px;
+  }
+
+  .trend-ask-row {
+    align-items: stretch;
   }
 }
 

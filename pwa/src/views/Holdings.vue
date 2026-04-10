@@ -12,6 +12,14 @@
       </div>
     </div>
 
+    <div v-if="activeTab !== 'all'" class="focus-banner">
+      <div class="focus-banner-copy">
+        <span class="focus-banner-title">{{ activeTabLabel }}</span>
+        <span class="focus-banner-sub">Expanded view</span>
+      </div>
+      <button class="focus-banner-btn" @click="activeTab = 'all'">Back to Condensed</button>
+    </div>
+
     <!-- Month navigation -->
     <div class="month-nav" style="padding:0 16px">
       <button class="nav-btn" @click="prevMonth" :disabled="isOldestDate">‹</button>
@@ -512,6 +520,9 @@ const GROUP_TO_TAB = {
 }
 
 const activeTab = ref(GROUP_TO_TAB[route.query.group] || 'all')
+const activeTabLabel = computed(() =>
+  TABS.find(tab => tab.key === activeTab.value)?.label || 'Section'
+)
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const snapshotDate    = ref('')            // YYYY-MM-DD, e.g. 2026-03-31
@@ -920,6 +931,47 @@ onMounted(async () => {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;
+}
+
+.focus-banner {
+  margin: 10px 16px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(30,58,95,0.05), rgba(255,255,255,0.92));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.focus-banner-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.focus-banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.focus-banner-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.focus-banner-btn {
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 /* ── Month navigation centre slot ────────────────────────────────────────────  */
