@@ -196,11 +196,11 @@ The system alerts on:
   - `finance/config.py` — loads `[finance]`, `[google_sheets]`, `[fastapi]`, `[ollama_finance]` sections from `settings.toml`
   - `finance/models.py` — `FinanceTransaction` dataclass, SHA-256 hash generation, XLSX date parser
   - `finance/sheets.py` — Google Sheets API v4 client: service-account auth (preferred) with personal OAuth fallback; read/write transactions, aliases, categories, currency hints, import log
-  - `finance/categorizer.py` — account-aware categorization engine: exact alias → contains alias → regex → Ollama AI suggestion → review queue flag, plus cross-account internal transfer matching
+  - `finance/categorizer.py` — account-aware categorization engine: exact alias → contains alias → regex → Ollama AI suggestion → review queue flag, plus cross-account internal transfer matching; filtered rules (owner/account) are sorted before generic rules so they always win on conflict
   - `finance/importer.py` — CLI entry point: reads `ALL_TRANSACTIONS.xlsx`, maps columns, deduplicates by hash, categorizes, batch-appends to Google Sheets; `--dry-run`, `--overwrite`, `--file`, `-v`
   - `finance/setup_sheets.py` — one-time Sheet initializer: creates tabs, writes formatted headers, seeds 22 default categories and 18 currency codes
-  - `finance/db.py` — SQLite schema (5 tables + 5 indexes), WAL mode, `open_db()` connection helper
-  - `finance/sync.py` — Sheets → SQLite sync engine: atomic DELETE + INSERT per table, hash deduplication, sync_log, `--status` CLI flag
+  - `finance/db.py` — SQLite schema (5 tables + 5 indexes), WAL mode, `open_db()` connection helper; `merchant_aliases` table includes `owner_filter` and `account_filter` columns (additive migration applied on first `open_db()` call)
+  - `finance/sync.py` — Sheets → SQLite sync engine: atomic DELETE + INSERT per table, hash deduplication, sync_log, `--status` CLI flag; reads Merchant Aliases columns A:G (including `owner_filter`/`account_filter`)
   - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, pipeline proxy endpoints, wealth APIs, CORS, SQLite `_db()` context manager; also mounts `pwa/dist/` at `/` when present
   - `finance/server.py` — uvicorn entry point: `python3 -m finance.server`; `--host`, `--port`, `--reload` overrides
   - `finance/Dockerfile` — `python:3.12-slim` image; installs google-auth, fastapi, uvicorn[standard], rapidfuzz, openpyxl; copies `pwa/dist/` for production static serving
@@ -1700,7 +1700,7 @@ Detection is automatic — the router (`parsers/router.py`) reads the first (and
 - Date format: `DD/MM` + year from `PERIODE` header
 - Number format: Western (e.g. `30,000,000.00`)
 - Debit rows identified by `DB` suffix
-- Multi-line transactions: continuation lines collected and merged into description
+- Multi-line transactions: continuation lines collected and merged into description; `TANGGAL :DD/MM` effective-date lines are handled specially — any text on the same extracted line after the date (e.g. `71201/BINUS S SIMP` for FTFVA virtual-account transactions) is salvaged into the description before the loop breaks
 - Totals verified against statement summary
 - Detection: bank name `BCA` + product name `TAHAPAN` (BCA's registered savings product)
 
@@ -2856,6 +2856,23 @@ Same tab, rows where `match_type = "contains"`. The alias is a substring that mu
 
 Same tab, rows where `match_type = "regex"`. Python regex with `re.IGNORECASE`. Handles merchants with variable date/reference suffixes.
 
+**Regex rule design patterns used in the current ruleset:**
+
+| Pattern | Example | Purpose |
+|---|---|---|
+| Grouped OR `(A\|B\|C)` | `(BINUS\|CLASTIFY)` | Match any of several merchant names in one rule |
+| `\d{4}` | `TRSF E-BANKING (CR\|DB) (0502\|0801\|1701\|3001)/FTSCY/WS9` | Match known internal BCA account codes; DB codes map to External Transfer, CR codes map to Internal Transfer |
+| `.*` for FTFVA VA numbers | `TRSF E-BANKING DB \d{4}/FTFVA/WS9.*SHOPEE` | Match virtual-account transactions regardless of the changing 4-digit bank code and VA sequence number |
+| `\d+` | `CICILAN BCA KE \d+ DARI \d+` | Match loan instalment rows with variable account numbers |
+
+**Rule maintenance script:** `scripts/cleanup_aliases.py` — rewrites the entire Merchant Aliases tab from a single Python list (`RULES`). Run with `--dry-run` to preview, then without to apply. Always follow with `python3 -m finance.sync`.
+
+**Current ruleset stats (as of 2026-04-11):** 94 rules — 40 regex, 47 contains, 6 exact (down from 224 fragile exact/contains rules). Key consolidations:
+- 15 exact FTSCY bank-code rules → 4 grouped regex rules
+- 6 hardcoded FTFVA virtual-account exact rules → 6 dynamic `\d{4}` regex rules
+- ~30 individual dining/shopping contains rules → 8 consolidated regex groups
+- 8 timestamp-heavy exact rules (with bank reference IDs and times) → short contains rules
+
 ### Layer 3 — Ollama AI suggestion
 
 Prompt structure sent to `gemma4:e4b` (Anthropic Claude as fallback):
@@ -3634,4 +3651,4 @@ Monthly wealth management cycle (1st–5th of each month):
 - [ ] Multi-owner net worth split (currently shown per-item via `owner` field; aggregated snapshot is household total)
 
 
-*Guide last updated 2026-04-08 · v3.5.1 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅*
+*Guide last updated 2026-04-11 · v3.5.2 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅*

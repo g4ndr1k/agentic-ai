@@ -245,7 +245,19 @@ def _parse_transactions(all_texts: list, account_number: str, year: str, month: 
                 # Stop if next line is another transaction or a structural/header line.
                 # Use _CONT_STOP_RE (not _SKIP_RE) so mixed-case merchant/payee names
                 # like "Pembayaran Klaim M" and "LIPPO GENERAL INSU" are still captured.
-                if _TX_ANCHOR.match(next_line) or _CONT_STOP_RE.match(next_line):
+                if _TX_ANCHOR.match(next_line):
+                    break
+                # TANGGAL :DD/MM marks the effective date but pdfplumber may place the
+                # remaining description (e.g. "71201/BINUS S SIMP") on the same extracted
+                # line.  Salvage anything that follows the date before breaking.
+                tanggal_m = re.match(r"^TANGGAL\s*:\d{2}/\d{2}\s*(.*)", next_line, re.IGNORECASE)
+                if tanggal_m:
+                    remainder = tanggal_m.group(1).strip()
+                    if remainder:
+                        continuation.append(remainder)
+                    j += 1
+                    break
+                if _CONT_STOP_RE.match(next_line):
                     break
                 continuation.append(next_line)
                 j += 1

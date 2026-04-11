@@ -46,13 +46,15 @@ CREATE INDEX IF NOT EXISTS idx_tx_owner     ON transactions(owner);
 CREATE INDEX IF NOT EXISTS idx_tx_hash      ON transactions(hash);
 
 CREATE TABLE IF NOT EXISTS merchant_aliases (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    merchant    TEXT    NOT NULL,
-    alias       TEXT    NOT NULL,
-    category    TEXT,
-    match_type  TEXT    DEFAULT 'exact',
-    added_date  TEXT,
-    synced_at   TEXT    NOT NULL
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    merchant       TEXT    NOT NULL,
+    alias          TEXT    NOT NULL,
+    category       TEXT,
+    match_type     TEXT    DEFAULT 'exact',
+    added_date     TEXT,
+    owner_filter   TEXT    DEFAULT '',
+    account_filter TEXT    DEFAULT '',
+    synced_at      TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -205,6 +207,14 @@ def open_db(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    # Additive migrations for columns added after initial schema deployment.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(merchant_aliases)")}
+    for col, definition in [
+        ("owner_filter",   "TEXT DEFAULT ''"),
+        ("account_filter", "TEXT DEFAULT ''"),
+    ]:
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE merchant_aliases ADD COLUMN {col} {definition}")
     conn.commit()
     return conn
 
