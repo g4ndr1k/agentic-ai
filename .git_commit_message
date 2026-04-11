@@ -1,0 +1,14 @@
+**Key changes across ~35 patches:**
+
+1. **Classifier**: Ollama-primary; Anthropic/Cloud fallbacks marked as disabled
+2. **Provider chain**: `ollama` only; `cloud_fallback_enabled` defaults to `false`
+3. **First-Time Setup**: Token generation now stores in Keychain, exports for Docker
+4. **Step 4**: Replaced ANTHROPIC_API_KEY .env instructions with Keychain storage
+5. **Project Layout**: Added `bridge/secret_manager.py`, `bridge/tcc_check.py`, `scripts/export-secrets-for-docker.py`, `scripts/setup-app.sh`, `app-bundle/AgenticAI.app/`
+6. **Bridge Startup**: Added TCC pre-flight check step, Keychain-first token loading
+7. **Bank Passwords**: Keychain-first with `*_password` accounts; `banks.toml` is Docker export artifact
+8. **Google Sheets Auth**: Keychain-first; secret files are Docker export artifacts
+9. **Security Notes**: Updated for Keychain-first, added hex-encoding note, Docker secret bridge note
+10. **Docker Compose**: Removed `ANTHROPIC_API_KEY` from agent environment
+11. **Python version**: Consistently 3.14 throughout (no more 3.13 references)
+12. **Section numbering**: Renumbered §21–§40 to accommodate new §21

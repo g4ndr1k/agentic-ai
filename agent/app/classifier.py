@@ -1,7 +1,6 @@
 import time
 import logging
 from app.providers.ollama_provider import OllamaProvider
-from app.providers.anthropic_provider import AnthropicProvider
 from app.schemas import Classification
 
 logger = logging.getLogger("agent.classifier")
@@ -66,10 +65,7 @@ class Classifier:
             if name == "ollama":
                 self.providers.append(OllamaProvider(settings))
             elif name == "anthropic":
-                if self.cloud_fallback_enabled:
-                    self.providers.append(AnthropicProvider(settings))
-                else:
-                    logger.info("Anthropic skipped: cloud_fallback_enabled=false")
+                logger.info("Anthropic provider removed — skipping")
 
     def classify(self, message: dict) -> Classification:
         # Domain allowlist pre-filter: skip senders not on the allowed list

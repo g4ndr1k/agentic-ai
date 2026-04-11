@@ -14,7 +14,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from bridge.config import load_settings, get_token_path, validate_settings
-from bridge.auth import load_token, is_authorized
+from bridge.auth import resolve_token, is_authorized
+from bridge.tcc_check import preflight_check, check_fda
 from bridge.state import BridgeState
 from bridge.rate_limit import RateLimiter
 from bridge.mail_source import MailSource
@@ -46,7 +47,21 @@ class AppContext:
     def __init__(self):
         self.settings = load_settings(str(SETTINGS_PATH))
         validate_settings(self.settings)
-        self.token = load_token(get_token_path(self.settings))
+
+        # ── TCC pre-flight: check Full Disk Access before anything else ────
+        tcc = preflight_check()
+        if not tcc["fda"]:
+            logger.error(
+                "Full Disk Access not granted to %s — bridge cannot read Mail DB. "
+                "Grant FDA: System Settings → Privacy & Security → Full Disk Access",
+                tcc["executable"],
+            )
+            raise RuntimeError(
+                f"Full Disk Access denied for {tcc['executable']}. "
+                "Grant in System Settings → Privacy & Security → Full Disk Access."
+            )
+
+        self.token = resolve_token(self.settings)
         self.state = BridgeState(DATA_DB)
         self.rate = RateLimiter(DATA_DB)
         self.mail = MailSource(self.settings)

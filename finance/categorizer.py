@@ -97,15 +97,10 @@ class Categorizer:
         ollama_host: str = "http://localhost:11434",
         ollama_model: str = "gemma4:e4b",
         ollama_timeout: int = 60,
-        anthropic_api_key: str = "",
-        anthropic_model: str = "claude-haiku-4-20250514",
     ):
         self.categories = categories or DEFAULT_CATEGORIES[:]
-        self.ollama_host = ollama_host.rstrip("/")
         self.ollama_model = ollama_model
         self.ollama_timeout = ollama_timeout
-        self.anthropic_api_key = anthropic_api_key
-        self.anthropic_model = anthropic_model
 
         # Layer 1: exact match  {UPPER_ALIAS: [(merchant, category, owner_filter, account_filter), ...]}
         self._exact: dict[str, list[tuple[str, str, str, str]]] = {}
@@ -240,9 +235,7 @@ class Categorizer:
                 log.debug("L2 regex: %r → %s / %s", desc, merchant, category)
                 return CategorizationResult(merchant, category, layer=2, confidence="auto")
 
-        # ── Layer 3: AI suggestion (Ollama primary, Claude fallback) ──────────
-        # Ollama runs locally with no API cost.  Claude is used as a fallback
-        # if an ANTHROPIC_API_KEY is configured and Ollama fails/is unavailable.
+        # ── Layer 3: AI suggestion (Ollama primary) ──────────
         suggestion = self._ollama_suggest(desc)
         if suggestion:
             merchant, category = suggestion
@@ -251,9 +244,7 @@ class Categorizer:
                 merchant, category, layer=3, confidence="suggested"
             )
 
-        suggestion = self._anthropic_suggest(desc)
-        if suggestion:
-            merchant, category = suggestion
+
             log.debug("L3 claude: %r → %s / %s", desc, merchant, category)
             return CategorizationResult(
                 merchant, category, layer=3, confidence="suggested"
@@ -364,52 +355,6 @@ class Categorizer:
             log.debug("Ollama bad response for %r: %s", desc, e)
         except Exception as e:
             log.debug("Ollama unexpected error for %r: %s", desc, e)
-
-        return None
-
-    def _anthropic_suggest(self, desc: str) -> Optional[tuple[str, str]]:
-        """
-        Ask Anthropic Claude for a (merchant, category) suggestion.
-        Primary Layer 3 provider when the API key is configured; Ollama is
-        the fallback for offline/air-gapped environments.
-        Returns None if the API key is missing, the call fails, or the
-        response cannot be parsed.
-        """
-        if not self.anthropic_api_key:
-            return None
-
-        prompt = self._build_prompt(desc)
-
-        payload = json.dumps({
-            "model": self.anthropic_model,
-            "max_tokens": 100,
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode()
-
-        try:
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=payload,
-                headers={
-                    "x-api-key": self.anthropic_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read())
-
-            raw_response = data["content"][0]["text"].strip()
-            return self._parse_ollama_response(raw_response, desc)
-
-        except urllib.error.URLError as e:
-            log.debug("Anthropic unreachable for %r: %s", desc, e)
-        except TimeoutError:
-            log.debug("Anthropic timed out for %r", desc)
-        except (json.JSONDecodeError, KeyError) as e:
-            log.debug("Anthropic bad response for %r: %s", desc, e)
-        except Exception as e:
-            log.debug("Anthropic unexpected error for %r: %s", desc, e)
 
         return None
 

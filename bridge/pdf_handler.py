@@ -188,7 +188,21 @@ def _run_verification(pdf_path: str, result, logs: list[str]) -> None:
 
 
 def get_bank_password(bank_name: str) -> str:
+    """Get a bank PDF password, checking Keychain or file based on settings."""
     key = (bank_name or "").lower().replace(" ", "_")
+    bp_source = _config.get("bank_passwords_source", "file")
+
+    if bp_source == "keychain":
+        try:
+            from bridge.secret_manager import resolve_bank_password
+            password = resolve_bank_password(bank_name)
+            if password:
+                return password
+        except ImportError:
+            pass
+        # Keychain miss — fall through to file
+
+    # File-based fallback
     passwords_file = _config.get("bank_passwords_file", "")
     if not passwords_file or not os.path.exists(passwords_file):
         return ""
@@ -758,7 +772,7 @@ def _upsert_cc_liability(result, logs: list):
                      account, owner, currency, balance, balance_idr,
                      due_date, notes, import_date)
                 VALUES (?, 'credit_card', ?, ?, ?, ?, 'IDR', ?, ?, ?, ?, ?)
-                ON CONFLICT(snapshot_date, liability_type, liability_name, owner)
+                ON CONFLICT(snapshot_date, liability_type, liability_name, owner, institution, account)
                 DO UPDATE SET
                     balance     = excluded.balance,
                     balance_idr = excluded.balance_idr,

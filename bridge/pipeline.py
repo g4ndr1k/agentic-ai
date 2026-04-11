@@ -9,8 +9,7 @@ from pathlib import Path
 from bridge.pdf_handler import run_pdf_pipeline_file
 from finance.categorizer import Categorizer
 from finance.config import (
-    get_anthropic_finance_config,
-    get_finance_config,
+get_finance_config,
     get_ollama_finance_config,
     get_sheets_config,
     load_config,
@@ -216,7 +215,6 @@ class PipelineRunner:
         finance_cfg = get_finance_config(cfg)
         sheets_cfg = get_sheets_config(cfg)
         ollama_cfg = get_ollama_finance_config(cfg)
-        anthropic_cfg = get_anthropic_finance_config(cfg)
 
         sheets = SheetsClient(sheets_cfg)
         categorizer = Categorizer(
@@ -225,8 +223,6 @@ class PipelineRunner:
             ollama_host=ollama_cfg.host,
             ollama_model=ollama_cfg.model,
             ollama_timeout=ollama_cfg.timeout_seconds,
-            anthropic_api_key=anthropic_cfg.api_key,
-            anthropic_model=anthropic_cfg.model,
         )
         return importer_run(
             xlsx_path=finance_cfg.xlsx_input,

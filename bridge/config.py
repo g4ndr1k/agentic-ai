@@ -1,3 +1,12 @@
+"""
+Settings loader and validator for the bridge.
+
+Supports both file-based and Keychain secret sources, controlled by
+settings.toml keys:
+  - auth.token_source = "file" | "keychain"
+  - auth.keychain_service = "agentic-ai-bridge"
+  - pdf.bank_passwords_source = "file" | "keychain"
+"""
 from pathlib import Path
 import tomllib
 
@@ -33,9 +42,34 @@ def validate_settings(settings: dict) -> None:
     if port is not None and not (1 <= port <= 65535):
         errors.append(f"Invalid bridge port: {port}")
 
-    token_path = Path(settings["auth"]["token_file"]).expanduser()
-    if not token_path.exists():
-        errors.append(f"Token file not found: {token_path}")
+    # Token source: "file" or "keychain"
+    auth = settings.get("auth", {})
+    token_source = auth.get("token_source", "file")
+    if token_source not in ("file", "keychain"):
+        errors.append(f"auth.token_source must be 'file' or 'keychain', got: {token_source}")
+
+    if token_source == "file":
+        # Validate file exists only when using file source
+        token_path = Path(auth["token_file"]).expanduser()
+        if not token_path.exists():
+            errors.append(f"Token file not found: {token_path}")
+    elif token_source == "keychain":
+        # Validate service name is set
+        if not auth.get("keychain_service"):
+            errors.append("auth.keychain_service must be set when token_source=keychain")
+
+    # Bank passwords source: "file" or "keychain"
+    pdf = settings.get("pdf", {})
+    bp_source = pdf.get("bank_passwords_source", "file")
+    if bp_source not in ("file", "keychain"):
+        errors.append(f"pdf.bank_passwords_source must be 'file' or 'keychain', got: {bp_source}")
+
+    if bp_source == "file":
+        bank_pw_file = pdf.get("bank_passwords_file", "")
+        if bank_pw_file:
+            bp_path = Path(bank_pw_file).expanduser()
+            if not bp_path.exists():
+                errors.append(f"Bank passwords file not found: {bp_path}")
 
     recipient = settings["imessage"].get("primary_recipient", "")
     if not recipient or "@" not in recipient:
@@ -65,7 +99,7 @@ def validate_settings(settings: dict) -> None:
     if max_cmds is not None and max_cmds < 1:
         errors.append(f"max_commands_per_hour must be >= 1: {max_cmds}")
 
-    valid_providers = {"ollama", "anthropic"}
+    valid_providers = {"ollama"}
     for p in settings["classifier"].get("provider_order", []):
         if p not in valid_providers:
             errors.append(f"Unknown provider: {p}")

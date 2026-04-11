@@ -40,7 +40,6 @@ from finance.config import (
     get_finance_config,
     get_sheets_config,
     get_ollama_finance_config,
-    get_anthropic_finance_config,
 )
 from finance.models import FinanceTransaction, parse_xlsx_date
 from finance.sheets import SheetsClient
@@ -426,7 +425,6 @@ Examples:
     finance_cfg   = get_finance_config(cfg)
     sheets_cfg    = get_sheets_config(cfg)
     ollama_cfg    = get_ollama_finance_config(cfg)
-    anthropic_cfg = get_anthropic_finance_config(cfg)
 
     xlsx_path = args.file or finance_cfg.xlsx_input
     if not os.path.exists(xlsx_path):
@@ -440,8 +438,6 @@ Examples:
         ollama_host=ollama_cfg.host,
         ollama_model=ollama_cfg.model,
         ollama_timeout=ollama_cfg.timeout_seconds,
-        anthropic_api_key=anthropic_cfg.api_key,
-        anthropic_model=anthropic_cfg.model,
     )
 
     stats = run(

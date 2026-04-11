@@ -14,7 +14,6 @@ services:
       GOOGLE_CREDENTIALS_FILE:  /app/secrets/google_credentials.json
       GOOGLE_TOKEN_FILE:        /app/secrets/google_token.json
       GOOGLE_SERVICE_ACCOUNT_FILE: /app/secrets/google_service_account.json
-      ANTHROPIC_API_KEY:        ${ANTHROPIC_API_KEY:-}
       FINANCE_API_KEY:          ${FINANCE_API_KEY}
       GOOGLE_SPREADSHEET_ID:    ${GOOGLE_SPREADSHEET_ID:-}
       OLLAMA_FINANCE_HOST:      http://host.docker.internal:11434
@@ -47,13 +46,11 @@ services:
       SETTINGS_FILE: /app/config/settings.toml
       BRIDGE_URL: http://host.docker.internal:9100
       BRIDGE_TOKEN_FILE: /run/secrets/bridge.token
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
     volumes:
       - ./config/settings.toml:/app/config/settings.toml:ro
       - ./data:/app/data
-      - ./secrets/bridge.token:/run/secrets/bridge.token:ro
+      - ./secrets/bridge.token:/run/secrets/bridge.token:ro  # file, not directory
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: 2g

@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS holdings (
     last_appraised_date  TEXT    DEFAULT '',
     notes                TEXT    DEFAULT '',
     import_date          TEXT    DEFAULT '',
-    UNIQUE(snapshot_date, asset_class, asset_name, owner)
+    UNIQUE(snapshot_date, asset_class, asset_name, owner, institution)
 );
 CREATE INDEX IF NOT EXISTS idx_holdings_date  ON holdings(snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_holdings_class ON holdings(asset_class);
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS liabilities (
     due_date             TEXT    DEFAULT '',
     notes                TEXT    DEFAULT '',
     import_date          TEXT    DEFAULT '',
-    UNIQUE(snapshot_date, liability_type, liability_name, owner)
+    UNIQUE(snapshot_date, liability_type, liability_name, owner, institution, account)
 );
 CREATE INDEX IF NOT EXISTS idx_liabilities_date  ON liabilities(snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_liabilities_owner ON liabilities(owner);
@@ -192,6 +192,120 @@ CREATE TABLE IF NOT EXISTS net_worth_snapshots (
 CREATE INDEX IF NOT EXISTS idx_nw_date ON net_worth_snapshots(snapshot_date);
 """
 
+HOLDINGS_TABLE_SQL = """
+CREATE TABLE holdings (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date        TEXT    NOT NULL,
+    asset_class          TEXT    NOT NULL,
+    asset_group          TEXT    DEFAULT 'Investments',
+    asset_name           TEXT    NOT NULL,
+    isin_or_code         TEXT    DEFAULT '',
+    institution          TEXT    DEFAULT '',
+    account              TEXT    DEFAULT '',
+    owner                TEXT    DEFAULT '',
+    currency             TEXT    DEFAULT 'IDR',
+    quantity             REAL    DEFAULT 0,
+    unit_price           REAL    DEFAULT 0,
+    market_value         REAL    DEFAULT 0,
+    market_value_idr     REAL    DEFAULT 0,
+    cost_basis           REAL    DEFAULT 0,
+    cost_basis_idr       REAL    DEFAULT 0,
+    unrealised_pnl_idr   REAL    DEFAULT 0,
+    exchange_rate        REAL    DEFAULT 1.0,
+    maturity_date        TEXT    DEFAULT '',
+    coupon_rate          REAL    DEFAULT 0,
+    last_appraised_date  TEXT    DEFAULT '',
+    notes                TEXT    DEFAULT '',
+    import_date          TEXT    DEFAULT '',
+    UNIQUE(snapshot_date, asset_class, asset_name, owner, institution)
+);
+"""
+
+LIABILITIES_TABLE_SQL = """
+CREATE TABLE liabilities (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date        TEXT    NOT NULL,
+    liability_type       TEXT    NOT NULL,
+    liability_name       TEXT    NOT NULL,
+    institution          TEXT    DEFAULT '',
+    account              TEXT    DEFAULT '',
+    owner                TEXT    DEFAULT '',
+    currency             TEXT    DEFAULT 'IDR',
+    balance              REAL    DEFAULT 0,
+    balance_idr          REAL    DEFAULT 0,
+    due_date             TEXT    DEFAULT '',
+    notes                TEXT    DEFAULT '',
+    import_date          TEXT    DEFAULT '',
+    UNIQUE(snapshot_date, liability_type, liability_name, owner, institution, account)
+);
+"""
+
+
+def _table_sql(conn: sqlite3.Connection, table_name: str) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return (row[0] or "") if row else ""
+
+
+def _rebuild_holdings_table(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE holdings RENAME TO holdings_old")
+    conn.execute(HOLDINGS_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO holdings
+            (snapshot_date, asset_class, asset_group, asset_name, isin_or_code,
+             institution, account, owner, currency, quantity, unit_price,
+             market_value, market_value_idr, cost_basis, cost_basis_idr,
+             unrealised_pnl_idr, exchange_rate, maturity_date, coupon_rate,
+             last_appraised_date, notes, import_date)
+        SELECT
+            snapshot_date, asset_class, asset_group, asset_name, isin_or_code,
+            institution, account, owner, currency, quantity, unit_price,
+            market_value, market_value_idr, cost_basis, cost_basis_idr,
+            unrealised_pnl_idr, exchange_rate, maturity_date, coupon_rate,
+            last_appraised_date, notes, import_date
+        FROM holdings_old
+        ORDER BY id
+        """
+    )
+    conn.execute("DROP TABLE holdings_old")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_holdings_date  ON holdings(snapshot_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_holdings_class ON holdings(asset_class)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_holdings_group ON holdings(asset_group)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_holdings_owner ON holdings(owner)")
+
+
+def _rebuild_liabilities_table(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE liabilities RENAME TO liabilities_old")
+    conn.execute(LIABILITIES_TABLE_SQL)
+    conn.execute(
+        """
+        INSERT INTO liabilities
+            (snapshot_date, liability_type, liability_name, institution, account,
+             owner, currency, balance, balance_idr, due_date, notes, import_date)
+        SELECT
+            snapshot_date, liability_type, liability_name, institution, account,
+            owner, currency, balance, balance_idr, due_date, notes, import_date
+        FROM liabilities_old
+        ORDER BY id
+        """
+    )
+    conn.execute("DROP TABLE liabilities_old")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_liabilities_date  ON liabilities(snapshot_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_liabilities_owner ON liabilities(owner)")
+
+
+def _needs_holdings_migration(conn: sqlite3.Connection) -> bool:
+    sql = _table_sql(conn, "holdings").replace(" ", "")
+    return bool(sql) and "UNIQUE(snapshot_date,asset_class,asset_name,owner)" in sql
+
+
+def _needs_liabilities_migration(conn: sqlite3.Connection) -> bool:
+    sql = _table_sql(conn, "liabilities").replace(" ", "")
+    return bool(sql) and "UNIQUE(snapshot_date,liability_type,liability_name,owner)" in sql
+
 
 def open_db(db_path: str) -> sqlite3.Connection:
     """
@@ -207,6 +321,10 @@ def open_db(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    if _needs_holdings_migration(conn):
+        _rebuild_holdings_table(conn)
+    if _needs_liabilities_migration(conn):
+        _rebuild_liabilities_table(conn)
     # Additive migrations for columns added after initial schema deployment.
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(merchant_aliases)")}
     for col, definition in [

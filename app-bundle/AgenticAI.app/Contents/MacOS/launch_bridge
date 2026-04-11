@@ -1,0 +1,65 @@
+#!/bin/bash
+# launch_bridge — stable TCC identity wrapper for AgenticAI Bridge
+#
+# This script runs INSIDE the AgenticAI.app bundle. macOS TCC (Privacy
+# & Security) grants Full Disk Access to the .app bundle path, which
+# stays stable across Homebrew Python upgrades. The actual Python
+# interpreter is resolved dynamically each time.
+#
+# Place AgenticAI.app in /Applications for a permanent, upgrade-safe
+# TCC identity:  /Applications/AgenticAI.app
+#
+set -euo pipefail
+
+# ── Resolve Python (dynamic — survives brew upgrades) ─────────────────
+PYTHON=""
+for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" &>/dev/null; then
+        PYTHON="$(command -v "$candidate")"
+        break
+    fi
+done
+
+if [ -z "$PYTHON" ]; then
+    echo "[AgenticAI] FATAL: No Python 3.11+ found on PATH" >&2
+    exit 1
+fi
+
+# Verify minimum version (3.11+ for tomllib)
+PY_MAJOR=$("$PYTHON" -c 'import sys; print(sys.version_info[0])')
+PY_MINOR=$("$PYTHON" -c 'import sys; print(sys.version_info[1])')
+if [ "$PY_MAJOR" -lt 3 ] || [ "$PY_MINOR" -lt 11 ]; then
+    echo "[AgenticAI] FATAL: Python $PY_MAJOR.$PY_MINOR too old (need 3.11+)" >&2
+    exit 1
+fi
+
+# ── Environment ─────────────────────────────────────────────────────────
+export HOME="${HOME:-$(/usr/bin/whoami)}"
+PROJECT_ROOT="/Users/g4ndr1k/agentic-ai"
+export PYTHONPATH="$PROJECT_ROOT"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Suppress MallocStackLogging noise in subprocesses
+export MallocStackLogging=0
+
+cd "$PROJECT_ROOT"
+
+# ── Pre-flight TCC check ───────────────────────────────────────────────
+"$PYTHON" -c "
+import sys, os
+sys.path.insert(0, '$PROJECT_ROOT')
+from bridge.tcc_check import check_fda, check_automation
+ok = True
+if not check_fda():
+    print('[AgenticAI] WARNING: Full Disk Access not granted to this app.')
+    print('[AgenticAI] Grant FDA: System Settings → Privacy & Security → Full Disk Access → AgenticAI')
+    ok = False
+if not check_automation():
+    print('[AgenticAI] WARNING: Automation access not granted.')
+    ok = False
+if not ok:
+    print('[AgenticAI] Continuing anyway — some features may fail.')
+" 2>/dev/null || true
+
+# ── Launch bridge ──────────────────────────────────────────────────────
+exec "$PYTHON" -m bridge.server

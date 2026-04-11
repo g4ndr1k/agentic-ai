@@ -48,7 +48,6 @@ from finance.config import (
     get_fastapi_config,
     get_sheets_config,
     get_ollama_finance_config,
-    get_anthropic_finance_config,
 )
 from finance.db import open_db
 from finance.sheets import SheetsClient
@@ -63,7 +62,6 @@ _finance_cfg   = get_finance_config(_cfg)
 _sheets_cfg    = get_sheets_config(_cfg)
 _fastapi_cfg   = get_fastapi_config(_cfg)
 _ollama_cfg    = get_ollama_finance_config(_cfg)
-_anthropic_cfg = get_anthropic_finance_config(_cfg)
 
 _db_path: str              = _finance_cfg.sqlite_db
 _sheets: SheetsClient | None = None  # lazy — created on first write request
@@ -105,13 +103,20 @@ async def add_no_store_for_api(request: Request, call_next):
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 def require_api_key(x_api_key: str = Header(default="")):
-    """Validate X-Api-Key header against FINANCE_API_KEY env var.
+    """Validate X-Api-Key header against FINANCE_API_KEY.
 
-    Set FINANCE_API_KEY in the environment before starting the server.
-    If the env var is unset the server refuses all protected requests so
-    deployments without a key fail loudly rather than silently open.
+    Checks macOS Keychain first (if auth.token_source = "keychain" in
+    settings.toml), then falls back to the FINANCE_API_KEY env var.
+    If neither source provides a key the server refuses all protected
+    requests so deployments without a key fail loudly rather than silently open.
     """
     expected = os.environ.get("FINANCE_API_KEY", "")
+    if not expected:
+        try:
+            from bridge.secret_manager import resolve_env_key
+            expected = resolve_env_key("FINANCE_API_KEY")
+        except ImportError:
+            pass
     if not expected:
         raise HTTPException(status_code=500, detail="FINANCE_API_KEY not configured")
     if not hmac.compare_digest(x_api_key, expected):
@@ -1710,8 +1715,6 @@ def post_import(req: ImportRequest = ImportRequest()):
         ollama_host=_ollama_cfg.host,
         ollama_model=_ollama_cfg.model,
         ollama_timeout=_ollama_cfg.timeout_seconds,
-        anthropic_api_key=_anthropic_cfg.api_key,
-        anthropic_model=_anthropic_cfg.model,
     )
 
     stats = _import_run(
@@ -1988,7 +1991,14 @@ def upsert_holding(req: HoldingUpsertRequest):
         ).fetchone()
     _sync_holdings_to_sheets()
     _auto_snapshot(req.snapshot_date)
-    _cascade_holding_update(req.snapshot_date, req.asset_class, req.asset_name, req.owner)
+    _cascade_holding_update(
+        req.snapshot_date,
+        req.asset_class,
+        req.asset_name,
+        req.owner,
+        req.institution,
+        req.account,
+    )
     return {"ok": True, "holding": _row(row)}
 
 
@@ -2000,21 +2010,31 @@ class CarryForwardRequest(BaseModel):
 def carry_forward_holdings(req: CarryForwardRequest):
     """
     For carry-forward asset classes (retirement, real_estate, vehicle, gold, other),
-    copy holdings from the most recent prior snapshot_date to req.snapshot_date
-    — but only for classes that have ZERO entries on req.snapshot_date.
-    Safe to call multiple times (idempotent per class).
+    copy any missing holdings from the most recent prior snapshot_date to
+    req.snapshot_date.
+
+    Existing target-month rows are preserved; only missing identities are filled.
+    Safe to call multiple times (idempotent per holding identity).
     """
     today   = datetime.now().strftime("%Y-%m-%d")
     carried = 0
     with _db() as conn:
         for asset_class in CARRY_FORWARD_CLASSES:
-            existing = conn.execute(
-                "SELECT COUNT(*) FROM holdings WHERE snapshot_date=? AND asset_class=?",
-                (req.snapshot_date, asset_class),
-            ).fetchone()[0]
-            if existing > 0:
-                continue
-
+            existing_keys = {
+                (
+                    row["asset_name"],
+                    row["owner"],
+                    row["institution"],
+                )
+                for row in conn.execute(
+                    """
+                    SELECT asset_name, owner, institution
+                    FROM holdings
+                    WHERE snapshot_date=? AND asset_class=?
+                    """,
+                    (req.snapshot_date, asset_class),
+                ).fetchall()
+            }
             prev_rows = conn.execute(
                 "SELECT * FROM holdings WHERE asset_class=? AND snapshot_date < ? "
                 "ORDER BY snapshot_date DESC",
@@ -2023,10 +2043,10 @@ def carry_forward_holdings(req: CarryForwardRequest):
             if not prev_rows:
                 continue
 
-            seen: set = set()
+            seen: set[tuple[str, str, str]] = set()
             for row in prev_rows:
-                key = (row["asset_name"], row["owner"])
-                if key in seen:
+                key = (row["asset_name"], row["owner"], row["institution"])
+                if key in existing_keys or key in seen:
                     continue
                 seen.add(key)
                 conn.execute(
@@ -2094,10 +2114,17 @@ def _auto_snapshot(snapshot_date: str):
         log.warning("Auto-snapshot failed for %s (non-fatal): %s", snapshot_date, exc)
 
 
-def _cascade_holding_update(snapshot_date: str, asset_class: str, asset_name: str, owner: str):
+def _cascade_holding_update(
+    snapshot_date: str,
+    asset_class: str,
+    asset_name: str,
+    owner: str,
+    institution: str,
+    account: str,
+):
     """
     For carry-forward asset classes, propagate the updated values to all subsequent
-    months that already have an entry for this (asset_class, asset_name, owner).
+    months that already have an entry for this specific holding identity.
     Called after upsert_holding when asset_class is in CARRY_FORWARD_CLASSES.
     """
     if asset_class not in CARRY_FORWARD_CLASSES:
@@ -2106,16 +2133,23 @@ def _cascade_holding_update(snapshot_date: str, asset_class: str, asset_name: st
     affected_dates: list[str] = []
     with _db() as conn:
         source = conn.execute(
-            "SELECT * FROM holdings WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?",
-            (snapshot_date, asset_class, asset_name, owner),
+            """
+            SELECT * FROM holdings
+            WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?
+              AND institution=? AND account=?
+            """,
+            (snapshot_date, asset_class, asset_name, owner, institution, account),
         ).fetchone()
         if not source:
             return
         subsequent = conn.execute(
-            "SELECT snapshot_date FROM holdings "
-            "WHERE asset_class=? AND asset_name=? AND owner=? AND snapshot_date > ? "
-            "ORDER BY snapshot_date ASC",
-            (asset_class, asset_name, owner, snapshot_date),
+            """
+            SELECT snapshot_date FROM holdings
+            WHERE asset_class=? AND asset_name=? AND owner=? AND institution=? AND account=?
+              AND snapshot_date > ?
+            ORDER BY snapshot_date ASC
+            """,
+            (asset_class, asset_name, owner, institution, account, snapshot_date),
         ).fetchall()
         for row in subsequent:
             target_date = row["snapshot_date"]
@@ -2124,12 +2158,13 @@ def _cascade_holding_update(snapshot_date: str, asset_class: str, asset_name: st
                     market_value=?, market_value_idr=?, cost_basis=?, cost_basis_idr=?,
                     unrealised_pnl_idr=?, quantity=?, unit_price=?,
                     last_appraised_date=?, notes=?, import_date=?
-                WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?""",
+                WHERE snapshot_date=? AND asset_class=? AND asset_name=? AND owner=?
+                  AND institution=? AND account=?""",
                 (source["market_value"], source["market_value_idr"],
                  source["cost_basis"], source["cost_basis_idr"],
                  source["unrealised_pnl_idr"], source["quantity"], source["unit_price"],
                  source["last_appraised_date"], source["notes"], today,
-                 target_date, asset_class, asset_name, owner),
+                 target_date, asset_class, asset_name, owner, institution, account),
             )
             if conn.execute("SELECT changes()").fetchone()[0] > 0:
                 affected_dates.append(target_date)
@@ -2174,7 +2209,7 @@ def upsert_liability(req: LiabilityUpsertRequest):
                 (snapshot_date, liability_type, liability_name, institution, account,
                  owner, currency, balance, balance_idr, due_date, notes, import_date)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(snapshot_date, liability_type, liability_name, owner)
+            ON CONFLICT(snapshot_date, liability_type, liability_name, owner, institution, account)
             DO UPDATE SET
                 institution  = excluded.institution,
                 account      = excluded.account,
@@ -2191,8 +2226,16 @@ def upsert_liability(req: LiabilityUpsertRequest):
         )
         row = conn.execute(
             "SELECT * FROM liabilities "
-            "WHERE snapshot_date=? AND liability_type=? AND liability_name=? AND owner=?",
-            (req.snapshot_date, req.liability_type, req.liability_name, req.owner),
+            "WHERE snapshot_date=? AND liability_type=? AND liability_name=? AND owner=? "
+            "AND institution=? AND account=?",
+            (
+                req.snapshot_date,
+                req.liability_type,
+                req.liability_name,
+                req.owner,
+                req.institution,
+                req.account,
+            ),
         ).fetchone()
     _auto_snapshot(req.snapshot_date)
     return {"ok": True, "liability": _row(row)}
@@ -2268,10 +2311,10 @@ def create_snapshot(req: SnapshotRequest):
             SELECT liability_type, SUM(balance_idr) AS total
             FROM (
                 SELECT liability_type, liability_name, owner,
-                       balance_idr, MAX(snapshot_date) AS latest_date
+                       institution, account, balance_idr, MAX(snapshot_date) AS latest_date
                 FROM liabilities
                 WHERE snapshot_date <= ?
-                GROUP BY liability_type, liability_name, owner
+                GROUP BY liability_type, liability_name, owner, institution, account
             )
             GROUP BY liability_type
             """,

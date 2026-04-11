@@ -26,8 +26,8 @@ shutdown_notifications = false
 allow_same_account_commands = true
 
 [classifier]
-provider_order = ["ollama", "anthropic"]
-cloud_fallback_enabled = true
+provider_order = ["ollama"]
+cloud_fallback_enabled = false
 generic_alert_on_total_failure = true
 allowed_sender_domains = [
   "yourbank.com",
@@ -37,11 +37,6 @@ allowed_sender_domains = [
 host = "http://host.docker.internal:11434"
 model_primary = "gemma4:e4b"
 timeout_seconds = 60
-
-[anthropic]
-enabled = true
-model = "claude-sonnet-4-20250514"
-api_key_env = "ANTHROPIC_API_KEY"
 
 [agent]
 poll_interval_seconds = 1800

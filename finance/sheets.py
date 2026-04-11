@@ -442,22 +442,44 @@ def _build_service(cfg: SheetsConfig):
 
 
 def _get_credentials(cfg: SheetsConfig):
+    # ── Keychain support ────────────────────────────────────────────────────
+    # If google_sheets.source = "keychain" in settings.toml, read credentials
+    # from macOS Keychain instead of files. OAuth tokens are also written
+    # back to Keychain on refresh.
+    _use_keychain = _keychain_enabled()
+
+    # ── Service account (preferred) ─────────────────────────────────────────
     if cfg.service_account_file:
-        if not os.path.exists(cfg.service_account_file):
-            raise FileNotFoundError(
-                f"Google service account file not found: {cfg.service_account_file}\n"
-                "Create a service account key JSON in Google Cloud Console, save it locally, "
-                "then share the target spreadsheet with the service account email."
+        if _use_keychain:
+            sa_json = _read_keychain_json("google_service_account_json")
+            if sa_json:
+                log.info("Using Google service account from Keychain")
+                return ServiceAccountCredentials.from_service_account_info(
+                    sa_json, scopes=SCOPES
+                )
+        if os.path.exists(cfg.service_account_file):
+            log.info("Using Google service account credentials: %s", cfg.service_account_file)
+            return ServiceAccountCredentials.from_service_account_file(
+                cfg.service_account_file,
+                scopes=SCOPES,
             )
-        log.info("Using Google service account credentials: %s", cfg.service_account_file)
-        return ServiceAccountCredentials.from_service_account_file(
-            cfg.service_account_file,
-            scopes=SCOPES,
+        raise FileNotFoundError(
+            f"Google service account file not found: {cfg.service_account_file}\n"
+            "Create a service account key JSON in Google Cloud Console, save it locally, "
+            "then share the target spreadsheet with the service account email."
         )
 
+    # ── OAuth fallback ──────────────────────────────────────────────────────
     creds: Optional[Credentials] = None
 
-    if os.path.exists(cfg.token_file):
+    # Try Keychain first, then file
+    if _use_keychain:
+        tok_json = _read_keychain_json("google_token_json")
+        if tok_json:
+            creds = Credentials.from_authorized_user_info(tok_json, SCOPES)
+            log.info("Loaded Google OAuth token from Keychain")
+
+    if not creds and os.path.exists(cfg.token_file):
         creds = Credentials.from_authorized_user_file(cfg.token_file, SCOPES)
 
     if not creds or not creds.valid:
@@ -469,20 +491,88 @@ def _get_credentials(cfg: SheetsConfig):
                 "No valid token found — starting OAuth consent flow.\n"
                 "A browser window will open. Sign in with your personal Google account."
             )
-            if not os.path.exists(cfg.credentials_file):
-                raise FileNotFoundError(
-                    f"Google credentials file not found: {cfg.credentials_file}\n"
-                    "Download it from Google Cloud Console → APIs & Services → "
-                    "Credentials → OAuth 2.0 Client ID → Desktop app → Download JSON."
+            # Try Keychain for credentials, then file
+            client_json = None
+            if _use_keychain:
+                client_json = _read_keychain_json("google_credentials_json")
+            if client_json:
+                flow = InstalledAppFlow.from_client_config(client_json, SCOPES)
+            else:
+                if not os.path.exists(cfg.credentials_file):
+                    raise FileNotFoundError(
+                        f"Google credentials file not found: {cfg.credentials_file}\n"
+                        "Download it from Google Cloud Console → APIs & Services → "
+                        "Credentials → OAuth 2.0 Client ID → Desktop app → Download JSON."
+                    )
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    cfg.credentials_file, SCOPES
                 )
-            flow = InstalledAppFlow.from_client_secrets_file(
-                cfg.credentials_file, SCOPES
-            )
             creds = flow.run_local_server(port=0)
 
+        # Write back: Keychain + file (for compatibility)
+        if _use_keychain:
+            _write_keychain_json("google_token_json", creds.to_json())
+            log.info("OAuth token saved → Keychain")
         os.makedirs(os.path.dirname(cfg.token_file), exist_ok=True)
         with open(cfg.token_file, "w") as f:
             f.write(creds.to_json())
         log.info("OAuth token saved → %s", cfg.token_file)
 
     return creds
+
+
+# ── Keychain helpers ────────────────────────────────────────────────────────
+
+def _keychain_enabled() -> bool:
+    """Check if Keychain source is enabled for Google Sheets in settings.toml."""
+    try:
+        import tomllib
+        from pathlib import Path
+        settings_path = Path(__file__).resolve().parent.parent / "config" / "settings.toml"
+        if not settings_path.exists():
+            return False
+        with open(settings_path, "rb") as f:
+            settings = tomllib.load(f)
+        return settings.get("google_sheets", {}).get("source", "file") == "keychain"
+    except Exception:
+        return False
+
+
+def _read_keychain_json(key: str) -> dict | None:
+    """Read a JSON blob from macOS Keychain and parse it."""
+    try:
+        from bridge.secret_manager import get_from_keychain, _keychain_service
+        settings = _load_settings_for_keychain()
+        service = _keychain_service(settings)
+        raw = get_from_keychain(service, key)
+        if raw:
+            import json as _json
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _write_keychain_json(key: str, json_str: str) -> bool:
+    """Write a JSON string to macOS Keychain."""
+    try:
+        from bridge.secret_manager import set_in_keychain, _keychain_service
+        settings = _load_settings_for_keychain()
+        service = _keychain_service(settings)
+        return set_in_keychain(service, key, json_str)
+    except Exception:
+        return False
+
+
+def _load_settings_for_keychain() -> dict:
+    """Load settings.toml for Keychain helper functions."""
+    try:
+        import tomllib
+        from pathlib import Path
+        sp = Path(__file__).resolve().parent.parent / "config" / "settings.toml"
+        if sp.exists():
+            with open(sp, "rb") as f:
+                return tomllib.load(f)
+    except Exception:
+        pass
+    return {}

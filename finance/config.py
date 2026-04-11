@@ -43,13 +43,6 @@ class OllamaFinanceConfig:
     timeout_seconds: int
 
 
-@dataclass
-class AnthropicFinanceConfig:
-    api_key: str
-    model: str
-    enabled: bool
-
-
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 def load_config(settings_file: str | None = None) -> dict:
@@ -113,11 +106,3 @@ def get_ollama_finance_config(cfg: dict) -> OllamaFinanceConfig:
     )
 
 
-def get_anthropic_finance_config(cfg: dict) -> AnthropicFinanceConfig:
-    s = cfg.get("anthropic", {})
-    env_name = s.get("api_key_env", "ANTHROPIC_API_KEY")
-    return AnthropicFinanceConfig(
-        api_key=os.environ.get(env_name, ""),
-        model=s.get("model", "claude-haiku-4-20250514"),
-        enabled=bool(s.get("enabled", False)),
-    )

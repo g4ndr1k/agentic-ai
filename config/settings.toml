@@ -1,10 +1,13 @@
 [bridge]
-host = "127.0.0.1"
+host = "0.0.0.0"
 port = 9100
 log_level = "INFO"
 
 [auth]
 token_file = "/Users/g4ndr1k/agentic-ai/secrets/bridge.token"
+# Set token_source = "keychain" after running: python3 -m bridge.secret_manager init
+token_source = "keychain"            # "file" (default) or "keychain"
+keychain_service = "agentic-ai-bridge"
 
 [mail]
 source = "mailapp"
@@ -23,9 +26,8 @@ shutdown_notifications = false
 allow_same_account_commands = true
 
 [classifier]
-provider_order = ["ollama", "anthropic"]
-# Set to false to prevent any cloud API calls even if anthropic is in provider_order
-cloud_fallback_enabled = true
+provider_order = ["ollama"]
+cloud_fallback_enabled = false
 generic_alert_on_total_failure = true
 # Only process emails whose sender_email domain matches one of these.
 # All other senders are silently skipped before any LLM call is made.
@@ -41,11 +43,6 @@ allowed_sender_domains = [
 host = "http://host.docker.internal:11434"
 model_primary = "gemma4:e4b"
 timeout_seconds = 60
-
-[anthropic]
-enabled = true
-model = "claude-sonnet-4-20250514"
-api_key_env = "ANTHROPIC_API_KEY"
 
 [agent]
 # Mail scan interval: 1800 = 30 minutes
@@ -86,6 +83,8 @@ xls_output_dir = "/Users/g4ndr1k/agentic-ai/output/xls"
 
 # Path to bank PDF passwords file (gitignored)
 bank_passwords_file = "/Users/g4ndr1k/agentic-ai/secrets/banks.toml"
+# Set bank_passwords_source = "keychain" after running: python3 -m bridge.secret_manager init
+bank_passwords_source = "keychain"    # "file" (default) or "keychain"
 
 # SQLite DB for PDF processing jobs
 jobs_db = "/Users/g4ndr1k/agentic-ai/data/pdf_jobs.db"
@@ -141,6 +140,8 @@ pairs = [
 ]
 
 [google_sheets]
+# Secret source: "file" (default) or "keychain" (macOS Keychain)
+source = "keychain"
 # Download from Google Cloud Console → APIs & Services → Credentials
 # → OAuth 2.0 Client ID → Desktop app → Download JSON
 credentials_file = "/Users/g4ndr1k/agentic-ai/secrets/google_credentials.json"
