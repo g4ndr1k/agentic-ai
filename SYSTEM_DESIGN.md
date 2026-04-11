@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.6.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.7.1 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-04-10
+**Last validated against:** checked-in codebase 2026-04-11
 
 ---
 
@@ -3536,6 +3536,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 - **Month navigation** — `‹ Month Year ›` arrow buttons. Centre area also shows a `+` button to open an inline `<input type="month">` for jumping directly to any month.
 - **Group filter tabs** — All · 🏦 Cash · 📈 Investments · 🏠 Real Estate · 🟡 Physical
 - **Focused section banner** — when a single asset group is selected, an inline banner shows the current section and a `Back to Condensed` action to return to the `All` view
+- **Collapsible sections** — in the `All` view, `Cash & Liquid`, `Investments`, `Real Estate`, and `Physical Assets` each have expand/collapse toggles and default to collapsed for denser browsing
 - **Per-section item rows** — institution/name, sub-label (type · institution · maturity), IDR value, owner badge, ✕ delete button
 - **Non-IDR balance display** — USD (and other foreign currency) accounts show original amount + implied FX rate (e.g. `USD 67,672.74 · 16,779/USD`) beneath the IDR balance
 - **Government Bonds sub-group** — inside Investments, bonds parsed from Permata PDF are listed under a "🏛 Government Bonds" sub-header. Each row shows a green `.premium` or red `.discount` badge with the market price (e.g. `104.734` above par / `96.651` below par).
@@ -3549,14 +3550,15 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 
 ### Navigation
 
-Mobile bottom nav uses **6 tabs**:
+Mobile bottom nav uses the current primary navigation:
 
 | Tab | Icon | Route |
 |---|---|---|
-| Flows | 📊 | `/` (Dashboard — spending/income) |
+| Dashboard | 📊 | `/` (main wealth dashboard) |
+| Flows | 📈 | `/flows` (original spending/income dashboard) |
 | Wealth | 💰 | `/wealth` (net worth dashboard) |
 | Assets | 🗂️ | `/holdings` (asset manager) |
-| Txns | 🧾 | `/transactions` |
+| Transactions | 🧾 | `/transactions` |
 | Review | 🔎 | `/review` |
 | More | ⚙︎ | `/settings` |
 

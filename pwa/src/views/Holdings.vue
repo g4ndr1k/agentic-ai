@@ -56,235 +56,251 @@
     <template v-else>
       <!-- Cash & Liquid -->
       <template v-if="activeTab === 'all' || activeTab === 'cash'">
-        <div class="section-header">
+        <button class="section-header section-header-btn" @click="toggleSection('cash')">
           <span>🏦 Cash &amp; Liquid</span>
-          <span class="section-total">{{ fmt(totals.liquid) }}</span>
-        </div>
-        <div v-if="!filteredBalances.length" class="empty-state-inline">No entries yet</div>
-        <div
-          v-for="b in filteredBalances"
-          :key="`bal-${b.id}`"
-          class="asset-item"
-        >
-          <div class="asset-main">
-            <span class="asset-name">{{ b.institution }}</span>
-            <span class="asset-sub">{{ b.account }} · {{ formatAccountType(b.account_type) }}</span>
+          <span class="section-header-right">
+            <span class="section-total">{{ fmt(totals.liquid) }}</span>
+            <span class="section-chevron">{{ isSectionOpen('cash') ? '▾' : '▸' }}</span>
+          </span>
+        </button>
+        <template v-if="isSectionOpen('cash')">
+          <div v-if="!filteredBalances.length" class="empty-state-inline">No entries yet</div>
+          <div
+            v-for="b in filteredBalances"
+            :key="`bal-${b.id}`"
+            class="asset-item"
+          >
+            <div class="asset-main">
+              <span class="asset-name">{{ b.institution }}</span>
+              <span class="asset-sub">{{ b.account }} · {{ formatAccountType(b.account_type) }}</span>
+            </div>
+            <div class="asset-right">
+              <span class="asset-value">{{ fmt(b.balance_idr) }}</span>
+              <span v-if="b.currency && b.currency !== 'IDR'" class="asset-fx">
+                {{ b.currency }} {{ fmtForeign(b.balance, b.currency) }}
+                <template v-if="b.exchange_rate > 0"> · {{ fmtRate(b.exchange_rate) }}/{{ b.currency }}</template>
+              </span>
+            </div>
+            <button class="asset-del" @click.stop="deleteItem('balance', b.id)" title="Delete">✕</button>
           </div>
-          <div class="asset-right">
-            <span class="asset-value">{{ fmt(b.balance_idr) }}</span>
-            <span v-if="b.currency && b.currency !== 'IDR'" class="asset-fx">
-              {{ b.currency }} {{ fmtForeign(b.balance, b.currency) }}
-              <template v-if="b.exchange_rate > 0"> · {{ fmtRate(b.exchange_rate) }}/{{ b.currency }}</template>
-            </span>
-          </div>
-          <button class="asset-del" @click.stop="deleteItem('balance', b.id)" title="Delete">✕</button>
-        </div>
+        </template>
       </template>
 
       <!-- Investments -->
       <template v-if="activeTab === 'all' || activeTab === 'investments'">
-        <div class="section-header">
+        <button class="section-header section-header-btn" @click="toggleSection('investments')">
           <span>📈 Investments</span>
-          <span class="section-total">{{ fmt(totals.investments) }}</span>
-        </div>
-        <div v-if="!filteredInvestments.length" class="empty-state-inline">No entries yet</div>
+          <span class="section-header-right">
+            <span class="section-total">{{ fmt(totals.investments) }}</span>
+            <span class="section-chevron">{{ isSectionOpen('investments') ? '▾' : '▸' }}</span>
+          </span>
+        </button>
+        <template v-if="isSectionOpen('investments')">
+          <div v-if="!filteredInvestments.length" class="empty-state-inline">No entries yet</div>
 
-        <!-- Government Bonds sub-group -->
-        <template v-if="filteredBonds.length">
-          <div class="sub-header">
-            <span>🏛 Government Bonds</span>
-            <span class="sub-total">{{ fmt(filteredBonds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
-          </div>
-          <div
-            v-for="h in filteredBonds"
-            :key="`hld-${h.id}`"
-            class="asset-item asset-item-tappable"
-            @click="editItem('holding', h)"
-          >
-            <div class="asset-main">
-              <div class="asset-name-row">
+          <template v-if="filteredBonds.length">
+            <div class="sub-header">
+              <span>🏛 Government Bonds</span>
+              <span class="sub-total">{{ fmt(filteredBonds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
+            </div>
+            <div
+              v-for="h in filteredBonds"
+              :key="`hld-${h.id}`"
+              class="asset-item asset-item-tappable"
+              @click="editItem('holding', h)"
+            >
+              <div class="asset-main">
+                <div class="asset-name-row">
+                  <span class="asset-name">{{ h.asset_name }}</span>
+                  <span v-if="h.unit_price > 0"
+                    :class="['price-badge', h.unit_price >= 100 ? 'premium' : 'discount']"
+                    :title="h.unit_price >= 100 ? 'Trading at premium' : 'Trading at discount'"
+                  >{{ h.unit_price.toFixed(3) }}</span>
+                </div>
+                <span class="asset-sub">
+                  Gov't Bond · {{ h.currency }}
+                  <template v-if="h.institution"> · {{ h.institution }}</template>
+                  <template v-if="h.quantity"> · Face {{ fmtForeign(h.quantity, h.currency) }}</template>
+                </span>
+              </div>
+              <div class="asset-right">
+                <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
+                <span v-if="h.currency !== 'IDR' && h.exchange_rate > 0" class="asset-fx">
+                  {{ h.currency }} {{ fmtForeign(h.market_value, h.currency) }}
+                  · {{ fmtRate(h.exchange_rate) }}/{{ h.currency }}
+                </span>
+                <span v-if="h.unrealised_pnl_idr !== 0"
+                  :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
+                  style="font-size:12px">
+                  {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
+                </span>
+              </div>
+              <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
+            </div>
+          </template>
+
+          <template v-if="filteredStocks.length">
+            <div class="sub-header">
+              <span>📊 Stocks</span>
+              <span class="sub-total">{{ fmt(filteredStocks.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
+            </div>
+            <div
+              v-for="h in filteredStocks"
+              :key="`hld-${h.id}`"
+              class="asset-item asset-item-tappable"
+              @click="editItem('holding', h)"
+            >
+              <div class="asset-main">
+                <div class="asset-name-row">
+                  <span class="asset-name">{{ h.isin_or_code || h.asset_name }}</span>
+                  <span v-if="h.unit_price > 0" class="price-badge stock-price">
+                    {{ fmtCompact(h.unit_price) }}
+                  </span>
+                </div>
+                <span class="asset-sub">
+                  <template v-if="h.isin_or_code && h.asset_name !== h.isin_or_code">{{ h.asset_name }} · </template>
+                  {{ h.institution || 'Stock' }}
+                  <template v-if="h.quantity > 0"> · {{ fmtQty(h.quantity) }} shares</template>
+                </span>
+              </div>
+              <div class="asset-right">
+                <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
+                <span v-if="h.unrealised_pnl_idr !== 0"
+                  :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
+                  style="font-size:12px">
+                  {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
+                </span>
+              </div>
+              <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
+            </div>
+          </template>
+
+          <template v-if="filteredMutualFunds.length">
+            <div class="sub-header">
+              <span>💹 Mutual Funds</span>
+              <span class="sub-total">{{ fmt(filteredMutualFunds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
+            </div>
+            <div
+              v-for="h in filteredMutualFunds"
+              :key="`hld-${h.id}`"
+              class="asset-item asset-item-tappable"
+              @click="editItem('holding', h)"
+            >
+              <div class="asset-main">
+                <div class="asset-name-row">
+                  <span class="asset-name">{{ h.isin_or_code || h.asset_name }}</span>
+                  <span v-if="h.unit_price > 0" class="price-badge nav-badge">
+                    NAV {{ h.unit_price.toFixed(4) }}
+                  </span>
+                </div>
+                <span class="asset-sub">
+                  <template v-if="h.isin_or_code && h.asset_name !== h.isin_or_code">{{ h.asset_name }} · </template>
+                  {{ h.institution || 'Mutual Fund' }}
+                  <template v-if="h.quantity > 0"> · {{ fmtQty(h.quantity) }} units</template>
+                </span>
+              </div>
+              <div class="asset-right">
+                <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
+                <span v-if="h.unrealised_pnl_idr !== 0"
+                  :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
+                  style="font-size:12px">
+                  {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
+                </span>
+              </div>
+              <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
+            </div>
+          </template>
+
+          <template v-if="filteredOtherInvestments.length">
+            <div v-if="filteredBonds.length || filteredStocks.length || filteredMutualFunds.length" class="sub-header">
+              <span>🏦 Other Investments</span>
+              <span class="sub-total">{{ fmt(filteredOtherInvestments.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
+            </div>
+            <div
+              v-for="h in filteredOtherInvestments"
+              :key="`hld-${h.id}`"
+              class="asset-item asset-item-tappable"
+              @click="editItem('holding', h)"
+            >
+              <div class="asset-main">
                 <span class="asset-name">{{ h.asset_name }}</span>
-                <span v-if="h.unit_price > 0"
-                  :class="['price-badge', h.unit_price >= 100 ? 'premium' : 'discount']"
-                  :title="h.unit_price >= 100 ? 'Trading at premium' : 'Trading at discount'"
-                >{{ h.unit_price.toFixed(3) }}</span>
-              </div>
-              <span class="asset-sub">
-                Gov't Bond · {{ h.currency }}
-                <template v-if="h.institution"> · {{ h.institution }}</template>
-                <template v-if="h.quantity"> · Face {{ fmtForeign(h.quantity, h.currency) }}</template>
-              </span>
-            </div>
-            <div class="asset-right">
-              <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-              <span v-if="h.currency !== 'IDR' && h.exchange_rate > 0" class="asset-fx">
-                {{ h.currency }} {{ fmtForeign(h.market_value, h.currency) }}
-                · {{ fmtRate(h.exchange_rate) }}/{{ h.currency }}
-              </span>
-              <span v-if="h.unrealised_pnl_idr !== 0"
-                :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
-                style="font-size:12px">
-                {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
-              </span>
-            </div>
-            <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-          </div>
-        </template>
-
-        <!-- Stocks sub-group -->
-        <template v-if="filteredStocks.length">
-          <div class="sub-header">
-            <span>📊 Stocks</span>
-            <span class="sub-total">{{ fmt(filteredStocks.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
-          </div>
-          <div
-            v-for="h in filteredStocks"
-            :key="`hld-${h.id}`"
-            class="asset-item asset-item-tappable"
-            @click="editItem('holding', h)"
-          >
-            <div class="asset-main">
-              <div class="asset-name-row">
-                <span class="asset-name">{{ h.isin_or_code || h.asset_name }}</span>
-                <span v-if="h.unit_price > 0" class="price-badge stock-price">
-                  {{ fmtCompact(h.unit_price) }}
+                <span class="asset-sub">
+                  {{ formatAssetClass(h.asset_class) }}
+                  <template v-if="h.institution"> · {{ h.institution }}</template>
+                  <template v-if="h.maturity_date"> · matures {{ h.maturity_date }}</template>
                 </span>
               </div>
-              <span class="asset-sub">
-                <template v-if="h.isin_or_code && h.asset_name !== h.isin_or_code">{{ h.asset_name }} · </template>
-                {{ h.institution || 'Stock' }}
-                <template v-if="h.quantity > 0"> · {{ fmtQty(h.quantity) }} shares</template>
-              </span>
-            </div>
-            <div class="asset-right">
-              <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-              <span v-if="h.unrealised_pnl_idr !== 0"
-                :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
-                style="font-size:12px">
-                {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
-              </span>
-            </div>
-            <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-          </div>
-        </template>
-
-        <!-- Mutual Funds sub-group -->
-        <template v-if="filteredMutualFunds.length">
-          <div class="sub-header">
-            <span>💹 Mutual Funds</span>
-            <span class="sub-total">{{ fmt(filteredMutualFunds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
-          </div>
-          <div
-            v-for="h in filteredMutualFunds"
-            :key="`hld-${h.id}`"
-            class="asset-item asset-item-tappable"
-            @click="editItem('holding', h)"
-          >
-            <div class="asset-main">
-              <div class="asset-name-row">
-                <span class="asset-name">{{ h.isin_or_code || h.asset_name }}</span>
-                <span v-if="h.unit_price > 0" class="price-badge nav-badge">
-                  NAV {{ h.unit_price.toFixed(4) }}
+              <div class="asset-right">
+                <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
+                <span v-if="h.unrealised_pnl_idr !== 0" :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'" style="font-size:12px">
+                  {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
                 </span>
               </div>
-              <span class="asset-sub">
-                <template v-if="h.isin_or_code && h.asset_name !== h.isin_or_code">{{ h.asset_name }} · </template>
-                {{ h.institution || 'Mutual Fund' }}
-                <template v-if="h.quantity > 0"> · {{ fmtQty(h.quantity) }} units</template>
-              </span>
+              <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
             </div>
-            <div class="asset-right">
-              <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-              <span v-if="h.unrealised_pnl_idr !== 0"
-                :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'"
-                style="font-size:12px">
-                {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
-              </span>
-            </div>
-            <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-          </div>
+          </template>
         </template>
+      </template>
 
-        <!-- Other investments sub-group (retirement, crypto, etc.) -->
-        <template v-if="filteredOtherInvestments.length">
-          <div v-if="filteredBonds.length || filteredStocks.length || filteredMutualFunds.length" class="sub-header">
-            <span>🏦 Other Investments</span>
-            <span class="sub-total">{{ fmt(filteredOtherInvestments.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
-          </div>
+      <!-- Real Estate -->
+      <template v-if="activeTab === 'all' || activeTab === 'realestate'">
+        <button class="section-header section-header-btn" @click="toggleSection('realestate')">
+          <span>🏠 Real Estate</span>
+          <span class="section-header-right">
+            <span class="section-total">{{ fmt(totals.realestate) }}</span>
+            <span class="section-chevron">{{ isSectionOpen('realestate') ? '▾' : '▸' }}</span>
+          </span>
+        </button>
+        <template v-if="isSectionOpen('realestate')">
+          <div v-if="!filteredRealEstate.length" class="empty-state-inline">No entries yet</div>
           <div
-            v-for="h in filteredOtherInvestments"
-            :key="`hld-${h.id}`"
+            v-for="h in filteredRealEstate"
+            :key="`re-${h.id}`"
             class="asset-item asset-item-tappable"
             @click="editItem('holding', h)"
           >
             <div class="asset-main">
               <span class="asset-name">{{ h.asset_name }}</span>
               <span class="asset-sub">
-                {{ formatAssetClass(h.asset_class) }}
-                <template v-if="h.institution"> · {{ h.institution }}</template>
-                <template v-if="h.maturity_date"> · matures {{ h.maturity_date }}</template>
+                Real Estate
+                <template v-if="h.notes"> · {{ h.notes }}</template>
+                <template v-if="h.last_appraised_date"> · appraised {{ h.last_appraised_date }}</template>
               </span>
             </div>
             <div class="asset-right">
               <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-              <span v-if="h.unrealised_pnl_idr !== 0" :class="h.unrealised_pnl_idr >= 0 ? 'text-income' : 'text-expense'" style="font-size:12px">
-                {{ h.unrealised_pnl_idr >= 0 ? '+' : '' }}{{ fmt(h.unrealised_pnl_idr) }}
-              </span>
             </div>
             <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
           </div>
         </template>
       </template>
 
-      <!-- Real Estate -->
-      <template v-if="activeTab === 'all' || activeTab === 'realestate'">
-        <div class="section-header">
-          <span>🏠 Real Estate</span>
-          <span class="section-total">{{ fmt(totals.realestate) }}</span>
-        </div>
-        <div v-if="!filteredRealEstate.length" class="empty-state-inline">No entries yet</div>
-        <div
-          v-for="h in filteredRealEstate"
-          :key="`re-${h.id}`"
-          class="asset-item asset-item-tappable"
-          @click="editItem('holding', h)"
-        >
-          <div class="asset-main">
-            <span class="asset-name">{{ h.asset_name }}</span>
-            <span class="asset-sub">
-              Real Estate
-              <template v-if="h.notes"> · {{ h.notes }}</template>
-              <template v-if="h.last_appraised_date"> · appraised {{ h.last_appraised_date }}</template>
-            </span>
-          </div>
-          <div class="asset-right">
-            <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-          </div>
-          <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-        </div>
-      </template>
-
       <!-- Physical Assets -->
       <template v-if="activeTab === 'all' || activeTab === 'physical'">
-        <div class="section-header">
+        <button class="section-header section-header-btn" @click="toggleSection('physical')">
           <span>🟡 Physical Assets</span>
-          <span class="section-total">{{ fmt(totals.physical) }}</span>
-        </div>
-        <div v-if="!filteredPhysical.length" class="empty-state-inline">No entries yet</div>
-        <div
-          v-for="h in filteredPhysical"
-          :key="`ph-${h.id}`"
-          class="asset-item"
-        >
-          <div class="asset-main">
-            <span class="asset-name">{{ h.asset_name }}</span>
-            <span class="asset-sub">{{ formatAssetClass(h.asset_class) }}</span>
+          <span class="section-header-right">
+            <span class="section-total">{{ fmt(totals.physical) }}</span>
+            <span class="section-chevron">{{ isSectionOpen('physical') ? '▾' : '▸' }}</span>
+          </span>
+        </button>
+        <template v-if="isSectionOpen('physical')">
+          <div v-if="!filteredPhysical.length" class="empty-state-inline">No entries yet</div>
+          <div
+            v-for="h in filteredPhysical"
+            :key="`ph-${h.id}`"
+            class="asset-item"
+          >
+            <div class="asset-main">
+              <span class="asset-name">{{ h.asset_name }}</span>
+              <span class="asset-sub">{{ formatAssetClass(h.asset_class) }}</span>
+            </div>
+            <div class="asset-right">
+              <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
+            </div>
+            <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
           </div>
-          <div class="asset-right">
-            <span class="asset-value">{{ fmt(h.market_value_idr) }}</span>
-          </div>
-          <button class="asset-del" @click.stop="deleteItem('holding', h.id)" title="Delete">✕</button>
-        </div>
+        </template>
       </template>
 
       <!-- Generate snapshot -->
@@ -467,6 +483,13 @@ const activeTabLabel = computed(() =>
   TABS.find(tab => tab.key === activeTab.value)?.label || 'Section'
 )
 
+const sectionOpen = ref({
+  cash: false,
+  investments: false,
+  realestate: false,
+  physical: false,
+})
+
 // ── State ─────────────────────────────────────────────────────────────────────
 const snapshotDate    = ref('')            // YYYY-MM-DD, e.g. 2026-03-31
 const snapshotDates   = ref([])           // available month-end dates from API
@@ -572,6 +595,14 @@ function formatAssetClass(t) {
     retirement: 'Retirement', crypto: 'Crypto',
     real_estate: 'Real Estate', vehicle: 'Vehicle', gold: 'Gold', other: 'Other',
   }[t] || t
+}
+
+function isSectionOpen(key) {
+  return sectionOpen.value[key] !== false
+}
+
+function toggleSection(key) {
+  sectionOpen.value[key] = !isSectionOpen(key)
 }
 // ── Month navigation ──────────────────────────────────────────────────────────
 // snapshotDates is sorted DESC (newest first); index 0 = most recent
@@ -952,6 +983,22 @@ onMounted(async () => {
   color: var(--primary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+.section-header-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.section-chevron {
+  min-width: 12px;
+  font-size: 14px;
+  color: var(--text-muted);
 }
 .section-header-liab { color: #dc2626; }
 .section-total { font-size: 14px; font-weight: 700; color: var(--text); }

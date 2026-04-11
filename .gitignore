@@ -49,3 +49,4 @@ output/xls/
 node_modules/
 pwa/node_modules/
 pwa/dist/
+data/

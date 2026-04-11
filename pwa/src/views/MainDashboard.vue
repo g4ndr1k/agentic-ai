@@ -63,8 +63,8 @@
           <article class="card dashboard-panel dashboard-panel--wealth">
             <div class="dashboard-panel__head">
               <div>
-                <div class="card-title">Wealth Over Time</div>
-                <div class="dashboard-panel__subtitle">Monthly total net worth from saved snapshots</div>
+                <div class="card-title">Assets Over Time</div>
+                <div class="dashboard-panel__subtitle">Monthly total assets from saved snapshots</div>
               </div>
             </div>
             <div v-if="wealthSeries.length > 0" class="dashboard-chart">
@@ -121,7 +121,7 @@
             <div class="dashboard-panel__head">
               <div>
                 <div class="card-title">Asset Allocation</div>
-                <div class="dashboard-panel__subtitle">Current distribution from the latest holdings snapshot</div>
+                <div class="dashboard-panel__subtitle">Current distribution from the latest saved asset snapshot</div>
               </div>
             </div>
             <div v-if="allocationSeries.length > 0" class="allocation-layout">
@@ -329,9 +329,9 @@ function formatAssetClass(assetClass) {
 }
 
 const wealthSeries = computed(() =>
-  collapseMonthlyHistory(aggregateHoldingsByDate(holdingsHistory.value)).map((row) => ({
+  visibleSnapshots.value.map((row) => ({
     label: formatMonthLabel(monthKey(row.snapshot_date)),
-    value: Number(row.net_worth_idr || 0),
+    value: Number(row.total_assets_idr || 0),
   }))
 )
 
@@ -359,21 +359,31 @@ const netWorthChange = computed(() => {
 })
 
 const allocationSeries = computed(() => {
-  const totals = new Map()
-  for (const row of visibleHoldings.value || []) {
-    const key = row.asset_class || 'other'
-    totals.set(key, (totals.get(key) || 0) + Number(row.market_value_idr || 0))
-  }
+  const snapshot = currentSnapshot.value
+  if (!snapshot) return []
 
-  const totalValue = [...totals.values()].reduce((sum, value) => sum + value, 0)
+  const totals = [
+    { key: 'cash_liquid', label: 'Cash & Liquid', value: Number(snapshot.savings_idr || 0) + Number(snapshot.checking_idr || 0) + Number(snapshot.money_market_idr || 0) + Number(snapshot.physical_cash_idr || 0) },
+    { key: 'bond', label: 'Bond', value: Number(snapshot.bonds_idr || 0) },
+    { key: 'stock', label: 'Stock', value: Number(snapshot.stocks_idr || 0) },
+    { key: 'mutual_fund', label: 'Mutual Fund', value: Number(snapshot.mutual_funds_idr || 0) },
+    { key: 'retirement', label: 'Retirement', value: Number(snapshot.retirement_idr || 0) },
+    { key: 'crypto', label: 'Crypto', value: Number(snapshot.crypto_idr || 0) },
+    { key: 'real_estate', label: 'Real Estate', value: Number(snapshot.real_estate_idr || 0) },
+    { key: 'vehicle', label: 'Vehicle', value: Number(snapshot.vehicles_idr || 0) },
+    { key: 'gold', label: 'Gold', value: Number(snapshot.gold_idr || 0) },
+    { key: 'other', label: 'Other', value: Number(snapshot.other_assets_idr || 0) },
+  ]
+
+  const totalValue = Number(snapshot.total_assets_idr || 0)
   const palette = ['#0f766e', '#2563eb', '#f59e0b', '#7c3aed', '#ea580c', '#059669', '#dc2626', '#64748b', '#0891b2']
 
-  return [...totals.entries()]
-    .map(([assetClass, value], index) => ({
-      key: assetClass,
-      label: formatAssetClass(assetClass),
-      value,
-      percent: totalValue > 0 ? (value / totalValue) * 100 : 0,
+  return totals
+    .map((row, index) => ({
+      key: row.key,
+      label: row.label,
+      value: row.value,
+      percent: totalValue > 0 ? (row.value / totalValue) * 100 : 0,
       color: palette[index % palette.length],
     }))
     .filter((row) => row.value > 0)
@@ -394,7 +404,7 @@ const cashFlowSeries = computed(() =>
 
 const incomeYtd = computed(() => cashFlowSeries.value.reduce((sum, row) => sum + row.income, 0))
 const spendingYtd = computed(() => cashFlowSeries.value.reduce((sum, row) => sum + row.spending, 0))
-const totalAllocationValue = computed(() => allocationSeries.value.reduce((sum, row) => sum + row.value, 0))
+const totalAllocationValue = computed(() => Number(currentSnapshot.value?.total_assets_idr || 0))
 
 function buildPath(points) {
   if (!points.length) return ''
