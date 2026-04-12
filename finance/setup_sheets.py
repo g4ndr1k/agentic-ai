@@ -98,15 +98,16 @@ DEFAULT_CATEGORIES = [
     ["Fees & Interest",  "🏦", 22, "FALSE", "", "Financial & Legal",    "Fees & Interest"],
     ["Taxes",            "📋", 23, "FALSE", "", "Financial & Legal",    "Taxes"],
     # ── 8. System / Tracking (Non-Expense Categories) ────────────────────────
-    ["Income",           "💰", 24, "FALSE", "", "System / Tracking",    "Income"],
-    ["Dividends",        "📈", 25, "FALSE", "", "System / Tracking",    "Dividends"],
-    ["Interest Income",  "🏦", 26, "FALSE", "", "System / Tracking",    "Interest"],
+    ["Earned Income",    "💼", 24, "FALSE", "", "System / Tracking",    "Earned Income"],
+    ["Investment Income","📈", 25, "FALSE", "", "System / Tracking",    "Investment Income"],
+    ["Interest Income",  "🏦", 26, "FALSE", "", "System / Tracking",    "Interest Income"],
     ["Capital Gains",    "📊", 27, "FALSE", "", "System / Tracking",    "Capital Gains"],
-    ["Other Income",     "💵", 28, "FALSE", "", "System / Tracking",    "Other Income"],
-    ["Transfer",         "🔁", 29, "FALSE", "", "System / Tracking",    "Transfer"],
-    ["Cash Withdrawal",  "🏧", 30, "FALSE", "", "System / Tracking",    "Cash Withdrawal"],
-    ["Adjustment",       "🔧", 31, "FALSE", "", "System / Tracking",    "Adjustment"],
-    ["Other",            "❓", 32, "FALSE", "", "System / Tracking",    "Other"],
+    ["Passive Income",   "🪙", 28, "FALSE", "", "System / Tracking",    "Passive Income"],
+    ["Other Income",     "💵", 29, "FALSE", "", "System / Tracking",    "Other Income"],
+    ["Transfer",         "🔁", 30, "FALSE", "", "System / Tracking",    "Transfer"],
+    ["Cash Withdrawal",  "🏧", 31, "FALSE", "", "System / Tracking",    "Cash Withdrawal"],
+    ["Adjustment",       "🔧", 32, "FALSE", "", "System / Tracking",    "Adjustment"],
+    ["Other",            "❓", 33, "FALSE", "", "System / Tracking",    "Other"],
 ]
 
 DEFAULT_CURRENCIES = [

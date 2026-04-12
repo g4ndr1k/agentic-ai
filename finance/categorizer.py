@@ -48,8 +48,8 @@ DEFAULT_CATEGORIES = [
     # Financial & Legal
     "Fees & Interest", "Taxes",
     # System / Tracking
-    "Income", "Dividends", "Interest Income", "Capital Gains",
-    "Other Income", "Transfer", "Cash Withdrawal", "Adjustment", "Other",
+    "Earned Income", "Investment Income", "Interest Income", "Capital Gains",
+    "Passive Income", "Other Income", "Transfer", "Cash Withdrawal", "Adjustment", "Other",
 ]
 
 # ── Legacy → new category name mapping ────────────────────────────────────────
@@ -62,6 +62,8 @@ CATEGORY_MIGRATION_MAP: dict[str, str] = {
     "Household Expenses": "Household",
     "Child Support":      "Family",
     "Travel":             "Flights & Hotels",
+    "Income":             "Earned Income",
+    "Dividends":          "Investment Income",
 }
 
 def migrate_category(category: str | None) -> str | None:
@@ -303,11 +305,12 @@ class Categorizer:
             "- Family: childcare expenses\n"
             "- Phone Bill: mobile phone bills\n"
             "- Internet: broadband / WiFi bills\n"
-            "- Income: salary, wages, bonuses\n"
-            "- Dividends: stock dividend payouts\n"
-            "- Interest Income: savings account interest, bond coupons\n"
+            "- Earned Income: salary, wages, bonuses, active professional income\n"
+            "- Investment Income: stock dividends, bond coupons, mutual fund payouts\n"
+            "- Interest Income: savings account interest and bank profit share\n"
             "- Capital Gains: profit from selling stocks or assets\n"
-            "- Other Income: tax refunds, gifts received, side hustles\n"
+            "- Passive Income: recurring non-work income streams\n"
+            "- Other Income: tax refunds, gifts received, cashback, loan repayment receipts\n"
             "- Transfer: internal account transfers (savings↔checking) and external (paying credit cards)\n"
             "- Adjustment: opening balances or balance corrections\n\n"
             "Rules:\n"
