@@ -7,7 +7,7 @@ CLI:
     python3 -m bridge.secret_manager init           # Migrate file-based secrets → Keychain
     python3 -m bridge.secret_manager get <key>      # Retrieve a secret
     python3 -m bridge.secret_manager set <key>      # Store a secret (interactive prompt)
-    python3 -m bridge.secret_manager set <key> -v   # Store a secret (via --value flag)
+    python3 -m bridge.secret_manager set <key> -v <value>  # Store a secret (via --value flag)
     python3 -m bridge.secret_manager delete <key>   # Remove a secret
     python3 -m bridge.secret_manager list           # List stored key names
 

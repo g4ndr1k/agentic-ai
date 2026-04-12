@@ -86,8 +86,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_fastapi_cfg.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Api-Key"],
 )
 
 
@@ -100,13 +100,43 @@ async def add_no_store_for_api(request: Request, call_next):
     return response
 
 
+# ── Rate limiter (in-memory sliding window) ────────────────────────────────
+
+import time as _time
+from collections import defaultdict as _defaultdict
+
+_rate_limit_store: dict[str, list[float]] = _defaultdict(list)
+_RATE_LIMIT_REQUESTS = 60
+_RATE_LIMIT_WINDOW_S = 60
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        now = _time.time()
+        key = request.url.path
+        _rate_limit_store[key] = [
+            t for t in _rate_limit_store[key]
+            if now - t < _RATE_LIMIT_WINDOW_S
+        ]
+        if len(_rate_limit_store[key]) >= _RATE_LIMIT_REQUESTS:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded"},
+            )
+        _rate_limit_store[key].append(now)
+    return await call_next(request)
+
+
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 def require_api_key(x_api_key: str = Header(default="")):
     """Validate X-Api-Key header against FINANCE_API_KEY.
 
-    Checks macOS Keychain first (if auth.token_source = "keychain" in
-    settings.toml), then falls back to the FINANCE_API_KEY env var.
+    Checks the FINANCE_API_KEY environment variable first, then falls back
+    to macOS Keychain (if auth.token_source = "keychain" in settings.toml)
+    via bridge.secret_manager.resolve_env_key.
     If neither source provides a key the server refuses all protected
     requests so deployments without a key fail loudly rather than silently open.
     """
@@ -146,8 +176,11 @@ def _db() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
-def _row(row: sqlite3.Row) -> dict:
-    return dict(row)
+def _row(row) -> dict:
+    """Convert a sqlite3.Row to a dict. Returns {} for non-Row inputs."""
+    if isinstance(row, sqlite3.Row):
+        return dict(row)
+    return {}
 
 
 def _fmt_idr_compact(value: float) -> str:
@@ -262,9 +295,11 @@ def _get_monthly_summary_data(conn: sqlite3.Connection, year: int, month: int) -
     for r in cat_rows:
         amt = r["total_amount"] or 0.0
         cat_name = r["category"] or "Uncategorised"
+        if cat_name in transfer_cats:
+            continue  # exclude internal transfers from category breakdown
         pct = (
             round(abs(amt) / abs(total_expense) * 100, 1)
-            if total_expense and amt < 0 and cat_name not in transfer_cats
+            if total_expense and amt < 0
             else 0.0
         )
         by_category.append({
@@ -449,23 +484,11 @@ def _generate_monthly_flow_explanation_with_ollama(curr: dict, prev: dict, fallb
         f"Top spending category deltas JSON: {json.dumps(fallback['category_deltas'][:6], ensure_ascii=True)}\n"
         f"Current top expense categories JSON: {json.dumps(sorted([row for row in curr['by_category'] if row['amount'] < 0], key=lambda row: abs(row['amount']), reverse=True)[:6], ensure_ascii=True)}"
     )
-    payload = json.dumps({
-        "model": _ollama_cfg.model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": 280,
-        },
-    }).encode()
-
-    req = urllib.request.Request(
-        f"{_ollama_cfg.host.rstrip('/')}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+    from finance.ollama_utils import ollama_generate
+    data = ollama_generate(
+        _ollama_cfg.host, _ollama_cfg.model, prompt,
+        _ollama_cfg.timeout_seconds, temperature=0.2, num_predict=280,
     )
-    with urllib.request.urlopen(req, timeout=_ollama_cfg.timeout_seconds) as resp:
-        data = json.loads(resp.read())
 
     raw = (data.get("response") or "").strip()
     start = raw.find("{")
@@ -696,22 +719,11 @@ def _ask_monthly_flow_question_with_ollama(question: str, context: dict, history
         f"Question: {question}\n"
         f"Context JSON: {json.dumps(compact_context, ensure_ascii=True)}"
     )
-    payload = json.dumps({
-        "model": _ollama_cfg.model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": 450,
-        },
-    }).encode()
-    req = urllib.request.Request(
-        f"{_ollama_cfg.host.rstrip('/')}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+    from finance.ollama_utils import ollama_generate
+    data = ollama_generate(
+        _ollama_cfg.host, _ollama_cfg.model, prompt,
+        _ollama_cfg.timeout_seconds, temperature=0.2, num_predict=450,
     )
-    with urllib.request.urlopen(req, timeout=_ollama_cfg.timeout_seconds) as resp:
-        data = json.loads(resp.read())
 
     raw = (data.get("response") or "").strip()
     start = raw.find("{")
@@ -769,6 +781,10 @@ def _wealth_delta_rows(curr: dict, prev: dict) -> list[dict]:
     out = []
     for row in rows:
         delta = row["curr"] - row["prev"]
+        # For liabilities, negate the delta so "debt decreased" is positive
+        # (a positive contribution to net worth) and "debt increased" is negative.
+        if row["is_liability"]:
+            delta = -delta
         pct = round((delta / abs(row["prev"])) * 100) if row["prev"] else None
         out.append({**row, "delta": delta, "pct": pct})
     return out
@@ -847,23 +863,11 @@ def _generate_wealth_explanation_with_ollama(curr: dict, prev: dict, fallback: d
             for row in rows
         )
     )
-    payload = json.dumps({
-        "model": _ollama_cfg.model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": 300,
-        },
-    }).encode()
-
-    req = urllib.request.Request(
-        f"{_ollama_cfg.host.rstrip('/')}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+    from finance.ollama_utils import ollama_generate
+    data = ollama_generate(
+        _ollama_cfg.host, _ollama_cfg.model, prompt,
+        _ollama_cfg.timeout_seconds, temperature=0.2, num_predict=300,
     )
-    with urllib.request.urlopen(req, timeout=_ollama_cfg.timeout_seconds) as resp:
-        data = json.loads(resp.read())
 
     raw = (data.get("response") or "").strip()
     start = raw.find("{")
@@ -1100,22 +1104,11 @@ def _ask_wealth_question_with_ollama(question: str, context: dict, history: list
         f"Question: {question}\n"
         f"Context JSON: {json.dumps(compact_context, ensure_ascii=True)}"
     )
-    payload = json.dumps({
-        "model": _ollama_cfg.model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.2,
-            "num_predict": 450,
-        },
-    }).encode()
-    req = urllib.request.Request(
-        f"{_ollama_cfg.host.rstrip('/')}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+    from finance.ollama_utils import ollama_generate
+    data = ollama_generate(
+        _ollama_cfg.host, _ollama_cfg.model, prompt,
+        _ollama_cfg.timeout_seconds, temperature=0.2, num_predict=450,
     )
-    with urllib.request.urlopen(req, timeout=_ollama_cfg.timeout_seconds) as resp:
-        data = json.loads(resp.read())
 
     raw = (data.get("response") or "").strip()
     start = raw.find("{")
@@ -1729,7 +1722,7 @@ def post_import(req: ImportRequest = ImportRequest()):
     # Auto-sync after a real import that added rows
     if not req.dry_run and stats.get("added", 0) > 0:
         log.info("Auto-syncing after import …")
-        sync_stats = _sync(_db_path, _sheets)
+        sync_stats = _sync(_db_path, _get_sheets())
         stats["sync"] = sync_stats
 
     return {"ok": True, **stats}
@@ -2049,6 +2042,7 @@ def carry_forward_holdings(req: CarryForwardRequest):
                 if key in existing_keys or key in seen:
                     continue
                 seen.add(key)
+                carried_notes = (row["notes"] or "") + " [carried forward]"
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO holdings
@@ -2062,10 +2056,13 @@ def carry_forward_holdings(req: CarryForwardRequest):
                     (req.snapshot_date, row["asset_class"], row["asset_group"],
                      row["asset_name"], row["isin_or_code"], row["institution"],
                      row["account"], row["owner"], row["currency"], row["quantity"],
-                     row["unit_price"], row["market_value"], row["market_value_idr"],
-                     row["cost_basis"], row["cost_basis_idr"], row["unrealised_pnl_idr"],
+                     row["unit_price"],
+                     0,          # market_value: zeroed — needs re-appraisal
+                     0,          # market_value_idr: zeroed — needs re-appraisal
+                     row["cost_basis"], row["cost_basis_idr"],
+                     0,          # unrealised_pnl_idr: zeroed — needs re-appraisal
                      row["exchange_rate"], row["maturity_date"], row["coupon_rate"],
-                     row["last_appraised_date"], row["notes"], today),
+                     row["last_appraised_date"], carried_notes, today),
                 )
                 carried += conn.execute("SELECT changes()").fetchone()[0]
 

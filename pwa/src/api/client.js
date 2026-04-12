@@ -1,7 +1,7 @@
 const BASE = '/api'
 const API_KEY = import.meta.env.VITE_FINANCE_API_KEY || ''
 
-const AUTH_HEADERS = API_KEY ? { 'X-Api-Key': API_KEY } : {}
+const AUTH_HEADERS = API_KEY ? { 'X-Api-Key': API_KEY } : (console.warn('VITE_FINANCE_API_KEY not set — requests will be unauthenticated'), {})
 
 async function get(path, params = {}) {
   const url = new URL(BASE + path, location.origin)

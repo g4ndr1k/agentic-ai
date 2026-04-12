@@ -49,6 +49,9 @@ class AppContext:
         validate_settings(self.settings)
 
         # ── TCC pre-flight: check Full Disk Access before anything else ────
+        # NOTE: TCC/FDA is only checked at startup. If FDA is revoked while
+        # the server is running, subsequent Mail DB reads will fail with
+        # permission errors. A server restart is required to re-check.
         tcc = preflight_check()
         if not tcc["fda"]:
             logger.error(
@@ -127,6 +130,10 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if length == 0:
             return {}
+        ct = self.headers.get("Content-Type", "")
+        if "application/json" not in ct:
+            self._json(415, {"error": "Content-Type must be application/json"})
+            return None
         raw = self.rfile.read(length)
         try:
             return json.loads(raw)
@@ -182,7 +189,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/mail/pending":
-                limit = int(params.get("limit", ["25"])[0])
+                try:
+                    limit = int(params.get("limit", ["25"])[0])
+                except (ValueError, TypeError):
+                    self._json(400, {"error": "Invalid limit parameter"})
+                    return
                 ack = self.ctx.state.get_ack("mail", "0")
                 items, next_ack = (
                     self.ctx.mail.get_pending_messages(
@@ -204,7 +215,11 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # No rate limit on polling — only on command
                 # execution/replies (handled via /alerts/send)
-                limit = int(params.get("limit", ["20"])[0])
+                try:
+                    limit = int(params.get("limit", ["20"])[0])
+                except (ValueError, TypeError):
+                    self._json(400, {"error": "Invalid limit parameter"})
+                    return
                 ack = int(self.ctx.state.get_ack(
                     "commands", "0"))
                 items, next_ack = (
@@ -226,7 +241,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/pdf/jobs":
-                limit = int(params.get("limit", ["50"])[0])
+                try:
+                    limit = int(params.get("limit", ["50"])[0])
+                except (ValueError, TypeError):
+                    self._json(400, {"error": "Invalid limit parameter"})
+                    return
                 status, payload = handle_jobs(limit)
                 self._json(status, payload)
                 return
@@ -240,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("GET error on %s", path)
             self.ctx.state.log_request(path, "error", False)
-            self._json(500, {"error": str(e)})
+            self._json(500, {"error": "Internal server error"})
 
     def do_POST(self):
         if not self._auth():
@@ -311,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("POST error on %s", path)
             self.ctx.state.log_request(path, "error", False)
-            self._json(500, {"error": str(e)})
+            self._json(500, {"error": "Internal server error"})
 
     def log_message(self, format, *args):
         return

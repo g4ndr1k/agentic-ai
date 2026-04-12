@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+import calendar
+
 
 @dataclass
 class FinanceTransaction:
@@ -32,7 +34,7 @@ class FinanceTransaction:
         if not self.hash:
             self.hash = make_hash(
                 self.date, self.amount, self.raw_description,
-                self.institution, self.owner,
+                self.institution, self.owner, self.account,
             )
         if not self.import_date:
             self.import_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -61,16 +63,26 @@ class FinanceTransaction:
 # ── Hash ──────────────────────────────────────────────────────────────────────
 
 def make_hash(date: str, amount: float,
-              raw_description: str, institution: str, owner: str) -> str:
+              raw_description: str, institution: str,
+              owner: str, account: str = "") -> str:
     """
     16-hex-char dedup fingerprint.
     Deterministic: same inputs always produce the same hash.
     """
-    key = f"{date}|{amount:.2f}|{raw_description}|{institution}|{owner}"
+    key = f"{date}|{amount:.2f}|{raw_description}|{institution}|{owner}|{account}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
 # ── Date helpers ──────────────────────────────────────────────────────────────
+
+def _validate_date(yr: int, mo: int, d: int) -> bool:
+    """Return True if (yr, mo, d) is a valid calendar date."""
+    try:
+        calendar.monthrange(yr, mo)  # validates month
+        return 1 <= d <= calendar.monthrange(yr, mo)[1]
+    except (ValueError, calendar.IllegalMonthError):
+        return False
+
 
 def parse_xlsx_date(val) -> Optional[str]:
     """
@@ -90,18 +102,26 @@ def parse_xlsx_date(val) -> Optional[str]:
     # DD/MM/YYYY
     m = re.match(r"^(\d{1,2})/(\d{2})/(\d{4})$", s)
     if m:
-        d, mo, yr = m.groups()
-        return f"{yr}-{mo}-{d.zfill(2)}"
+        d, mo, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _validate_date(yr, mo, d):
+            return f"{yr}-{mo:02d}-{d:02d}"
+        return None
     # DD-MM-YYYY
     m = re.match(r"^(\d{1,2})-(\d{2})-(\d{4})$", s)
     if m:
-        d, mo, yr = m.groups()
-        return f"{yr}-{mo}-{d.zfill(2)}"
-    # DD-MM-YY (xls_writer shorthand)
+        d, mo, yr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if _validate_date(yr, mo, d):
+            return f"{yr}-{mo:02d}-{d:02d}"
+        return None
+    # DD-MM-YY (xls_writer shorthand) — use century heuristic
     m = re.match(r"^(\d{1,2})-(\d{2})-(\d{2})$", s)
     if m:
-        d, mo, yr = m.groups()
-        return f"20{yr}-{mo}-{d.zfill(2)}"
+        d, mo, yr_raw = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        century = "19" if yr_raw >= 80 else "20"
+        yr = int(f"{century}{yr_raw:02d}")
+        if _validate_date(yr, mo, d):
+            return f"{yr}-{mo:02d}-{d:02d}"
+        return None
     # Already ISO
     if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
         return s

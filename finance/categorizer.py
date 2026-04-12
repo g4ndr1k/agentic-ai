@@ -155,13 +155,14 @@ class Categorizer:
                 )
 
         # Sort contains and regex: filtered (specific) rules first, generic last.
+        # Within each tier, longer aliases take priority (more specific match).
         # This ensures account-aware rules take priority when the same substring
         # matches — e.g. "TARIKAN ATM" for Helen/5500346622 → Household
         # before the generic ATM Withdrawal rule.
         def _specificity(rule):
             return (0 if (rule[3] or rule[4]) else 1)  # filtered=0, generic=1
 
-        self._contains.sort(key=_specificity)
+        self._contains.sort(key=lambda rule: (_specificity(rule), -len(rule[0])))
         self._regex.sort(key=_specificity)
 
         # Also sort exact match entries: filtered first per alias key
@@ -328,29 +329,16 @@ class Categorizer:
         Returns None if Ollama is unavailable, times out, or returns garbage.
         """
         prompt = self._build_prompt(desc)
-        payload = json.dumps({
-            "model": self.ollama_model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.1},  # low temp for deterministic output
-        }).encode()
 
         try:
-            req = urllib.request.Request(
-                f"{self.ollama_host}/api/generate",
-                data=payload,
-                headers={"Content-Type": "application/json"},
+            from finance.ollama_utils import ollama_generate
+            data = ollama_generate(
+                self.ollama_host, self.ollama_model, prompt,
+                self.ollama_timeout, temperature=0.1, num_predict=256,
             )
-            with urllib.request.urlopen(req, timeout=self.ollama_timeout) as resp:
-                data = json.loads(resp.read())
-
             raw_response = data.get("response", "").strip()
             return self._parse_ollama_response(raw_response, desc)
 
-        except urllib.error.URLError as e:
-            log.debug("Ollama unreachable for %r: %s", desc, e)
-        except TimeoutError:
-            log.debug("Ollama timed out for %r", desc)
         except (json.JSONDecodeError, KeyError) as e:
             log.debug("Ollama bad response for %r: %s", desc, e)
         except Exception as e:

@@ -29,6 +29,15 @@ import argparse
 import calendar
 import sqlite3
 import sys
+from pathlib import Path
+
+# Add project root to path so finance package is importable
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from finance.db import open_db
+import sys
 import tomllib
 from datetime import date as _date, datetime as _dt
 from pathlib import Path
@@ -81,12 +90,12 @@ def _load_db_path(override: str | None) -> str:
 def _month_ends_from(start_year: int, start_month: int) -> list[str]:
     """
     Return a list of month-end dates (YYYY-MM-DD) from the given start month
-    up to and including the current calendar month.
+    up to but NOT including the current calendar month (which may be incomplete).
     """
     results: list[str] = []
     today = _date.today()
     y, m = start_year, start_month
-    while _date(y, m, 1) <= _date(today.year, today.month, 1):
+    while _date(y, m, 1) < _date(today.year, today.month, 1):
         last_day = calendar.monthrange(y, m)[1]
         results.append(f"{y}-{m:02d}-{last_day:02d}")
         if m == 12:
@@ -130,10 +139,15 @@ def main() -> None:
         "--from", dest="start", default=None, metavar="YYYY-MM",
         help="First month to seed (default: 2026-01).",
     )
+    parser.add_argument(
+        "--institution", default="Physical",
+        help="Institution label for gold holdings (default: Physical).",
+    )
     args = parser.parse_args()
 
     db_path   = _load_db_path(args.db)
     owner     = args.owner
+    institution = args.institution
     dry_run   = args.dry_run
     start_y, start_m = _parse_start(args.start)
 
@@ -146,7 +160,7 @@ def main() -> None:
     print(f"  Weight classes: {[wc[3] for wc in WEIGHT_CLASSES]}")
     print()
 
-    con = None if dry_run else sqlite3.connect(db_path)
+    con = None if dry_run else open_db(db_path)
     total_upserted = 0
     total_skipped  = 0
 
@@ -196,7 +210,7 @@ def main() -> None:
                 """, (
                     month_end,
                     "gold", "Physical Assets", name,
-                    code, "Physical", "", owner,
+                    code, institution, "", owner,
                     "IDR", float(qty), unit_price,
                     market_value, market_value,
                     0.0, 0.0, 0.0,

@@ -11,6 +11,24 @@ Schema notes
   categories     — mirror of Categories tab
   currency_codes — mirror of Currency Codes tab
   sync_log       — one row per sync run (for /api/health and --status)
+
+Precision note
+──────────────
+  Monetary values use SQLite REAL (IEEE 754 double).  For household-scale
+  IDR amounts (< 100 billion), float precision is sufficient (integers up
+  to 2**53 are exactly representable).  If sub-IDR precision or multi-
+  currency aggregation becomes needed, migrate to INTEGER (cents).
+
+Foreign-key note
+────────────────
+  PRAGMA foreign_keys=ON is set for forward compatibility, but no table
+  currently declares REFERENCES or FOREIGN KEY constraints.
+
+executescript note
+─────────────────
+  conn.executescript() implicitly COMMITs any pending transaction before
+  running the supplied SQL.  This is safe during open_db() (no pending
+  transaction exists), but be careful if called elsewhere.
 """
 from __future__ import annotations
 import sqlite3
@@ -39,11 +57,12 @@ CREATE TABLE IF NOT EXISTS transactions (
     synced_at         TEXT    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_tx_date      ON transactions(date);
-CREATE INDEX IF NOT EXISTS idx_tx_yearmonth ON transactions(strftime('%Y-%m', date));
-CREATE INDEX IF NOT EXISTS idx_tx_category  ON transactions(category);
-CREATE INDEX IF NOT EXISTS idx_tx_owner     ON transactions(owner);
-CREATE INDEX IF NOT EXISTS idx_tx_hash      ON transactions(hash);
+CREATE INDEX IF NOT EXISTS idx_tx_date        ON transactions(date);
+CREATE INDEX IF NOT EXISTS idx_tx_yearmonth   ON transactions(strftime('%Y-%m', date));
+CREATE INDEX IF NOT EXISTS idx_tx_category    ON transactions(category);
+CREATE INDEX IF NOT EXISTS idx_tx_owner       ON transactions(owner);
+CREATE INDEX IF NOT EXISTS idx_tx_institution ON transactions(institution);
+CREATE INDEX IF NOT EXISTS idx_tx_account     ON transactions(account);
 
 CREATE TABLE IF NOT EXISTS merchant_aliases (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +73,8 @@ CREATE TABLE IF NOT EXISTS merchant_aliases (
     added_date     TEXT,
     owner_filter   TEXT    DEFAULT '',
     account_filter TEXT    DEFAULT '',
-    synced_at      TEXT    NOT NULL
+    synced_at      TEXT    NOT NULL,
+    UNIQUE(alias, owner_filter, account_filter)
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -297,12 +317,38 @@ def _rebuild_liabilities_table(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_liabilities_owner ON liabilities(owner)")
 
 
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    """Read the current schema version, or 0 if the table doesn't exist yet."""
+    try:
+        row = conn.execute(
+            "SELECT version FROM schema_version ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else 0
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL)"
+    )
+    conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+
+
 def _needs_holdings_migration(conn: sqlite3.Connection) -> bool:
+    ver = _get_schema_version(conn)
+    if ver >= 1:
+        return False
+    # Fallback for databases created before version tracking
     sql = _table_sql(conn, "holdings").replace(" ", "")
     return bool(sql) and "UNIQUE(snapshot_date,asset_class,asset_name,owner)" in sql
 
 
 def _needs_liabilities_migration(conn: sqlite3.Connection) -> bool:
+    ver = _get_schema_version(conn)
+    if ver >= 1:
+        return False
+    # Fallback for databases created before version tracking
     sql = _table_sql(conn, "liabilities").replace(" ", "")
     return bool(sql) and "UNIQUE(snapshot_date,liability_type,liability_name,owner)" in sql
 
@@ -320,6 +366,7 @@ def open_db(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
     if _needs_holdings_migration(conn):
         _rebuild_holdings_table(conn)
@@ -333,6 +380,11 @@ def open_db(db_path: str) -> sqlite3.Connection:
     ]:
         if col not in existing_cols:
             conn.execute(f"ALTER TABLE merchant_aliases ADD COLUMN {col} {definition}")
+    conn.commit()
+    # Prune sync_log entries older than 90 days
+    conn.execute(
+        "DELETE FROM sync_log WHERE synced_at < datetime('now', '-90 days')"
+    )
     conn.commit()
     return conn
 

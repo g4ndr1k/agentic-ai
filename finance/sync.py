@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 from finance.config import load_config, get_finance_config, get_sheets_config
 from finance.db import open_db
+from finance.models import make_hash
 from finance.sheets import SheetsClient
 from finance.categorizer import migrate_category
 
@@ -58,10 +59,7 @@ def sync(db_path: str, sheets_client: SheetsClient) -> dict:
     t0  = time.time()
     now = datetime.now(timezone.utc).isoformat()
 
-    log.info("Opening SQLite DB: %s", db_path)
-    conn = open_db(db_path)
-
-    # ── Pull from Sheets ──────────────────────────────────────────────────────
+    # ── Pull from Sheets (no DB connection needed yet) ──────────────────────
     log.info("Reading Transactions tab …")
     tx_rows    = _read_transactions(sheets_client)
     log.info("  %d transaction rows", len(tx_rows))
@@ -82,124 +80,145 @@ def sync(db_path: str, sheets_client: SheetsClient) -> dict:
     overrides  = sheets_client.read_overrides()
     log.info("  %d override rows", len(overrides))
 
-    # ── Write to SQLite (single atomic transaction) ───────────────────────────
-    # Deduplicate by hash — keep first occurrence (Sheets order = import order)
-    seen_hashes: set[str] = set()
-    deduped_tx: list[dict] = []
-    for r in tx_rows:
-        if r["hash"] not in seen_hashes:
-            seen_hashes.add(r["hash"])
-            deduped_tx.append(r)
-    if len(deduped_tx) < len(tx_rows):
-        log.warning(
-            "Deduplicated %d → %d transaction rows (duplicate hashes in Sheets).",
-            len(tx_rows), len(deduped_tx),
+    # ── Rehash: recompute hashes with account field included ────────────────
+    rehashed = 0
+    hash_updates: list[tuple[str, int]] = []  # (new_hash, 1-based row index)
+    for idx, r in enumerate(tx_rows):
+        new_hash = make_hash(
+            r.get("date", ""), r.get("amount", 0),
+            r.get("raw_description", ""), r.get("institution", ""),
+            r.get("owner", ""), r.get("account", ""),
         )
-    tx_rows = deduped_tx
+        if new_hash != r.get("hash", ""):
+            r["hash"] = new_hash
+            rehashed += 1
+            hash_updates.append((new_hash, idx + 2))  # +2: header row + 0-based index
+    if rehashed:
+        log.info("Rehashed %d transaction(s) with account field.", rehashed)
+        _write_rehashed_hashes(sheets_client, hash_updates)
 
-    # Migrate legacy category names to new taxonomy
-    migrated = 0
-    for r in tx_rows:
-        old_cat = r.get("category")
-        new_cat = migrate_category(old_cat)
-        if new_cat != old_cat:
-            r["category"] = new_cat
-            migrated += 1
-    if migrated:
-        log.info("Migrated %d transaction(s) from legacy category names.", migrated)
-
-    # Apply category overrides — these take priority over auto-categorised values
-    # Also migrate any legacy names stored in the overrides tab.
-    if overrides:
-        applied = 0
+    # ── Open DB only after Sheets reads succeed ─────────────────────────────
+    log.info("Opening SQLite DB: %s", db_path)
+    conn = open_db(db_path)
+    try:
+        # Deduplicate by hash — keep first occurrence (Sheets order = import order)
+        seen_hashes: set[str] = set()
+        deduped_tx: list[dict] = []
         for r in tx_rows:
-            ov = overrides.get(r["hash"])
-            if ov:
-                r["category"] = migrate_category(ov["category"]) or ov["category"]
-                if ov.get("notes"):
-                    r["notes"] = ov["notes"]
-                applied += 1
-        if applied:
-            log.info("Applied %d category override(s).", applied)
-
-    log.info("Writing to SQLite …")
-    # BEGIN IMMEDIATE acquires a write lock upfront so no other writer can
-    # interleave between our DELETE and INSERT operations.
-    with conn:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute("DELETE FROM transactions")
-        if tx_rows:
-            conn.executemany(
-                """
-                INSERT INTO transactions
-                    (date, amount, original_currency, original_amount,
-                     exchange_rate, raw_description, merchant, category,
-                     institution, account, owner, notes, hash,
-                     import_date, import_file, synced_at)
-                VALUES
-                    (:date, :amount, :original_currency, :original_amount,
-                     :exchange_rate, :raw_description, :merchant, :category,
-                     :institution, :account, :owner, :notes, :hash,
-                     :import_date, :import_file, :synced_at)
-                """,
-                [{**r, "synced_at": now} for r in tx_rows],
+            if r["hash"] not in seen_hashes:
+                seen_hashes.add(r["hash"])
+                deduped_tx.append(r)
+        if len(deduped_tx) < len(tx_rows):
+            log.warning(
+                "Deduplicated %d → %d transaction rows (duplicate hashes in Sheets).",
+                len(tx_rows), len(deduped_tx),
             )
+        tx_rows = deduped_tx
 
-        conn.execute("DELETE FROM merchant_aliases")
-        if alias_rows:
-            conn.executemany(
+        # Migrate legacy category names to new taxonomy
+        migrated = 0
+        for r in tx_rows:
+            old_cat = r.get("category")
+            new_cat = migrate_category(old_cat)
+            if new_cat != old_cat:
+                r["category"] = new_cat
+                migrated += 1
+        if migrated:
+            log.info("Migrated %d transaction(s) from legacy category names.", migrated)
+
+        # Apply category overrides — these take priority over auto-categorised values
+        # Also migrate any legacy names stored in the overrides tab.
+        if overrides:
+            applied = 0
+            for r in tx_rows:
+                ov = overrides.get(r["hash"])
+                if ov:
+                    r["category"] = migrate_category(ov["category"]) or ov["category"]
+                    if ov.get("notes"):
+                        r["notes"] = ov["notes"]
+                    applied += 1
+            if applied:
+                log.info("Applied %d category override(s).", applied)
+
+        log.info("Writing to SQLite …")
+        # BEGIN IMMEDIATE acquires a write lock upfront so no other writer can
+        # interleave between our DELETE and INSERT operations.
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM transactions")
+            if tx_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO transactions
+                        (date, amount, original_currency, original_amount,
+                         exchange_rate, raw_description, merchant, category,
+                         institution, account, owner, notes, hash,
+                         import_date, import_file, synced_at)
+                    VALUES
+                        (:date, :amount, :original_currency, :original_amount,
+                         :exchange_rate, :raw_description, :merchant, :category,
+                         :institution, :account, :owner, :notes, :hash,
+                         :import_date, :import_file, :synced_at)
+                    """,
+                    [{**r, "synced_at": now} for r in tx_rows],
+                )
+
+            conn.execute("DELETE FROM merchant_aliases")
+            if alias_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO merchant_aliases
+                        (merchant, alias, category, match_type, added_date,
+                         owner_filter, account_filter, synced_at)
+                    VALUES
+                        (:merchant, :alias, :category, :match_type, :added_date,
+                         :owner_filter, :account_filter, :synced_at)
+                    """,
+                    [{**r, "synced_at": now} for r in alias_rows],
+                )
+
+            conn.execute("DELETE FROM categories")
+            if cat_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO categories
+                        (category, icon, sort_order, is_recurring, monthly_budget,
+                         category_group, subcategory, synced_at)
+                    VALUES
+                        (:category, :icon, :sort_order, :is_recurring, :monthly_budget,
+                         :category_group, :subcategory, :synced_at)
+                    """,
+                    [{**r, "synced_at": now} for r in cat_rows],
+                )
+
+            conn.execute("DELETE FROM currency_codes")
+            if cur_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO currency_codes
+                        (currency_code, currency_name, symbol, flag_emoji,
+                         country_hints, decimal_places, synced_at)
+                    VALUES
+                        (:currency_code, :currency_name, :symbol, :flag_emoji,
+                         :country_hints, :decimal_places, :synced_at)
+                    """,
+                    [{**r, "synced_at": now} for r in cur_rows],
+                )
+
+            duration = round(time.time() - t0, 2)
+            conn.execute(
                 """
-                INSERT INTO merchant_aliases
-                    (merchant, alias, category, match_type, added_date,
-                     owner_filter, account_filter, synced_at)
-                VALUES
-                    (:merchant, :alias, :category, :match_type, :added_date,
-                     :owner_filter, :account_filter, :synced_at)
+                INSERT INTO sync_log
+                    (synced_at, transactions_count, aliases_count,
+                     categories_count, currencies_count, duration_s)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                [{**r, "synced_at": now} for r in alias_rows],
+                (now, len(tx_rows), len(alias_rows),
+                 len(cat_rows), len(cur_rows), duration),
             )
+    finally:
+        conn.close()
 
-        conn.execute("DELETE FROM categories")
-        if cat_rows:
-            conn.executemany(
-                """
-                INSERT INTO categories
-                    (category, icon, sort_order, is_recurring, monthly_budget,
-                     category_group, subcategory, synced_at)
-                VALUES
-                    (:category, :icon, :sort_order, :is_recurring, :monthly_budget,
-                     :category_group, :subcategory, :synced_at)
-                """,
-                [{**r, "synced_at": now} for r in cat_rows],
-            )
-
-        conn.execute("DELETE FROM currency_codes")
-        if cur_rows:
-            conn.executemany(
-                """
-                INSERT INTO currency_codes
-                    (currency_code, currency_name, symbol, flag_emoji,
-                     country_hints, decimal_places, synced_at)
-                VALUES
-                    (:currency_code, :currency_name, :symbol, :flag_emoji,
-                     :country_hints, :decimal_places, :synced_at)
-                """,
-                [{**r, "synced_at": now} for r in cur_rows],
-            )
-
-        duration = round(time.time() - t0, 2)
-        conn.execute(
-            """
-            INSERT INTO sync_log
-                (synced_at, transactions_count, aliases_count,
-                 categories_count, currencies_count, duration_s)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (now, len(tx_rows), len(alias_rows),
-             len(cat_rows), len(cur_rows), duration),
-        )
-
-    conn.close()
     log.info("Sync complete in %.2fs.", duration)
 
     return {
@@ -324,6 +343,20 @@ def _read_currencies(client: SheetsClient) -> list[dict]:
             "decimal_places": decimal_places,
         })
     return result
+
+
+def _write_rehashed_hashes(
+    client: SheetsClient, updates: list[tuple[str, int]], batch_size: int = 100
+) -> None:
+    """Batch-update the hash column (M) in the Transactions tab."""
+    tab = client.cfg.transactions_tab
+    for i in range(0, len(updates), batch_size):
+        chunk = updates[i : i + batch_size]
+        rows = [[new_hash] for new_hash, _ in chunk]
+        first_row = chunk[0][1]
+        last_row = chunk[-1][1]
+        client._update(f"{tab}!M{first_row}:M{last_row}", rows)
+    log.info("Wrote %d updated hash(es) to Sheets.", len(updates))
 
 
 def _float_or_none(val) -> float | None:

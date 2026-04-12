@@ -22,8 +22,14 @@ function safeStorageSet(key, value) {
   }
 }
 
+function _getCurrentMonthKey() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 function normalizeDashboardMonth(value, fallback) {
-  return /^\d{4}-\d{2}$/.test(value || '') && value >= DASHBOARD_MIN_MONTH ? value : fallback
+  const upperBound = _getCurrentMonthKey()
+  return /^\d{4}-\d{2}$/.test(value || '') && value >= DASHBOARD_MIN_MONTH && value <= upperBound ? value : fallback
 }
 
 export const useFinanceStore = defineStore('finance', () => {
@@ -39,9 +45,9 @@ export const useFinanceStore = defineStore('finance', () => {
   const selectedYear  = ref(now.getFullYear())
   const selectedMonth = ref(now.getMonth() + 1)
   const selectedOwner = ref('')   // '' = all owners
-  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const currentMonthKey = computed(() => _getCurrentMonthKey())
   const dashboardStartMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_START_KEY), DASHBOARD_MIN_MONTH))
-  const dashboardEndMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_END_KEY), currentMonthKey))
+  const dashboardEndMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_END_KEY), currentMonthKey.value))
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const categoryMap = computed(() => {
@@ -59,7 +65,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
   const dashboardMonthOptions = computed(() => {
     const [startYear, startMonth] = DASHBOARD_MIN_MONTH.split('-').map(Number)
-    const [endYear, endMonth] = currentMonthKey.split('-').map(Number)
+    const [endYear, endMonth] = currentMonthKey.value.split('-').map(Number)
     const options = []
     const cursor = new Date(startYear, startMonth - 1, 1)
     const end = new Date(endYear, endMonth - 1, 1)
@@ -121,7 +127,7 @@ export const useFinanceStore = defineStore('finance', () => {
 
   function setDashboardRange(startMonth, endMonth) {
     const normalizedStart = normalizeDashboardMonth(startMonth, DASHBOARD_MIN_MONTH)
-    const normalizedEnd = normalizeDashboardMonth(endMonth, currentMonthKey)
+    const normalizedEnd = normalizeDashboardMonth(endMonth, currentMonthKey.value)
     if (normalizedStart <= normalizedEnd) {
       dashboardStartMonth.value = normalizedStart
       dashboardEndMonth.value = normalizedEnd

@@ -6,8 +6,11 @@ from macOS Keychain instead of a file on disk. Falls back to file if Keychain
 lookup fails.
 """
 import hmac
+import logging
 import stat
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def load_token(token_file: Path) -> str:
@@ -43,6 +46,10 @@ def resolve_token(settings: dict) -> str:
         except ImportError:
             pass
         # Keychain miss — fall through to file
+        log.warning(
+            "Keychain lookup failed for token_source='keychain', "
+            "falling back to file-based auth"
+        )
 
     # File-based fallback
     token_file = Path(auth["token_file"]).expanduser()

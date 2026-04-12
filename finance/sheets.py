@@ -70,6 +70,10 @@ class SheetsClient:
             self._service = _build_service(self.cfg)
         return self._service
 
+    def _invalidate_service(self):
+        """Reset the cached service so it is rebuilt on next access."""
+        self._service = None
+
     def _get(self, range_: str) -> list[list]:
         """Read a range; returns list of rows (each row is a list of values)."""
         try:
@@ -81,27 +85,39 @@ class SheetsClient:
             )
             return result.get("values", [])
         except HttpError as e:
+            if e.resp.status == 401:
+                self._invalidate_service()
             log.error("Sheets read failed (%s): %s", range_, e)
             return []
 
     def _append(self, range_: str, rows: list[list]):
         """Append rows to a tab."""
-        self.service.spreadsheets().values().append(
-            spreadsheetId=self.cfg.spreadsheet_id,
-            range=range_,
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": rows},
-        ).execute()
+        try:
+            self.service.spreadsheets().values().append(
+                spreadsheetId=self.cfg.spreadsheet_id,
+                range=range_,
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": rows},
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 401:
+                self._invalidate_service()
+            raise
 
     def _update(self, range_: str, rows: list[list]):
         """Overwrite a specific range."""
-        self.service.spreadsheets().values().update(
-            spreadsheetId=self.cfg.spreadsheet_id,
-            range=range_,
-            valueInputOption="RAW",
-            body={"values": rows},
-        ).execute()
+        try:
+            self.service.spreadsheets().values().update(
+                spreadsheetId=self.cfg.spreadsheet_id,
+                range=range_,
+                valueInputOption="RAW",
+                body={"values": rows},
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 401:
+                self._invalidate_service()
+            raise
 
     # ── Reads ─────────────────────────────────────────────────────────────────
 
@@ -246,6 +262,12 @@ class SheetsClient:
 
         If the hash already exists, overwrites that row in-place.
         Otherwise appends a new row.
+
+        KNOWN LIMITATION: Read-then-write race condition.  Two concurrent
+        requests for the same hash could both see "not found" and both
+        append, creating a duplicate.  Google Sheets API does not support
+        conditional writes.  Mitigated by: (1) single-user personal app,
+        (2) the dedup scan below removes extras on each call.
         """
         qtab = f"'{self.cfg.overrides_tab}'"
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
