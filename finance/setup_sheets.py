@@ -95,8 +95,9 @@ DEFAULT_CATEGORIES = [
     ["Flights & Hotels", "✈️", 20, "FALSE", "", "Travel",               "Flights & Hotels"],
     ["Vacation Spending","🏖️", 21, "FALSE", "", "Travel",               "Vacation Spending"],
     # ── 7. Financial & Legal ─────────────────────────────────────────────────
-    ["Fees & Interest",  "🏦", 22, "FALSE", "", "Financial & Legal",    "Fees & Interest"],
-    ["Taxes",            "📋", 23, "FALSE", "", "Financial & Legal",    "Taxes"],
+    ["Fees & Interest",      "🏦", 21, "FALSE", "", "Financial & Legal",    "Fees & Interest"],
+    ["Taxes",                "📋", 22, "FALSE", "", "Financial & Legal",    "Taxes"],
+    ["Professional Expenses","🧾", 23, "FALSE", "", "Financial & Legal",    "Professional Expenses"],
     # ── 8. System / Tracking (Non-Expense Categories) ────────────────────────
     ["Earned Income",    "💼", 24, "FALSE", "", "System / Tracking",    "Earned Income"],
     ["Investment Income","📈", 25, "FALSE", "", "System / Tracking",    "Investment Income"],

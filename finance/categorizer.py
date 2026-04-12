@@ -46,7 +46,7 @@ DEFAULT_CATEGORIES = [
     # Travel
     "Flights & Hotels", "Vacation Spending",
     # Financial & Legal
-    "Fees & Interest", "Taxes",
+    "Fees & Interest", "Taxes", "Professional Expenses",
     # System / Tracking
     "Earned Income", "Investment Income", "Interest Income", "Capital Gains",
     "Passive Income", "Other Income", "Transfer", "Cash Withdrawal", "Adjustment", "Other",
@@ -305,6 +305,7 @@ class Categorizer:
             "- Family: childcare expenses\n"
             "- Phone Bill: mobile phone bills\n"
             "- Internet: broadband / WiFi bills\n"
+            "- Professional Expenses: licenses, memberships, professional associations, conferences, journals, and other work-related professional fees\n"
             "- Earned Income: salary, wages, bonuses, active professional income\n"
             "- Investment Income: stock dividends, bond coupons, mutual fund payouts\n"
             "- Interest Income: savings account interest and bank profit share\n"
