@@ -80,6 +80,7 @@ export const api = {
   summaryExplanationQuery: (y, m, body) => post(`/summary/${y}/${m}/explanation/query`, body),
   reviewQueue:         (limit=100)=> get('/review-queue', { limit }),
   saveAlias:           (body)     => post('/alias', body),
+  backfillAliases:     ()         => post('/backfill-aliases'),
   sync:                ()         => post('/sync'),
   importData:          (body={})  => post('/import', body),
   pipelineStatus:      ()         => get('/pipeline/status'),

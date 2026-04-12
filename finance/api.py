@@ -1524,21 +1524,45 @@ def post_alias(req: AliasRequest):
         )
         updated_hashes.append(req.hash)
 
-        # 3. Apply to similar uncategorised transactions (exact match only)
-        if req.apply_to_similar and req.match_type == "exact":
-            target = conn.execute(
-                "SELECT raw_description FROM transactions WHERE hash = ?",
-                (req.hash,),
-            ).fetchone()
-            if target:
+        # 3. Apply to similar uncategorised transactions
+        if req.apply_to_similar:
+            if req.match_type == "exact":
+                target = conn.execute(
+                    "SELECT raw_description FROM transactions WHERE hash = ?",
+                    (req.hash,),
+                ).fetchone()
+                if target:
+                    similar = conn.execute(
+                        """
+                        SELECT hash FROM transactions
+                        WHERE raw_description = ?
+                          AND hash != ?
+                          AND (category IS NULL OR category = '')
+                        """,
+                        (target["raw_description"], req.hash),
+                    ).fetchall()
+                    if similar:
+                        similar_hashes = [r["hash"] for r in similar]
+                        conn.executemany(
+                            "UPDATE transactions SET merchant = ?, category = ? WHERE hash = ?",
+                            [(req.merchant, req.category, h) for h in similar_hashes],
+                        )
+                        updated_hashes.extend(similar_hashes)
+                        log.info(
+                            "Applied alias to %d similar uncategorised transactions.",
+                            len(similar_hashes),
+                        )
+            elif req.match_type == "contains":
+                # Find all uncategorised rows whose raw_description contains the alias pattern
+                pattern = req.alias.strip().upper()
                 similar = conn.execute(
                     """
-                    SELECT hash FROM transactions
-                    WHERE raw_description = ?
+                    SELECT hash, raw_description FROM transactions
+                    WHERE UPPER(raw_description) LIKE ?
                       AND hash != ?
                       AND (category IS NULL OR category = '')
                     """,
-                    (target["raw_description"], req.hash),
+                    (f"%{pattern}%", req.hash),
                 ).fetchall()
                 if similar:
                     similar_hashes = [r["hash"] for r in similar]
@@ -1548,9 +1572,34 @@ def post_alias(req: AliasRequest):
                     )
                     updated_hashes.extend(similar_hashes)
                     log.info(
-                        "Applied alias to %d similar uncategorised transactions.",
+                        "Applied contains alias to %d similar uncategorised transactions.",
                         len(similar_hashes),
                     )
+            elif req.match_type == "regex":
+                import re
+                try:
+                    pat = re.compile(req.alias, re.IGNORECASE)
+                    uncategorised = conn.execute(
+                        """
+                        SELECT hash, raw_description FROM transactions
+                        WHERE hash != ?
+                          AND (category IS NULL OR category = '')
+                        """,
+                        (req.hash,),
+                    ).fetchall()
+                    similar_hashes = [r["hash"] for r in uncategorised if pat.search(r["raw_description"])]
+                    if similar_hashes:
+                        conn.executemany(
+                            "UPDATE transactions SET merchant = ?, category = ? WHERE hash = ?",
+                            [(req.merchant, req.category, h) for h in similar_hashes],
+                        )
+                        updated_hashes.extend(similar_hashes)
+                        log.info(
+                            "Applied regex alias to %d similar uncategorised transactions.",
+                            len(similar_hashes),
+                        )
+                except re.error:
+                    log.warning("Invalid regex in alias backfill: %s", req.alias)
 
         # Return the updated row
         updated = conn.execute(
@@ -1562,6 +1611,90 @@ def post_alias(req: AliasRequest):
         "updated_count": len(updated_hashes),
         "transaction":   _row(updated) if updated else None,
     }
+
+
+# ── /api/backfill-aliases ──────────────────────────────────────────────────
+
+@app.post("/api/backfill-aliases", dependencies=[Depends(require_api_key)])
+def backfill_aliases():
+    """
+    Re-apply all merchant aliases from Sheets against uncategorised transactions
+    in SQLite.  This fixes rows that were imported before an alias was created.
+
+    Returns the number of transactions updated.
+    """
+    import re as _re
+
+    # 1. Load aliases from Sheets
+    aliases = _get_sheets().read_aliases()
+    if not aliases:
+        return {"ok": True, "updated_count": 0, "detail": "no aliases found"}
+
+    # Build lookup structures (same logic as Categorizer._load_aliases)
+    exact: dict[str, list[tuple]] = {}
+    contains: list[tuple] = []
+    regexes: list[tuple] = []
+
+    for row in aliases:
+        alias_s = str(row.get("alias", "")).strip()
+        merchant = str(row.get("merchant", "")).strip()
+        category = str(row.get("category", "")).strip()
+        mtype = str(row.get("match_type", "exact")).strip().lower()
+        if not alias_s or not merchant:
+            continue
+        if mtype == "regex":
+            try:
+                regexes.append((_re.compile(alias_s, _re.IGNORECASE), merchant, category))
+            except _re.error:
+                pass
+        elif mtype == "contains":
+            contains.append((alias_s.upper(), merchant, category))
+        else:
+            exact.setdefault(alias_s.upper(), []).append((merchant, category))
+
+    # 2. Scan uncategorised transactions and apply matches
+    updated = 0
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT hash, raw_description FROM transactions
+            WHERE category IS NULL OR category = ''
+            """
+        ).fetchall()
+
+        for r in rows:
+            desc = r["raw_description"].strip()
+            key = desc.upper()
+            new_merchant = None
+            new_category = None
+
+            # Layer 1: exact
+            if key in exact:
+                new_merchant, new_category = exact[key][0]
+
+            # Layer 1b: contains
+            if not new_merchant:
+                for substr, m, c in contains:
+                    if substr in key:
+                        new_merchant, new_category = m, c
+                        break
+
+            # Layer 2: regex
+            if not new_merchant:
+                for pat, m, c in regexes:
+                    if pat.search(desc):
+                        new_merchant, new_category = m, c
+                        break
+
+            if new_merchant and new_category:
+                conn.execute(
+                    "UPDATE transactions SET merchant = ?, category = ? WHERE hash = ?",
+                    (new_merchant, new_category, r["hash"]),
+                )
+                updated += 1
+
+    log.info("Backfill aliases: updated %d transactions.", updated)
+    return {"ok": True, "updated_count": updated}
 
 
 # ── /api/transaction/{hash}/category ──────────────────────────────────────────
