@@ -2792,7 +2792,7 @@ Column order optimized for mobile scanning (most-viewed fields leftmost):
 | `category_group` | Text | Food & Dining | Top-level group (8 groups) |
 | `subcategory` | Text | Dining Out | Subcategory label |
 
-**31 categories across 8 groups (v2.8.0 taxonomy):**
+**33 categories across 8 groups (current taxonomy):**
 
 | # | Group | Category | Icon | Recurring |
 |---|---|---|---|---|
@@ -2808,6 +2808,7 @@ Column order optimized for mobile scanning (most-viewed fields leftmost):
 | 4 | **Lifestyle & Personal** | Shopping | 🛍️ | |
 | | | Personal Care | 💇 | |
 | | | Entertainment | 🎬 | |
+| | | Hobbies | 🎮 | |
 | | | Subscriptions | 📱 | ✓ |
 | 5 | **Health & Family** | Healthcare | 🏥 | |
 | | | Family | 👨‍👩‍👧 | ✓ |
@@ -2818,17 +2819,18 @@ Column order optimized for mobile scanning (most-viewed fields leftmost):
 | | | Vacation Spending | 🏖️ | |
 | 7 | **Financial & Legal** | Fees & Interest | 🏦 | |
 | | | Taxes | 📋 | |
-| 8 | **System / Tracking** | Income | 💰 | |
-| | | Dividends | 📈 | |
+| 8 | **System / Tracking** | Earned Income | 💼 | |
+| | | Investment Income | 📈 | |
 | | | Interest Income | 🏦 | |
 | | | Capital Gains | 📊 | |
+| | | Passive Income | 🪙 | |
 | | | Other Income | 💵 | |
 | | | Transfer | 🔁 | |
 | | | Cash Withdrawal | 🏧 | |
 | | | Adjustment | 🔧 | |
 | | | Other | ❓ | |
 
-> **System / Tracking categories** (`Transfer`, `Adjustment`) are excluded from all income/expense totals, % calculations, and spending charts in both the API and the PWA.
+> **System / Tracking categories** (`Transfer`, `Adjustment`, `Ignored`) are excluded from all income/expense totals, % calculations, and spending charts in both the API and the PWA. `Ignored` is a special override-only category used to suppress duplicate / zero-sum review rows without deleting the source transactions.
 
 ### 27.5 Google Sheets — Currency Codes tab
 
@@ -2957,6 +2959,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
       │ No / disabled
       ▼ Layer 4: review queue (no pre-fill)
    User confirms → write to Sheet + expand Merchant Aliases tab
+  User can also mark duplicate / zero-sum rows as Ignored → write Category Override only (no alias)
 
 After all transactions are categorized:
       ▼ Post-processing (Layer 0): two rules
@@ -2980,8 +2983,8 @@ All alias layers (exact, contains, regex) support two optional filter columns: `
 |---|---|---|---|---|---|
 | Household Cash | TARIKAN ATM | Household | contains | Helen | 5500346622 |
 | Healthcare (Ivan) | IVAN | Healthcare | contains | Helen | 2684118322 |
-| ANZ Indonesia (Salary) | LLG-ANZ | Income | contains | Gandrik | 2171138631 |
-| ERHA Clinic (Income) | ERHA CLINIC | Income | contains | Helen | 4123968773 |
+| PwC Indonesia Salary | KR OTOMATIS LLG-ANZ INDONESIA | Earned Income | contains | Gandrik | 2171138631 |
+| Erha Clinic Salary | ERHA CLINIC | Earned Income | contains | Helen | 4123968773 |
 | Family (Katina) | KATINA MIKAELA | Family | contains | | |
 | Household Staff (Rini) | FRANSISCA RINI | Household | contains | | |
 
@@ -3014,6 +3017,8 @@ When syncing from Google Sheets, `migrate_category()` automatically translates o
 | `Household Expenses` | `Household` |
 | `Child Support` | `Family` |
 | `Travel` | `Flights & Hotels` |
+| `Income` | `Earned Income` |
+| `Dividends` | `Investment Income` |
 
 ### Layer 1 — Merchant alias table (exact match)
 
@@ -3058,8 +3063,8 @@ Groceries, Dining Out, Delivery & Takeout, Auto, Rideshare,
 Shopping, Personal Care, Entertainment, Subscriptions,
 Healthcare, Family, Household, Education, Gifts & Donations,
 Flights & Hotels, Vacation Spending, Fees & Interest, Taxes,
-Income, Dividends, Interest Income, Capital Gains, Other Income,
-Transfer, Cash Withdrawal, Adjustment, Other
+Earned Income, Investment Income, Interest Income, Capital Gains,
+Passive Income, Other Income, Transfer, Cash Withdrawal, Adjustment, Other
 
 Category guidance:
 - Auto: fuel (SPBU, Pertamina), vehicle repairs, parking, toll
@@ -3262,7 +3267,7 @@ AI narrative (via Ollama `gemma4:e4b`) runs after the deterministic summary and 
 | `/` | Main Dashboard | Wealth-management landing page: total net worth hero, 30-day change, wealth-over-time chart, asset-allocation donut, and cash-flow summary. All dashboard widgets respect the Settings month range and never show data before Jan 2026. |
 | `/flows` | Flows | Original flows view: month/year navigation clamped to Jan 2026+, owner toggle, summary cards, spending-by-group rollup, trend explanation panel, Chart.js monthly trend, owner split table |
 | `/transactions` | Transactions | Year/month/owner/category/search filters; paginated list (50/page); mobile expandable detail rows; desktop sortable table with separate detail/editor pane |
-| `/review` | Review Queue | Mobile accordion review flow plus desktop two-pane workspace; alias form writes via `POST /api/alias`; removes affected rows locally and decrements badge |
+| `/review` | Review Queue | Mobile accordion review flow plus desktop two-pane workspace; alias form writes via `POST /api/alias`; duplicate / zero-sum rows can be marked `Ignored` via category override (no alias write); removes affected rows locally and decrements badge |
 | `/foreign` | Foreign Spend | Year/month/owner filters; transactions grouped by `original_currency`; per-group subtotal row; summary cards (unique currencies, total IDR equivalent) |
 | `/settings` | Settings | API health, sync/import actions, pipeline run/status card, grouped local PDF workspace, hash-retained status, recursive subfolder-aware PDF controls, and dashboard month-range selection |
 | `/group-drilldown` | Group Drilldown | Group → categories breakdown for the selected month |
