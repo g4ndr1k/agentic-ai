@@ -157,6 +157,7 @@ contains_rules = [
     # Transport
     ["Venice Water Transport",      "VENICE TRANSPORT",                                 "Transport",          "contains"],
     # Education
+    ["Binus School Simprug",        "BINUS S SIMP",                                     "Education",          "contains"],
     ["Binus University",            "BINUS",                                            "Education",          "contains"],
     ["Clastify",                    "CLASTIFY",                                         "Education",          "contains"],
     # Gifts & Donations

@@ -240,43 +240,62 @@ def _parse_transactions(all_texts: list, account_number: str, year: str, month: 
             while j < len(lines):
                 next_line = lines[j].strip()
                 if not next_line:
+                    # pdf text extraction can insert blank spacer lines between wrapped
+                    # description fragments (e.g. BCA FTFVA rows). Skip blanks and keep
+                    # scanning until we hit a real stopper.
                     j += 1
-                    break
+                    continue
                 # Stop if next line is another transaction or a structural/header line.
                 # Use _CONT_STOP_RE (not _SKIP_RE) so mixed-case merchant/payee names
                 # like "Pembayaran Klaim M" and "LIPPO GENERAL INSU" are still captured.
                 if _TX_ANCHOR.match(next_line):
                     break
-                # TANGGAL :DD/MM marks the effective date but pdfplumber may place the
-                # remaining description (e.g. "71201/BINUS S SIMP") on the same extracted
-                # line.  Salvage anything that follows the date before breaking.
+                # TANGGAL :DD/MM marks the effective date. pdf extraction may place the
+                # remaining description on the same line OR on following non-empty lines
+                # before the amount line (e.g. "71201/BINUS S SIMP"). Salvage both forms.
                 tanggal_m = re.match(r"^TANGGAL\s*:\d{2}/\d{2}\s*(.*)", next_line, re.IGNORECASE)
                 if tanggal_m:
                     remainder = tanggal_m.group(1).strip()
                     if remainder:
                         continuation.append(remainder)
                     j += 1
+                    while j < len(lines):
+                        follow = lines[j].strip()
+                        if not follow:
+                            j += 1
+                            continue
+                        if _TX_ANCHOR.match(follow) or _CONT_STOP_RE.match(follow):
+                            break
+                        if re.match(r"^[\d,]+\.\d{2}(?:\s+DB)?$", follow):
+                            continuation.append(follow)
+                            j += 1
+                            break
+                        if re.match(r"^[\d,]+\.\d{2}$", follow):
+                            continuation.append(follow)
+                            j += 1
+                            break
+                        continuation.append(follow)
+                        j += 1
                     break
                 if _CONT_STOP_RE.match(next_line):
                     break
                 continuation.append(next_line)
                 j += 1
 
-            # Build full description from continuation.
-            # Skip pure numeric/reference lines; keep everything else (merchant names,
-            # payment descriptions, REF: lines, mixed-case counterparty text).
-            desc_parts = [rest]
-            for cont in continuation:
-                # Skip pure number/separator lines and bare dashes
-                if re.match(r"^[\d./\-]+$", cont) or cont == "-":
-                    continue
-                # Skip long account/card number sequences (12+ digits only)
-                if re.match(r"^\d{12,}$", cont):
-                    continue
-                desc_parts.append(cont)
-
-            # Parse amount from the anchor line's tail
+            # Parse amount from the anchor line's tail. Some BCA rows wrap the amount
+            # onto a later continuation line (common with FTFVA transfers that include
+            # TANGGAL and beneficiary details), so fall back to scanning continuation.
             tail_match = _AMOUNT_TAIL.search(rest)
+            amount_source = rest
+            continuation_for_desc = continuation
+            if not tail_match:
+                for idx, cont in enumerate(continuation):
+                    tm = _AMOUNT_TAIL.search(cont)
+                    if tm:
+                        tail_match = tm
+                        amount_source = cont
+                        continuation_for_desc = continuation[:idx]
+                        break
             if not tail_match:
                 i = j
                 continue
@@ -291,14 +310,26 @@ def _parse_transactions(all_texts: list, account_number: str, year: str, month: 
             balance = _parse_bca_savings_amount(balance_str) if balance_str else None
             is_debit = bool(db_marker)
 
-            # Clean description — remove the amount tail from rest
-            desc_raw = rest[:tail_match.start()].strip()
+            # Clean description — remove the amount tail from its source line
+            desc_raw = amount_source[:tail_match.start()].strip() if amount_source is not rest else rest[:tail_match.start()].strip()
             # Remove trailing CBG code from description if present
             if cbg:
                 desc_raw = desc_raw.rstrip()
-            # Append meaningful continuation (already filtered above)
+            # Append meaningful continuation before the amount line (already filtered above)
+            desc_parts = [rest]
+            for cont in continuation_for_desc:
+                # Skip pure number/separator lines and bare dashes
+                if re.match(r"^[\d./\-]+$", cont) or cont == "-":
+                    continue
+                # Skip long account/card number sequences (12+ digits only)
+                if re.match(r"^\d{12,}$", cont):
+                    continue
+                desc_parts.append(cont)
+            if amount_source is not rest and desc_raw:
+                desc_parts.append(desc_raw)
+            primary_desc = desc_raw if amount_source is rest else rest
             extra_desc = " / ".join(desc_parts[1:]) if len(desc_parts) > 1 else ""
-            full_desc = (desc_raw + (" / " + extra_desc if extra_desc else "")).strip()
+            full_desc = (primary_desc + (" / " + extra_desc if extra_desc else "")).strip()
 
             date_iso = _bca_savings_date(date_raw, year)
 
