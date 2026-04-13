@@ -1,3 +1,5 @@
+/** @vitest-environment jsdom */
+
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import { ref } from 'vue'

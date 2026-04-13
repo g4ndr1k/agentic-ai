@@ -18,209 +18,124 @@
       </div>
 
       <template v-else>
-        <section class="dashboard-hero">
-          <div class="dashboard-hero__copy">
-            <div class="dashboard-hero__eyebrow">Main Dashboard</div>
-            <div class="dashboard-hero__value">{{ fmt(currentSnapshot.net_worth_idr) }}</div>
-            <div class="dashboard-hero__subline">
-              <span>Total Net Worth</span>
-              <span>•</span>
-              <span>{{ fmtDate(currentSnapshot.snapshot_date) }}</span>
+        <!-- ── Hero: Net Worth ──────────────────────────────────────────── -->
+        <section class="dash-hero">
+          <div class="dash-hero__bg"></div>
+          <div class="dash-hero__inner">
+            <div class="dash-hero__left">
+              <span class="dash-hero__badge">Portfolio Overview</span>
+              <h1 class="dash-hero__value">{{ fmt(currentSnapshot.net_worth_idr) }}</h1>
+              <p class="dash-hero__sub">Net Worth &nbsp;·&nbsp; {{ fmtDate(currentSnapshot.snapshot_date) }}</p>
             </div>
-          </div>
-
-          <div class="dashboard-hero__change" :class="netWorthChange.value >= 0 ? 'positive' : 'negative'">
-            <div class="dashboard-hero__change-label">30D Change</div>
-            <div class="dashboard-hero__change-value">
-              {{ netWorthChange.value >= 0 ? '+' : '-' }}{{ fmt(Math.abs(netWorthChange.value)) }}
-            </div>
-            <div class="dashboard-hero__change-pct">
-              {{ netWorthChange.percent >= 0 ? '+' : '' }}{{ netWorthChange.percent.toFixed(1) }}%
-            </div>
-          </div>
-        </section>
-
-        <section class="dashboard-kpis">
-          <div class="dashboard-kpi">
-            <div class="dashboard-kpi__label">Assets</div>
-            <div class="dashboard-kpi__value">{{ fmt(currentSnapshot.total_assets_idr) }}</div>
-          </div>
-          <div class="dashboard-kpi">
-            <div class="dashboard-kpi__label">Liabilities</div>
-            <div class="dashboard-kpi__value">{{ fmt(currentSnapshot.total_liabilities_idr) }}</div>
-          </div>
-          <div class="dashboard-kpi">
-            <div class="dashboard-kpi__label">Income YTD</div>
-            <div class="dashboard-kpi__value">{{ fmt(incomeYtd) }}</div>
-          </div>
-          <div class="dashboard-kpi">
-            <div class="dashboard-kpi__label">Spending YTD</div>
-            <div class="dashboard-kpi__value">{{ fmt(spendingYtd) }}</div>
-          </div>
-        </section>
-
-        <section class="dashboard-grid">
-          <article class="card dashboard-panel dashboard-panel--wealth">
-            <div class="dashboard-panel__head">
+            <div class="dash-hero__delta" :class="netWorthChange.value >= 0 ? 'up' : 'down'">
+              <div class="dash-hero__delta-arrow">{{ netWorthChange.value >= 0 ? '↑' : '↓' }}</div>
               <div>
-                <div class="card-title">Assets Over Time</div>
-                <div class="dashboard-panel__subtitle">Monthly total assets from saved snapshots</div>
-              </div>
-            </div>
-            <div v-if="wealthSeries.length > 0" class="dashboard-chart">
-              <svg class="chart-svg" viewBox="0 0 760 320" preserveAspectRatio="none" aria-label="Wealth over time chart">
-                <line
-                  v-for="tick in wealthChartModel.yTicks"
-                  :key="`wealth-grid-${tick.value}`"
-                  :x1="60"
-                  :x2="730"
-                  :y1="tick.y"
-                  :y2="tick.y"
-                  class="chart-grid-line"
-                />
-                <text
-                  v-for="tick in wealthChartModel.yTicks"
-                  :key="`wealth-label-${tick.value}`"
-                  x="52"
-                  :y="tick.y + 4"
-                  text-anchor="end"
-                  class="chart-axis-label"
-                >
-                  {{ tick.label }}
-                </text>
-                <rect
-                  v-for="bar in wealthChartModel.bars"
-                  :key="bar.label"
-                  :x="bar.x"
-                  :y="bar.y"
-                  :width="bar.width"
-                  :height="bar.height"
-                  rx="10"
-                  class="chart-bar"
-                >
-                  <title>{{ bar.tooltip }}</title>
-                </rect>
-                <text
-                  v-for="bar in wealthChartModel.bars"
-                  :key="`wealth-x-${bar.label}`"
-                  :x="bar.x + (bar.width / 2)"
-                  y="300"
-                  text-anchor="middle"
-                  class="chart-axis-label"
-                >
-                  {{ bar.label }}
-                </text>
-              </svg>
-            </div>
-            <div v-else class="empty-state dashboard-chart-empty">
-              <div class="e-sub">Generate at least one monthly snapshot to see this trend.</div>
-            </div>
-          </article>
-
-          <article class="card dashboard-panel dashboard-panel--allocation">
-            <div class="dashboard-panel__head">
-              <div>
-                <div class="card-title">Asset Allocation</div>
-                <div class="dashboard-panel__subtitle">Current distribution from the latest saved asset snapshot</div>
-              </div>
-            </div>
-            <div v-if="allocationSeries.length > 0" class="allocation-layout">
-              <div class="allocation-chart">
-                <svg class="chart-svg" viewBox="0 0 220 220" aria-label="Asset allocation chart">
-                  <circle cx="110" cy="110" r="72" class="donut-track" />
-                  <circle
-                    v-for="slice in allocationChartModel"
-                    :key="slice.key"
-                    cx="110"
-                    cy="110"
-                    r="72"
-                    fill="none"
-                    :stroke="slice.color"
-                    stroke-width="28"
-                    :stroke-dasharray="slice.dasharray"
-                    :stroke-dashoffset="slice.dashoffset"
-                    stroke-linecap="butt"
-                    transform="rotate(-90 110 110)"
-                  >
-                    <title>{{ slice.tooltip }}</title>
-                  </circle>
-                  <text x="110" y="102" text-anchor="middle" class="donut-center-label">Assets</text>
-                  <text x="110" y="128" text-anchor="middle" class="donut-center-value">{{ fmt(totalAllocationValue) }}</text>
-                </svg>
-              </div>
-              <div class="allocation-list">
-                <div v-for="slice in allocationSeries" :key="slice.label" class="allocation-item">
-                  <span class="allocation-item__swatch" :style="{ backgroundColor: slice.color }"></span>
-                  <div class="allocation-item__meta">
-                    <span class="allocation-item__label">{{ slice.label }}</span>
-                    <span class="allocation-item__pct">{{ slice.percent.toFixed(1) }}%</span>
-                  </div>
-                  <div class="allocation-item__value">{{ fmt(slice.value) }}</div>
+                <div class="dash-hero__delta-val">
+                  {{ netWorthChange.value >= 0 ? '+' : '' }}{{ fmt(Math.abs(netWorthChange.value)) }}
+                </div>
+                <div class="dash-hero__delta-pct">
+                  {{ netWorthChange.percent >= 0 ? '+' : '' }}{{ netWorthChange.percent.toFixed(1) }}%
+                  <span class="dash-hero__delta-period">30 days</span>
                 </div>
               </div>
             </div>
-            <div v-else class="empty-state dashboard-chart-empty">
-              <div class="e-sub">No holdings were found in the latest snapshot.</div>
+          </div>
+        </section>
+
+        <!-- ── Allocation + Assets Over Time side by side ─────────────── -->
+        <section class="dash-stack">
+          <!-- Asset Allocation -->
+          <article class="dash-card dash-card--alloc">
+            <div class="dash-card__header">
+              <div>
+                <div class="dash-card__title">Asset Allocation</div>
+                <div class="dash-card__sub">Current distribution from latest snapshot</div>
+              </div>
+            </div>
+            <div v-if="allocationSeries.length > 0" class="alloc-body">
+              <div class="alloc-kpis">
+                <div class="dash-kpi">
+                  <div class="dash-kpi__icon">🏦</div>
+                  <div>
+                    <div class="dash-kpi__label">Total Assets</div>
+                    <div class="dash-kpi__value">{{ fmt(currentSnapshot.total_assets_idr) }}</div>
+                  </div>
+                </div>
+                <div class="dash-kpi">
+                  <div class="dash-kpi__icon">🔴</div>
+                  <div>
+                    <div class="dash-kpi__label">Liabilities</div>
+                    <div class="dash-kpi__value">{{ fmt(currentSnapshot.total_liabilities_idr) }}</div>
+                  </div>
+                </div>
+                <div class="dash-kpi">
+                  <div class="dash-kpi__icon">📈</div>
+                  <div>
+                    <div class="dash-kpi__label">Income YTD</div>
+                    <div class="dash-kpi__value">{{ fmt(incomeYtd) }}</div>
+                  </div>
+                </div>
+                <div class="dash-kpi">
+                  <div class="dash-kpi__icon">📉</div>
+                  <div>
+                    <div class="dash-kpi__label">Spending YTD</div>
+                    <div class="dash-kpi__value">{{ fmt(spendingYtd) }}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="alloc-donut">
+                <canvas ref="allocationRef" aria-label="Asset allocation chart"></canvas>
+                <div class="donut-center-overlay">
+                  <div class="donut-center-label">Total</div>
+                  <div class="donut-center-value">{{ fmtShort(totalAllocationValue) }}</div>
+                </div>
+              </div>
+              <div class="alloc-legend alloc-legend--tight">
+                <div v-for="slice in allocationSeries" :key="slice.label" class="alloc-legend__item">
+                  <span class="alloc-legend__dot" :style="{ backgroundColor: slice.color }"></span>
+                  <span class="alloc-legend__label">{{ slice.label }}</span>
+                  <span class="alloc-legend__pct">{{ slice.percent.toFixed(1) }}%</span>
+                  <span class="alloc-legend__val">{{ fmt(slice.value) }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-state dash-chart-empty">
+              <div class="e-sub">No holdings found in the latest snapshot.</div>
             </div>
           </article>
 
-          <article class="card dashboard-panel dashboard-panel--flows">
-            <div class="dashboard-panel__head">
+          <!-- Assets Over Time -->
+          <article class="dash-card dash-card--wealth">
+            <div class="dash-card__header">
               <div>
-                <div class="card-title">Cash Flow Summary</div>
-                <div class="dashboard-panel__subtitle">Monthly income vs spending across {{ store.dashboardRangeLabel }}</div>
+                <div class="dash-card__title">Assets Over Time</div>
+                <div class="dash-card__sub">Monthly total assets from saved snapshots</div>
               </div>
-              <RouterLink to="/flows" class="dashboard-panel__link">Open flows →</RouterLink>
             </div>
-            <div v-if="cashFlowSeries.length > 0" class="dashboard-chart">
-              <svg class="chart-svg" viewBox="0 0 760 320" preserveAspectRatio="none" aria-label="Cash flow summary chart">
-                <line
-                  v-for="tick in cashFlowChartModel.yTicks"
-                  :key="`cash-grid-${tick.value}`"
-                  :x1="60"
-                  :x2="730"
-                  :y1="tick.y"
-                  :y2="tick.y"
-                  class="chart-grid-line"
-                />
-                <text
-                  v-for="tick in cashFlowChartModel.yTicks"
-                  :key="`cash-label-${tick.value}`"
-                  x="52"
-                  :y="tick.y + 4"
-                  text-anchor="end"
-                  class="chart-axis-label"
-                >
-                  {{ tick.label }}
-                </text>
-                <path :d="cashFlowChartModel.incomePath" class="chart-line chart-line--income" />
-                <path :d="cashFlowChartModel.spendingPath" class="chart-line chart-line--spending" />
-                <g v-for="point in cashFlowChartModel.incomePoints" :key="`inc-${point.label}`">
-                  <circle :cx="point.x" :cy="point.y" r="4" class="chart-point chart-point--income">
-                    <title>{{ point.tooltip }}</title>
-                  </circle>
-                </g>
-                <g v-for="point in cashFlowChartModel.spendingPoints" :key="`spend-${point.label}`">
-                  <circle :cx="point.x" :cy="point.y" r="4" class="chart-point chart-point--spending">
-                    <title>{{ point.tooltip }}</title>
-                  </circle>
-                </g>
-                <text
-                  v-for="point in cashFlowChartModel.labels"
-                  :key="`cash-x-${point.label}`"
-                  :x="point.x"
-                  y="300"
-                  text-anchor="middle"
-                  class="chart-axis-label"
-                >
-                  {{ point.label }}
-                </text>
-              </svg>
+            <div v-if="wealthSeries.length > 0" class="dash-chart dash-chart--canvas">
+              <canvas ref="wealthRef" aria-label="Wealth over time chart"></canvas>
             </div>
-            <div v-else class="empty-state dashboard-chart-empty">
-              <div class="e-sub">No transactions were found for the recent period.</div>
+            <div v-else class="empty-state dash-chart-empty">
+              <div class="e-sub">Generate at least one monthly snapshot to see this trend.</div>
             </div>
           </article>
+        </section>
+
+        <!-- ── Cash Flow Summary (full width) ───────────────────────────── -->
+        <section class="dash-card dash-card--flows">
+          <div class="dash-card__header">
+            <div>
+              <div class="dash-card__title">Cash Flow Summary</div>
+              <div class="dash-card__sub">Monthly income vs spending across {{ store.dashboardRangeLabel }}</div>
+            </div>
+            <RouterLink to="/flows" class="dash-card__link">Open flows →</RouterLink>
+          </div>
+          <div v-if="cashFlowSeries.length > 0" class="dash-chart dash-chart--canvas">
+            <canvas ref="cashFlowRef" aria-label="Cash flow summary chart"></canvas>
+          </div>
+          <div v-else class="empty-state dash-chart-empty">
+            <div class="e-sub">No transactions were found for the recent period.</div>
+          </div>
         </section>
       </template>
     </template>
@@ -228,7 +143,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import Chart from 'chart.js/auto'
 import { RouterLink } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
@@ -244,8 +160,21 @@ const error = ref('')
 const wealthHistory = ref([])
 const holdingsHistory = ref([])
 const monthlyFlowRows = ref([])
+const allocationRef = ref(null)
+const wealthRef = ref(null)
+const cashFlowRef = ref(null)
+let allocationChart = null
+let wealthChart = null
+let cashFlowChart = null
 
 function fmt(value) {
+  return formatIDR(value ?? 0)
+}
+
+function fmtShort(value) {
+  const abs = Math.abs(value ?? 0)
+  if (abs >= 1_000_000_000) return `Rp ${(abs / 1_000_000_000).toFixed(1)}B`
+  if (abs >= 1_000_000) return `Rp ${(abs / 1_000_000).toFixed(0)}M`
   return formatIDR(value ?? 0)
 }
 
@@ -376,7 +305,7 @@ const allocationSeries = computed(() => {
   ]
 
   const totalValue = Number(snapshot.total_assets_idr || 0)
-  const palette = ['#0f766e', '#2563eb', '#f59e0b', '#7c3aed', '#ea580c', '#059669', '#dc2626', '#64748b', '#0891b2']
+  const palette = ['#14b8a6', '#3b82f6', '#f59e0b', '#8b5cf6', '#f97316', '#10b981', '#ef4444', '#64748b', '#06b6d4']
 
   return totals
     .map((row, index) => ({
@@ -454,53 +383,295 @@ const wealthChartModel = computed(() => {
   }
 })
 
-const allocationChartModel = computed(() => {
-  const circumference = 2 * Math.PI * 72
-  let offset = 0
-  return allocationSeries.value.map((row) => {
-    const length = circumference * (row.percent / 100)
-    const slice = {
-      ...row,
-      dasharray: `${length} ${circumference - length}`,
-      dashoffset: -offset,
-      tooltip: `${row.label}: ${fmt(row.value)} (${row.percent.toFixed(1)}%)`,
-    }
-    offset += length
-    return slice
-  })
-})
+function destroyAllocationChart() {
+  if (!allocationChart) return
+  allocationChart.destroy()
+  allocationChart = null
+}
 
-const cashFlowChartModel = computed(() => {
-  const rows = cashFlowSeries.value
-  const maxValue = Math.max(
-    ...rows.flatMap((row) => [row.income, row.spending]),
-    1
-  )
-  const step = rows.length > 1 ? 660 / (rows.length - 1) : 0
-  const mapPoint = (value, index) => ({
-    x: 68 + (index * step),
-    y: 264 - ((value / maxValue) * 232),
-  })
-  const incomePoints = rows.map((row, index) => ({
-    label: row.label,
-    ...mapPoint(row.income, index),
-    tooltip: `${row.label} Income: ${fmt(row.income)}`,
-  }))
-  const spendingPoints = rows.map((row, index) => ({
-    label: row.label,
-    ...mapPoint(row.spending, index),
-    tooltip: `${row.label} Spending: ${fmt(row.spending)}`,
-  }))
+function destroyCashFlowChart() {
+  if (!cashFlowChart) return
+  cashFlowChart.destroy()
+  cashFlowChart = null
+}
 
-  return {
-    yTicks: buildYTicks(maxValue, (value) => fmtCompact(value)),
-    incomePoints,
-    spendingPoints,
-    incomePath: buildPath(incomePoints),
-    spendingPath: buildPath(spendingPoints),
-    labels: rows.map((row, index) => ({ label: row.label, x: 68 + (index * step) })),
+function destroyWealthChart() {
+  if (!wealthChart) return
+  wealthChart.destroy()
+  wealthChart = null
+}
+
+async function renderAllocationChart() {
+  if (!allocationSeries.value.length) {
+    destroyAllocationChart()
+    return
   }
-})
+
+  await nextTick()
+  const canvas = allocationRef.value
+  if (!canvas) return
+
+  destroyAllocationChart()
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  allocationChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: allocationSeries.value.map((row) => row.label),
+      datasets: [{
+        data: allocationSeries.value.map((row) => row.value),
+        backgroundColor: allocationSeries.value.map((row) => row.color),
+        borderColor: '#0b1220',
+        borderWidth: 4,
+        hoverOffset: 10,
+        spacing: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      animation: { duration: 550 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(10, 19, 33, 0.94)',
+          borderColor: 'rgba(255,255,255,0.10)',
+          borderWidth: 1,
+          titleColor: '#edf4ff',
+          bodyColor: '#c8d6e5',
+          callbacks: {
+            label(context) {
+              const total = context.dataset.data.reduce((sum, value) => sum + Number(value || 0), 0)
+              const value = Number(context.parsed || 0)
+              const pct = total > 0 ? ((value / total) * 100).toFixed(1) : '0.0'
+              return `${context.label}: ${fmt(value)} (${pct}%)`
+            },
+          },
+        },
+      },
+    },
+  })
+}
+
+async function renderWealthChart() {
+  if (!wealthSeries.value.length) {
+    destroyWealthChart()
+    return
+  }
+
+  await nextTick()
+  const canvas = wealthRef.value
+  if (!canvas) return
+
+  destroyWealthChart()
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const barGradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 320)
+  barGradient.addColorStop(0, '#14b8a6')
+  barGradient.addColorStop(1, 'rgba(13, 148, 136, 0.7)')
+
+  wealthChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: wealthSeries.value.map((row) => row.label),
+      datasets: [{
+        label: 'Assets',
+        data: wealthSeries.value.map((row) => row.value),
+        backgroundColor: barGradient,
+        borderRadius: 8,
+        borderSkipped: false,
+        maxBarThickness: 42,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 500,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(10, 19, 33, 0.94)',
+          borderColor: 'rgba(255,255,255,0.10)',
+          borderWidth: 1,
+          titleColor: '#edf4ff',
+          bodyColor: '#c8d6e5',
+          callbacks: {
+            label(context) {
+              return `Assets: ${fmt(context.parsed.y)}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: '#64748b',
+            font: { size: 11, weight: '600' },
+          },
+          border: { display: false },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            color: '#64748b',
+            callback(value) {
+              return fmtCompact(Number(value))
+            },
+            font: { size: 11, weight: '600' },
+          },
+          grid: {
+            color: 'rgba(148, 163, 184, 0.08)',
+            drawBorder: false,
+          },
+          border: { display: false },
+        },
+      },
+    },
+  })
+}
+
+async function renderCashFlowChart() {
+  if (!cashFlowSeries.value.length) {
+    destroyCashFlowChart()
+    return
+  }
+
+  await nextTick()
+  const canvas = cashFlowRef.value
+  if (!canvas) return
+
+  destroyCashFlowChart()
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const incomeGradient = ctx.createLinearGradient(0, 0, canvas.width || 800, 0)
+  incomeGradient.addColorStop(0, '#22c55e')
+  incomeGradient.addColorStop(1, '#4ade80')
+
+  const spendingGradient = ctx.createLinearGradient(0, 0, canvas.width || 800, 0)
+  spendingGradient.addColorStop(0, '#ef4444')
+  spendingGradient.addColorStop(1, '#f87171')
+
+  cashFlowChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: cashFlowSeries.value.map((row) => row.label),
+      datasets: [
+        {
+          label: 'Income',
+          data: cashFlowSeries.value.map((row) => row.income),
+          borderColor: incomeGradient,
+          backgroundColor: '#22c55e',
+          borderWidth: 3,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#22c55e',
+          pointBorderColor: '#0b1220',
+          pointBorderWidth: 2,
+          tension: 0.36,
+        },
+        {
+          label: 'Spending',
+          data: cashFlowSeries.value.map((row) => row.spending),
+          borderColor: spendingGradient,
+          backgroundColor: '#ef4444',
+          borderWidth: 3,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#ef4444',
+          pointBorderColor: '#0b1220',
+          pointBorderWidth: 2,
+          tension: 0.36,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      animation: {
+        duration: 500,
+      },
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'start',
+          labels: {
+            color: '#c8d6e5',
+            usePointStyle: true,
+            pointStyle: 'circle',
+            boxWidth: 8,
+            boxHeight: 8,
+            padding: 18,
+            font: {
+              size: 12,
+              weight: '700',
+            },
+          },
+        },
+        tooltip: {
+          backgroundColor: 'rgba(10, 19, 33, 0.94)',
+          borderColor: 'rgba(255,255,255,0.10)',
+          borderWidth: 1,
+          titleColor: '#edf4ff',
+          bodyColor: '#c8d6e5',
+          displayColors: true,
+          callbacks: {
+            label(context) {
+              return `${context.dataset.label}: ${fmt(context.parsed.y)}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: {
+            display: false,
+          },
+          ticks: {
+            color: '#64748b',
+            font: {
+              size: 11,
+              weight: '600',
+            },
+          },
+          border: {
+            display: false,
+          },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            color: '#64748b',
+            callback(value) {
+              return fmtCompact(Number(value))
+            },
+            font: {
+              size: 11,
+              weight: '600',
+            },
+          },
+          grid: {
+            color: 'rgba(148, 163, 184, 0.08)',
+            drawBorder: false,
+          },
+          border: {
+            display: false,
+          },
+        },
+      },
+    },
+  })
+}
 
 async function load() {
   loading.value = true
@@ -537,361 +708,461 @@ async function load() {
     error.value = err.message || 'Unable to load dashboard.'
   } finally {
     loading.value = false
+    await nextTick()
+    if (!error.value) {
+      await renderAllocationChart()
+      await renderWealthChart()
+      await renderCashFlowChart()
+    }
   }
 }
 
 onMounted(load)
 watch(() => [store.dashboardStartMonth, store.dashboardEndMonth], load)
+onUnmounted(() => {
+  destroyAllocationChart()
+  destroyWealthChart()
+  destroyCashFlowChart()
+})
 </script>
 
 <style scoped>
+/* ── Root ─────────────────────────────────────────────────────────────── */
 .main-dashboard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 18px;
+  max-width: 1320px;
 }
 
 .dashboard-empty {
   padding: 28px 20px;
   text-align: center;
 }
+.dashboard-empty__icon { font-size: 40px; margin-bottom: 10px; }
+.dashboard-empty__title { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+.dashboard-empty__cta { margin-top: 18px; display: inline-flex; }
 
-.dashboard-empty__icon {
-  font-size: 40px;
-  margin-bottom: 10px;
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+.dash-hero {
+  position: relative;
+  border-radius: 28px;
+  overflow: hidden;
+  min-height: 180px;
 }
-
-.dashboard-empty__title {
-  font-size: 20px;
-  font-weight: 800;
-  color: #0f172a;
-  margin-bottom: 8px;
-}
-
-.dashboard-empty__cta {
-  margin-top: 18px;
-  display: inline-flex;
-}
-
-.dashboard-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.9fr);
-  gap: 14px;
-  padding: 22px;
-  border-radius: 26px;
+.dash-hero__bg {
+  position: absolute;
+  inset: 0;
   background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 28%),
-    linear-gradient(135deg, #0f172a 0%, #13315c 52%, #0f766e 100%);
+    radial-gradient(ellipse 70% 80% at 20% 40%, rgba(20, 184, 166, 0.22), transparent),
+    radial-gradient(ellipse 50% 70% at 80% 30%, rgba(59, 130, 246, 0.18), transparent),
+    radial-gradient(ellipse 40% 50% at 60% 90%, rgba(139, 92, 246, 0.12), transparent),
+    linear-gradient(135deg, #0a1628 0%, #0e2a3f 40%, #0f766e 100%);
+  z-index: 0;
+}
+.dash-hero__inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 32px 36px;
+}
+.dash-hero__badge {
+  display: inline-block;
+  padding: 4px 14px;
+  border-radius: 100px;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.14);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.72);
+  backdrop-filter: blur(8px);
+  margin-bottom: 14px;
+}
+.dash-hero__value {
+  margin: 0;
+  font-size: clamp(38px, 4.5vw, 56px);
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.04em;
   color: #fff;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+}
+.dash-hero__sub {
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: rgba(255,255,255,0.56);
+  font-weight: 500;
 }
 
-.dashboard-hero__eyebrow {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.66);
-}
-
-.dashboard-hero__value {
-  margin-top: 8px;
-  font-size: clamp(34px, 5vw, 52px);
-  line-height: 1.02;
-  font-weight: 800;
-  letter-spacing: -0.05em;
-}
-
-.dashboard-hero__subline {
-  margin-top: 10px;
+.dash-hero__delta {
+  flex-shrink: 0;
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  color: rgba(255,255,255,0.74);
-  font-size: 13px;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 28px;
+  border-radius: 22px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  backdrop-filter: blur(14px);
 }
-
-.dashboard-hero__change {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 18px;
-  border-radius: 20px;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
-  backdrop-filter: blur(10px);
-}
-
-.dashboard-hero__change.positive {
-  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.12);
-}
-
-.dashboard-hero__change.negative {
-  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.12);
-}
-
-.dashboard-hero__change-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.66);
-}
-
-.dashboard-hero__change-value {
-  margin-top: 8px;
-  font-size: 24px;
+.dash-hero__delta.up .dash-hero__delta-arrow { color: #4ade80; }
+.dash-hero__delta.down .dash-hero__delta-arrow { color: #f87171; }
+.dash-hero__delta-arrow {
+  font-size: 32px;
   font-weight: 800;
+  line-height: 1;
 }
-
-.dashboard-hero__change-pct {
-  margin-top: 4px;
+.dash-hero__delta-val {
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+}
+.dash-hero__delta-pct {
   font-size: 14px;
   font-weight: 700;
-  color: rgba(255,255,255,0.86);
+  color: rgba(255,255,255,0.72);
+}
+.dash-hero__delta-period {
+  font-weight: 500;
+  color: rgba(255,255,255,0.44);
+  margin-left: 4px;
 }
 
-.dashboard-kpis {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.dashboard-kpi {
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(255,255,255,0.78);
-  border: 1px solid rgba(226,232,240,0.9);
-  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.05);
-}
-
-.dashboard-kpi__label {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-
-.dashboard-kpi__value {
-  margin-top: 8px;
-  font-size: 21px;
-  font-weight: 800;
-  line-height: 1.1;
-  color: #0f172a;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+/* ── KPI cards ────────────────────────────────────────────────────────── */
+.dash-kpi {
+  display: flex;
+  align-items: center;
   gap: 14px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  backdrop-filter: blur(12px);
+  transition: background 0.2s;
+}
+.dash-kpi:hover {
+  background: rgba(255,255,255,0.07);
+}
+.dash-kpi__icon {
+  font-size: 26px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.dash-kpi__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #8da2bf;
+}
+.dash-kpi__value {
+  margin-top: 4px;
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: #edf4ff;
 }
 
-.dashboard-panel {
-  margin-bottom: 0;
-  padding: 18px;
+.alloc-kpis {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  align-self: stretch;
+}
+.alloc-kpis .dash-kpi {
+  min-height: 0;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+}
+.alloc-kpis .dash-kpi__icon {
+  width: 30px;
+  height: 30px;
+  font-size: 18px;
+  border-radius: 10px;
+}
+.alloc-kpis .dash-kpi__label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+.alloc-kpis .dash-kpi__value {
+  margin-top: 3px;
+  font-size: 14px;
+  line-height: 1.1;
 }
 
-.dashboard-panel--flows {
-  grid-column: 1 / -1;
+/* ── Glass Card (shared) ──────────────────────────────────────────────── */
+.dash-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 24px;
+  padding: 24px;
+  backdrop-filter: blur(12px);
 }
-
-.dashboard-panel__head {
+.dash-card__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
-
-.dashboard-panel__subtitle {
-  color: #64748b;
+.dash-card__title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #edf4ff;
+  letter-spacing: -0.01em;
+}
+.dash-card__sub {
+  margin-top: 3px;
+  color: #8da2bf;
   font-size: 13px;
+  font-weight: 500;
 }
-
-.dashboard-panel__link {
+.dash-card__link {
   flex-shrink: 0;
-  color: #0f766e;
+  color: #14b8a6;
   text-decoration: none;
   font-size: 12px;
   font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(20, 184, 166, 0.10);
+  border: 1px solid rgba(20, 184, 166, 0.18);
+  transition: background 0.2s;
+}
+.dash-card__link:hover {
+  background: rgba(20, 184, 166, 0.18);
 }
 
-.dashboard-chart {
+/* ── 2-column row (Allocation + Wealth) ────────────────────────────────── */
+.dash-stack {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+/* ── Allocation Card ──────────────────────────────────────────────────── */
+.alloc-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(220px, 1fr) minmax(275px, 350px);
+  align-items: center;
+  gap: 22px;
+}
+.alloc-donut {
   position: relative;
-  height: 320px;
+  justify-self: center;
+  width: 220px;
+  height: 220px;
+  filter: drop-shadow(0 4px 20px rgba(20, 184, 166, 0.18));
+}
+.alloc-donut canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.donut-center-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.donut-center-label {
+  color: #8da2bf;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.donut-center-value {
+  color: #edf4ff;
+  font-size: 15px;
+  font-weight: 800;
+  margin-top: 4px;
 }
 
+.alloc-legend {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  justify-self: end;
+}
+.alloc-legend--tight {
+  max-width: 325px;
+}
+.alloc-legend__item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) 56px 112px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+  transition: background 0.15s;
+}
+.alloc-legend__item:hover {
+  background: rgba(255,255,255,0.08);
+}
+.alloc-legend__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.alloc-legend__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c8d6e5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alloc-legend__pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8da2bf;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.alloc-legend__val {
+  font-size: 11px;
+  font-weight: 800;
+  color: #edf4ff;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Charts ───────────────────────────────────────────────────────────── */
+.dash-chart {
+  position: relative;
+  height: 300px;
+}
+.dash-chart--canvas {
+  height: 340px;
+}
+.dash-chart--canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.dash-chart-empty {
+  height: 200px;
+  display: grid;
+  place-items: center;
+}
 .chart-svg {
   display: block;
   width: 100%;
   height: 100%;
 }
-
 .chart-grid-line {
-  stroke: rgba(148, 163, 184, 0.2);
+  stroke: rgba(148, 163, 184, 0.08);
   stroke-width: 1;
 }
-
 .chart-axis-label {
-  fill: #7c8ca5;
+  fill: #64748b;
   font-size: 11px;
   font-weight: 600;
 }
-
-.chart-bar {
-  fill: rgba(20, 184, 166, 0.82);
+.chart-bar-animated {
+  transition: opacity 0.2s;
 }
-
-.donut-track {
-  fill: none;
-  stroke: rgba(148, 163, 184, 0.12);
-  stroke-width: 28;
+.chart-bar-animated:hover {
+  opacity: 0.85;
 }
-
-.donut-center-label {
-  fill: #7c8ca5;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.donut-center-value {
-  fill: #e2e8f0;
-  font-size: 12px;
-  font-weight: 800;
-}
-
 .chart-line {
   fill: none;
   stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-
-.chart-line--income {
-  stroke: #22c55e;
-}
-
-.chart-line--spending {
-  stroke: #ef4444;
-}
-
 .chart-point {
-  stroke: #0f172a;
   stroke-width: 2;
+  transition: r 0.15s;
 }
-
+.chart-point:hover {
+  r: 7;
+}
 .chart-point--income {
   fill: #22c55e;
+  stroke: rgba(10, 19, 33, 0.6);
 }
-
 .chart-point--spending {
   fill: #ef4444;
+  stroke: rgba(10, 19, 33, 0.6);
 }
 
-.dashboard-chart-empty {
-  height: 220px;
-  display: grid;
-  place-items: center;
-}
-
-.allocation-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: center;
-}
-
-.allocation-chart {
-  position: relative;
-  height: 260px;
-  width: 100%;
-}
-
-.allocation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.allocation-item {
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: #f8fafc;
-}
-
-.allocation-item__swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-}
-
-.allocation-item__meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.allocation-item__label {
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.allocation-item__pct {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.allocation-item__value {
-  color: #0f172a;
-  font-weight: 800;
-  font-size: 12px;
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .alloc-body {
+    grid-template-columns: minmax(180px, 220px) minmax(200px, 1fr) minmax(250px, 300px);
+  }
+  .alloc-donut {
+    width: 190px;
+    height: 190px;
+  }
 }
 
 @media (max-width: 1024px) {
-  .dashboard-kpis {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .dashboard-grid {
-    grid-template-columns: 1fr;
+  .alloc-legend--tight {
+    max-width: 290px;
   }
 }
 
 @media (max-width: 720px) {
-  .dashboard-hero {
-    grid-template-columns: 1fr;
-    padding: 20px 18px;
+  .dash-hero__inner {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 24px 20px;
   }
-
-  .allocation-layout {
-    grid-template-columns: 1fr;
+  .dash-hero__delta {
+    align-self: stretch;
   }
-
-  .allocation-chart,
-  .dashboard-chart {
+  .dash-card {
+    padding: 18px;
+  }
+  .dash-chart {
     height: 240px;
+  }
+  .alloc-body {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .alloc-kpis {
+    width: 100%;
+  }
+  .alloc-donut {
+    width: 180px;
+    height: 180px;
+    margin: 0 auto;
+  }
+  .alloc-legend {
+    justify-self: stretch;
+  }
+  .alloc-legend--tight {
+    max-width: none;
   }
 }
 
 @media (max-width: 520px) {
-  .dashboard-kpis {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-panel {
-    padding: 16px;
-  }
-
-  .dashboard-hero__change-value {
-    font-size: 20px;
+  .dash-hero__value {
+    font-size: 32px;
   }
 }
 </style>

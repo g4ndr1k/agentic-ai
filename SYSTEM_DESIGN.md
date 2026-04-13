@@ -1,6 +1,6 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.10.1 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.10.2 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
 **Last validated against:** checked-in codebase 2026-04-13
 
@@ -228,7 +228,7 @@ The system alerts on:
   - `bridge/gold_price.py` — fetches IDR price per gram of gold via the fawazahmed0 XAU/IDR API (same free no-key API as `bridge/fx_rate.py`; works for historical dates). Converts troy-ounce price to per-gram: `xau_idr / 31.1035`. Returns `None` on failure.
   - `scripts/seed_gold_holdings.py` — one-time (and repeatable) seeder for 14 Antam Logam Mulia gold bars in three weight classes (100 gr × 5, 50 gr × 5, 25 gr × 4). Fetches end-of-month XAU/IDR spot prices for every month from 2026-01 to today (excluding current incomplete month), inserts 3 `holdings` rows per month (`asset_class="gold"`), stores certificate numbers in `notes`. Uses `open_db()` from `finance.db`. Supports `--dry-run`, `--owner`, `--from YYYY-MM`, `--db`, `--institution` flags. Re-running refreshes prices (ON CONFLICT DO UPDATE).
 - Stage 3 Vue 3 PWA additions (`pwa/`) — see §38
-  - `pwa/src/views/MainDashboard.vue` — root landing page (`/`): total net worth hero, 30-day change, wealth-over-time chart, asset-allocation donut, and cash-flow summary, all filtered by a user-selected month range (hard floor: Jan 2026)
+  - `pwa/src/views/MainDashboard.vue` — root landing page (`/`): premium desktop-first dashboard with total net worth hero, 30-day change, Chart.js asset-allocation doughnut, Chart.js assets-over-time bar chart, Chart.js cash-flow summary line chart, and a compact KPI stack embedded beside the allocation chart for better iPad/desktop proportions; all filtered by a user-selected month range (hard floor: Jan 2026)
   - `pwa/src/views/Wealth.vue` — net worth dashboard: arrow month navigation, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, month-over-month movement card, AI explanation panel, Chart.js trend, "Refresh Snapshot" button, FAB to Assets
   - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 2-mode entry form (Balance / Holding), "Save Snapshot" button; ↺ inline refresh button in month-nav bar
   - `pwa/src/api/client.js` — extended with 13 new wealth API calls + `del()` helper
@@ -468,7 +468,7 @@ agentic-ai/
 │       │   ├── MobileShell.vue       # Mobile chrome wrapper
 │       │   └── DesktopShell.vue      # Sidebar + full-width desktop content
 │       └── views/
-│           ├── MainDashboard.vue     # Root dashboard: net worth hero, wealth/allocation/cash-flow charts, range-aware
+│           ├── MainDashboard.vue     # Root dashboard: net worth hero, compact KPI stack, Chart.js allocation/wealth/cash-flow charts, range-aware
 │           ├── Dashboard.vue         # Restored Flows view: month nav, summary cards, spending-by-group, trend chart
 │           ├── Wealth.vue            # Net worth dashboard: arrow month nav, hero card, movement card, AI explanation, trend chart
 │           ├── Holdings.vue          # Asset manager: group tabs, snapshot date, FAB → 2-mode entry form (Balance/Holding)

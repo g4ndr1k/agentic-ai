@@ -523,6 +523,8 @@ def _build_monthly_flow_explanation(
     curr = _get_monthly_summary_data(conn, year, month)
     if not _comparison_period_started(year, month):
         return {"available": False, "reason": "no_previous_month", "period": curr["period"]}
+    if curr["transaction_count"] == 0:
+        return {"available": False, "reason": "no_data", "period": curr["period"]}
     prev_year, prev_month = _previous_year_month(year, month)
     prev = _get_monthly_summary_data(conn, prev_year, prev_month)
     fallback = _monthly_flow_explanation_fallback(curr, prev)

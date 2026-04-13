@@ -351,12 +351,16 @@ const trendSuggestedQuestions = computed(() => {
 
 const trendExplanationEmptyTitle = computed(() => {
   if (trendExplanation.value?.reason === 'no_previous_month') return 'AI analysis starts next month'
+  if (trendExplanation.value?.reason === 'no_data') return 'No data for this month'
   return ''
 })
 
 const trendExplanationEmptyMessage = computed(() => {
   if (trendExplanation.value?.reason === 'no_previous_month') {
     return `${monthLabel.value} is the first available flows month, so there is no prior month to compare against yet.`
+  }
+  if (trendExplanation.value?.reason === 'no_data') {
+    return `${monthLabel.value} has no transactions yet, so there is nothing to analyse.`
   }
   return ''
 })
