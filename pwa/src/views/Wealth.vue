@@ -709,8 +709,10 @@ async function generateSnapshot() {
   if (!selectedDate.value) return
   generating.value = true
   try {
-    await api.createSnapshot({ snapshot_date: selectedDate.value })
-    await load()
+    const res = await api.createSnapshot({ snapshot_date: selectedDate.value })
+    if (!res.queued) {
+      await load()
+    }
   } catch (e) {
     error.value = e.message
   } finally {

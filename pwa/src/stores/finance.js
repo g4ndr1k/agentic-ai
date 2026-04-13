@@ -1,10 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { api } from '../api/client.js'
+import { cacheGet, cacheSet } from '../db/index.js'
 
 const DASHBOARD_MIN_MONTH = '2026-01'
 const DASHBOARD_START_KEY = 'finance.dashboard.startMonth'
 const DASHBOARD_END_KEY = 'finance.dashboard.endMonth'
+const CACHE_KEYS = {
+  health: 'finance.health',
+  owners: 'finance.owners',
+  categories: 'finance.categories',
+  years: 'finance.years',
+}
 
 function safeStorageGet(key) {
   try {
@@ -33,23 +40,20 @@ function normalizeDashboardMonth(value, fallback) {
 }
 
 export const useFinanceStore = defineStore('finance', () => {
-  // ── Shared reference data ────────────────────────────────────────────────
-  const owners     = ref([])
+  const owners = ref([])
   const categories = ref([])
-  const years      = ref([])
-  const health     = ref(null)
+  const years = ref([])
+  const health = ref(null)
   const reviewCount = ref(0)
 
-  // ── Navigation state (shared across views) ───────────────────────────────
   const now = new Date()
-  const selectedYear  = ref(now.getFullYear())
+  const selectedYear = ref(now.getFullYear())
   const selectedMonth = ref(now.getMonth() + 1)
-  const selectedOwner = ref('')   // '' = all owners
+  const selectedOwner = ref('')
   const currentMonthKey = computed(() => _getCurrentMonthKey())
   const dashboardStartMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_START_KEY), DASHBOARD_MIN_MONTH))
   const dashboardEndMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_END_KEY), currentMonthKey.value))
 
-  // ── Derived ──────────────────────────────────────────────────────────────
   const categoryMap = computed(() => {
     const m = {}
     for (const c of categories.value) m[c.category] = c
@@ -86,38 +90,62 @@ export const useFinanceStore = defineStore('finance', () => {
     return `${lookup.get(dashboardStartMonth.value) || dashboardStartMonth.value} - ${lookup.get(dashboardEndMonth.value) || dashboardEndMonth.value}`
   })
 
-  // ── Actions ──────────────────────────────────────────────────────────────
+  async function loadCachedResource(cacheKey, fetcher, applyValue) {
+    try {
+      const fresh = await fetcher()
+      applyValue(fresh)
+      await cacheSet(cacheKey, fresh)
+      return fresh
+    } catch (e) {
+      const cached = await cacheGet(cacheKey)
+      if (cached !== null) {
+        console.warn(`[Cache] Using cached ${cacheKey}:`, e.message)
+        applyValue(cached)
+        return cached
+      }
+      console.warn(`${cacheKey} load failed:`, e.message)
+      throw e
+    }
+  }
+
   async function loadHealth() {
     try {
-      health.value = await api.health()
-      reviewCount.value = health.value.needs_review ?? 0
-    } catch (e) {
-      console.warn('health check failed:', e.message)
+      await loadCachedResource(CACHE_KEYS.health, () => api.health(), (value) => {
+        health.value = value
+        reviewCount.value = value?.needs_review ?? 0
+      })
+    } catch {
+      // no cached fallback available
     }
   }
 
   async function loadOwners() {
     try {
-      owners.value = await api.owners()
-    } catch (e) {
-      console.warn('loadOwners failed:', e.message)
+      await loadCachedResource(CACHE_KEYS.owners, () => api.owners(), (value) => {
+        owners.value = value
+      })
+    } catch {
+      // no cached fallback available
     }
   }
 
   async function loadCategories() {
     try {
-      const cats = await api.categories()
-      categories.value = cats.sort((a, b) => a.sort_order - b.sort_order)
-    } catch (e) {
-      console.warn('loadCategories failed:', e.message)
+      await loadCachedResource(CACHE_KEYS.categories, () => api.categories(), (value) => {
+        categories.value = [...value].sort((a, b) => a.sort_order - b.sort_order)
+      })
+    } catch {
+      // no cached fallback available
     }
   }
 
   async function loadYears() {
     try {
-      years.value = await api.summaryYears()
-    } catch (e) {
-      console.warn('loadYears failed:', e.message)
+      await loadCachedResource(CACHE_KEYS.years, () => api.summaryYears(), (value) => {
+        years.value = value
+      })
+    } catch {
+      // no cached fallback available
     }
   }
 
@@ -147,19 +175,15 @@ export const useFinanceStore = defineStore('finance', () => {
     if (value < dashboardStartMonth.value) dashboardStartMonth.value = value
   })
 
-  // Bootstrap: called once from App.vue on mount
   async function bootstrap() {
     await Promise.all([loadHealth(), loadOwners(), loadCategories(), loadYears()])
   }
 
   return {
-    // state
     owners, categories, years, health, reviewCount,
     selectedYear, selectedMonth, selectedOwner,
     dashboardStartMonth, dashboardEndMonth,
-    // computed
     categoryMap, categoryNames, dashboardMonthOptions, dashboardRangeLabel,
-    // actions
     loadHealth, loadOwners, loadCategories, loadYears,
     decrementReviewCount, setDashboardRange, bootstrap,
   }

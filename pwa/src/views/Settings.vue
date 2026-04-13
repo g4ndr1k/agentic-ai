@@ -880,9 +880,11 @@ async function doSync() {
   syncState.value = { loading: true, result: null, error: null }
   try {
     const res = await api.sync()
-    syncState.value.result = res
-    await store.loadHealth()
-    await store.loadCategories()
+    syncState.value.result = res.queued ? { status: 'queued' } : res
+    if (!res.queued) {
+      await store.loadHealth()
+      await store.loadCategories()
+    }
   } catch (e) {
     syncState.value.error = e.message
   } finally {
@@ -897,8 +899,8 @@ async function doImport() {
       dry_run:   importOpts.value.dry_run,
       overwrite: importOpts.value.overwrite,
     })
-    importState.value.result = res
-    if (!importOpts.value.dry_run) await store.loadHealth()
+    importState.value.result = res.queued ? { status: 'queued' } : res
+    if (!res.queued && !importOpts.value.dry_run) await store.loadHealth()
   } catch (e) {
     importState.value.error = e.message
   } finally {
@@ -924,6 +926,11 @@ async function runPipeline() {
   pipelineState.value.loading = true
   try {
     const res = await api.runPipeline()
+    if (res.queued) {
+      pipelineState.value.status = { status: 'queued' }
+      pipelineState.value.error = null
+      return
+    }
     if (res.status === 'already_running') {
       await loadPipelineStatus()
       return

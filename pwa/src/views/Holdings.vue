@@ -834,8 +834,10 @@ async function generateSnapshot() {
   generating.value = true
   snapMsg.value    = ''
   try {
-    await api.createSnapshot({ snapshot_date: snapshotDate.value })
-    snapMsg.value   = `✓ Snapshot saved for ${fmtDateChip(snapshotDate.value)}`
+    const res = await api.createSnapshot({ snapshot_date: snapshotDate.value })
+    snapMsg.value = res.queued
+      ? `⏳ Snapshot queued for ${fmtDateChip(snapshotDate.value)} — will sync when back online`
+      : `✓ Snapshot saved for ${fmtDateChip(snapshotDate.value)}`
     snapMsgOk.value = true
   } catch (e) {
     snapMsg.value   = 'Error: ' + e.message

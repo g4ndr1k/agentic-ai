@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.10.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.10.1 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-04-12
+**Last validated against:** checked-in codebase 2026-04-13
 
 ---
 
@@ -216,11 +216,11 @@ The system alerts on:
   - `pwa/src/views/ReviewQueue.vue` — inline alias form on mobile; desktop two-pane review workspace; toast feedback
   - `pwa/src/views/ForeignSpend.vue` — foreign transactions grouped by currency, per-currency subtotals, flag emojis
   - `pwa/src/views/Settings.vue` — Sync + Import actions, pipeline run/status card, API health status card, grouped PDF workspace, hash-retained PDF processing state, recursive subfolder support, and persisted dashboard month-range controls
-  - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual `Desktop View` override
-  - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace
+  - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual desktop override for wide-screen use
+  - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace; mobile offline state is indicated by the header status dot turning red instead of showing a blocking banner
   - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month, reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation
-  - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints + `console.warn` when API key is not configured
-  - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (Workbox NetworkFirst cache) + `/api` proxy to `:8090`
+  - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints; successful GETs are persisted to IndexedDB and offline GETs fall back to cached responses; mutation endpoints queue offline writes; `console.warn` when API key is not configured
+  - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (`injectManifest`) + `/api` proxy to `:8090`
   - Build output: `pwa/dist/` — 391 KB JS (132 KB gzipped), service worker + workbox generated
 - Stage 3 Wealth Management backend (`finance/`) — see §34–40
   - `finance/db.py` — extended with 4 new tables: `account_balances`, `holdings`, `liabilities`, `net_worth_snapshots` (24-column breakdown); 8 new indexes; `holdings` UNIQUE key includes `institution` to support multiple brokerages holding the same ticker simultaneously, and `liabilities` identity includes `institution` + `account` so same-named cards do not collapse into one debt row
@@ -454,12 +454,12 @@ agentic-ai/
 │       ├── App.vue               # Shell switcher: mobile shell vs desktop shell
 │       ├── style.css             # CSS variables, cards, buttons, forms, toast, desktop shell rules
 │       ├── router/index.js       # 10 routes: /, /flows, /wealth, /holdings, /transactions, /review, /foreign, /settings, /group-drilldown, /category-drilldown
-│       ├── api/client.js         # fetch wrapper for all 25 /api/* endpoints + del() helper + auth warning
+│       ├── api/client.js         # fetch wrapper for all 25 /api/* endpoints + IndexedDB GET fallback + queued offline mutations
 │       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month, reviewCount, reactive dashboard month range
 │       ├── composables/
-│       │   └── useLayout.js      # Breakpoint detection + persisted Desktop View override
+│       │   └── useLayout.js      # Breakpoint detection + persisted desktop override
 │       ├── components/
-│       │   ├── AppHeader.vue         # Route-aware mobile header + Desktop View toggle
+│       │   ├── AppHeader.vue         # Route-aware mobile header + sync status pill (red dot when offline)
 │       │   ├── BottomNav.vue         # Mobile nav: Dashboard, Flows, Wealth, Assets, Txns, Review, More
 │       │   ├── DesktopSidebar.vue    # Desktop navigation + Auto Layout button
 │       │   ├── TransactionTable.vue  # Desktop transactions table
@@ -2484,7 +2484,7 @@ This document now describes the current architecture and operating model rather 
 - Stage 1 mail alerting, bridge services, PDF processing, and launchd automation are fully operational.
 - Stage 2 finance import, categorisation, FastAPI backend, and Vue PWA are fully operational.
 - Stage 3 wealth tracking, holdings management, net-worth snapshots, AI explanation endpoints, and brokerage PDF parsers are fully operational.
-- The PWA now supports both the original mobile shell and a desktop shell with a sidebar, desktop transactions table, desktop review workspace, and a manual Desktop View toggle.
+- The PWA now supports both the original mobile shell and a desktop shell with a sidebar, desktop transactions table, desktop review workspace, and a persisted manual desktop override. The mobile header no longer exposes a Desktop View button.
 - **Secrets migrated to macOS Keychain** — all API keys, bank passwords, Google credentials, and bridge token stored in Keychain service `agentic-ai-bridge`. Docker secrets are export artifacts from `scripts/export-secrets-for-docker.py`.
 - **Cloud LLM providers removed** — Anthropic, OpenAI, and Gemini fallbacks disabled; classifier is Ollama-primary.
 - **Stable TCC identity** — Bridge runs via `/Applications/AgenticAI.app` bundle; FDA grant survives Homebrew Python upgrades.
@@ -3284,7 +3284,7 @@ AI narrative (via Ollama `gemma4:e4b`) runs after the deterministic summary and 
 
 ### Offline behavior (service worker)
 
-vite-plugin-pwa generates a Workbox service worker. API GET routes (except write operations such as `/sync`, `/import`, `/alias`) use NetworkFirst caching. The service worker is configured with `clientsClaim: true` and `skipWaiting: true`, so newly deployed builds take control immediately after refresh. If the browser still shows stale UI after deployment, clear site data or unregister the service worker.
+vite-plugin-pwa builds the app with an `injectManifest` Workbox service worker. Static assets use StaleWhileRevalidate, read-oriented `/api/*` routes are service-worker cached, and write-oriented routes continue to prefer the network. In addition, the PWA persists successful API GET responses into IndexedDB, so view data can be reopened offline after it has been fetched at least once while online. Offline mutation requests are queued for replay on reconnect. The service worker is configured with `clientsClaim: true` and `skipWaiting: true`, so newly deployed builds take control immediately after refresh. On mobile, offline state is indicated by the header sync dot turning red rather than by a fixed banner. If the browser still shows stale UI after deployment, clear site data or unregister the service worker.
 
 ---
 
@@ -3804,7 +3804,7 @@ Monthly wealth management cycle (1st–5th of each month):
 - [x] `pwa/src/views/Holdings.vue` — asset manager with arrow navigation, group tabs, non-IDR FX display, Government Bonds sub-group, per-item delete, focused-section banner, FAB → 2-mode modal form
 - [x] `pwa/src/api/client.js` — wealth API calls for CRUD, snapshots, history, summary, explanation, follow-up Q&A, and `del()` helper
 - [x] `pwa/src/router/index.js` — `/wealth` and `/holdings` routes
-- [x] `pwa/src/App.vue` — shell switcher for mobile and desktop layouts; route-aware header title; manual Desktop View override
+- [x] `pwa/src/App.vue` — shell switcher for mobile and desktop layouts; route-aware header title; persisted manual desktop override
 - [x] `bridge/fx_rate.py` — automatic historical FX rate fetching via `fawazahmed0/currency-api` (jsdelivr CDN primary, Cloudflare Pages fallback); module-level cache; returns 0.0 on failure
 - [x] `bridge/pdf_handler.py` — FX priority chain (bank PDF rate → FX API → 0); `_upsert_bond_holdings()` maps bond fields to `holdings` table using `period_end` as snapshot date
 - [x] `parsers/permata_savings.py` — `BondHolding` dataclass; `_parse_idr_summary()` reads Saldo Rupiah from Ringkasan Rekening table; `_parse_bond_section()` parses Rekening Investasi Obligasi; auto-corrects false-USD currency tags; `StatementResult` carries `bonds` list

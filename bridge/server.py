@@ -53,36 +53,34 @@ class AppContext:
         # the server is running, subsequent Mail DB reads will fail with
         # permission errors. A server restart is required to re-check.
         tcc = preflight_check()
-        if not tcc["fda"]:
-            logger.error(
-                "Full Disk Access not granted to %s — bridge cannot read Mail DB. "
-                "Grant FDA: System Settings → Privacy & Security → Full Disk Access",
-                tcc["executable"],
-            )
-            raise RuntimeError(
-                f"Full Disk Access denied for {tcc['executable']}. "
-                "Grant in System Settings → Privacy & Security → Full Disk Access."
-            )
-
         self.token = resolve_token(self.settings)
         self.state = BridgeState(DATA_DB)
         self.rate = RateLimiter(DATA_DB)
-        self.mail = MailSource(self.settings)
         self.messages = MessagesSource(self.settings)
 
-        # Verify mail access and schema — fail fast if broken
-        if not self.mail.can_access():
-            raise RuntimeError(
-                "Cannot access Mail database. "
-                "Check Full Disk Access permissions.")
-
-        schema = self.mail.verify_schema()
-        if not schema["valid"]:
-            raise RuntimeError(
-                f"Incompatible Mail schema: {schema['errors']}. "
-                "This may indicate an unsupported macOS version.")
-
-        logger.info("Mail database accessible, schema valid")
+        if not tcc["fda"]:
+            logger.warning(
+                "Full Disk Access not granted to %s — Mail features disabled. "
+                "Grant FDA: System Settings → Privacy & Security → Full Disk Access",
+                tcc["executable"],
+            )
+            self.mail = None
+        else:
+            self.mail = MailSource(self.settings)
+            if not self.mail.can_access():
+                logger.warning(
+                    "Cannot access Mail database — Mail features disabled. "
+                    "Check Full Disk Access permissions.")
+                self.mail = None
+            else:
+                schema = self.mail.verify_schema()
+                if not schema["valid"]:
+                    logger.warning(
+                        "Incompatible Mail schema: %s — Mail features disabled.",
+                        schema["errors"])
+                    self.mail = None
+                else:
+                    logger.info("Mail database accessible, schema valid")
 
         cfg = self.settings
         pdf_config = {
@@ -176,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {
                     "status": "ok",
                     "service": "bridge",
-                    "mail_available": self.ctx.mail.can_access(),
+                    "mail_available": self.ctx.mail.can_access() if self.ctx.mail is not None else False,
                     "messages_available": (
                         self.ctx.messages.can_access()),
                     "timestamp": (
@@ -185,10 +183,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/mail/schema":
+                if self.ctx.mail is None:
+                    self._json(503, {"error": "Mail features unavailable — FDA not granted"})
+                    return
                 self._json(200, self.ctx.mail.debug_schema())
                 return
 
             if path == "/mail/pending":
+                if self.ctx.mail is None:
+                    self._json(503, {"error": "Mail features unavailable — FDA not granted"})
+                    return
                 try:
                     limit = int(params.get("limit", ["25"])[0])
                 except (ValueError, TypeError):

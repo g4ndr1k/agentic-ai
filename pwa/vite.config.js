@@ -7,6 +7,9 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       manifest: {
         name: 'Finance Dashboard',
         short_name: 'Finance',
@@ -20,25 +23,6 @@ export default defineConfig({
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-        ],
-      },
-      workbox: {
-        clientsClaim: true,
-        skipWaiting: true,
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) =>
-              url.pathname.startsWith('/api/') &&
-              !url.pathname.endsWith('/sync') &&
-              !url.pathname.endsWith('/import') &&
-              !url.pathname.endsWith('/alias'),
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              expiration: { maxAgeSeconds: 300, maxEntries: 50 },
-              networkTimeoutSeconds: 8,
-            },
-          },
         ],
       },
     }),

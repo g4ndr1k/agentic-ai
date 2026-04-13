@@ -8,9 +8,18 @@ import './style.css'
 const updateSW = registerSW({
   immediate: true,
   onNeedRefresh() {
+    console.log('[SW] New version available — auto-updating')
     updateSW(true)
   },
-  onOfflineReady() {},
+  onOfflineReady() {
+    console.log('[SW] App is ready to work offline')
+  },
+  onRegistered(registration) {
+    console.log('[SW] Service worker registered:', registration?.scope)
+  },
+  onRegisterError(error) {
+    console.error('[SW] Service worker registration failed:', error)
+  },
 })
 
 const app = createApp(App)

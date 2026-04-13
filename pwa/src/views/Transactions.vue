@@ -341,7 +341,9 @@ async function saveCategory(tx) {
     const res = await api.patchCategory(tx.hash, { category: editCategory.value, update_alias: true })
     if (res.transaction) {
       tx.category = res.transaction.category
-      tx.notes = res.transaction.notes
+      if (Object.prototype.hasOwnProperty.call(res.transaction, 'notes')) {
+        tx.notes = res.transaction.notes
+      }
     }
     if (res.also_updated > 0) {
       const raw = tx.raw_description
