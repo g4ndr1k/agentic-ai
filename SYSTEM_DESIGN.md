@@ -1272,12 +1272,26 @@ Create `~/Library/LaunchAgents/com.agentic.bridge.plist`:
 
     <key>ThrottleInterval</key>
     <integer>10</integer>
+
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
 </dict>
 </plist>
 ```
 
 > **Critical:** Replace `YOUR_USERNAME` with your actual macOS username.
 > Use `/Applications/AgenticAI.app` (the .app bundle) for stable TCC identity. Alternatively, `/opt/homebrew/bin/python3.14` (the versioned symlink). Do **not** use `/usr/bin/python3` (system Python 3.9 — no `tomllib`) or `/opt/homebrew/bin/python3` (the unversioned symlink does not satisfy TCC FDA checks).
+>
+> **Resource limits:** The `SoftResourceLimits` / `HardResourceLimits` keys raise the file-descriptor ceiling from the macOS default (256) to 8192/65536. The pipeline scanner opens many short-lived SQLite connections per cycle; without this override, long-running bridges eventually hit `OSError: [Errno 24] Too many open files`.
 
 ---
 
@@ -2005,6 +2019,8 @@ python3 scripts/batch_process.py -v
 | `processed_files` | `sha256` | One row per unique file content; records bank, period, txn count, output filename, status, error, and `error_category` |
 | `zip_members` | `(zip_sha256, pdf_filename)` | Maps each ZIP extraction to its contained PDFs |
 
+> **Connection management:** The `Registry` class uses a `@contextmanager`-decorated `_con()` method that opens a SQLite connection, yields it, and guarantees `close()` in the `finally` block. Do **not** replace this with a plain return — `sqlite3.Connection.__exit__` only manages transactions (commit/rollback), it does **not** close the underlying file descriptor. A plain-return pattern leaked FDs across pipeline cycles, eventually causing `OSError: [Errno 24] Too many open files` (see §23 troubleshooting).
+
 To inspect directly:
 ```bash
 sqlite3 data/processed_files.db \
@@ -2421,6 +2437,31 @@ docker compose restart mail-agent
 ```
 
 > ⚠️ **Prevention:** always follow the reset procedure in §8 — stop agent and bridge *before* deleting any DB files.
+
+### `OSError: [Errno 24] Too many open files` / PWA shows `502 Bridge unreachable`
+
+The bridge process accepts TCP connections but crashes on every request because the file-descriptor limit has been exhausted. Root cause: the `Registry._con()` method in `scripts/batch_process.py` was leaking SQLite connections across pipeline cycles (see §19 "Registry database" for details). Each cycle opened connections to `processed_files.db` without closing them; after ~100+ cycles the count exceeded the macOS default soft limit of 256.
+
+**Symptoms:**
+- `curl http://localhost:9100/health` returns "Connection reset by peer"
+- Bridge log shows `OSError: [Errno 24] Too many open files` in `_scan_candidates` → `sha256_file`
+- PWA Settings > PDF pipeline shows `❌ 502: Bridge unreachable: Remote end closed connection without response`
+- `lsof -p $(pgrep -f bridge.server) | grep processed_files.db | wc -l` returns a large number
+
+**Fix (already applied):**
+1. `Registry._con()` is now a `@contextmanager` that guarantees `close()` — no more FD leaks
+2. Bridge LaunchAgent plist includes `SoftResourceLimits` (8192) / `HardResourceLimits` (65536)
+
+**Immediate recovery if it happens again:**
+```bash
+launchctl unload ~/Library/LaunchAgents/com.agentic.bridge.plist
+launchctl load   ~/Library/LaunchAgents/com.agentic.bridge.plist
+sleep 3
+# Verify
+curl -s http://127.0.0.1:9100/healthz
+# Check FD count is low
+lsof -p $(pgrep -f bridge.server) 2>/dev/null | grep -v 'txt\|mem\|cwd\|rtd' | wc -l
+```
 
 ### `sqlite3.OperationalError: no such table`
 

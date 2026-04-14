@@ -15,6 +15,16 @@
 	<true/>
 	<key>Label</key>
 	<string>com.agentic.bridge</string>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>8192</integer>
+	</dict>
+	<key>HardResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/Applications/AgenticAI.app/Contents/MacOS/launch_bridge</string>

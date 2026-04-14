@@ -51,6 +51,7 @@ import time
 import tomllib
 import traceback
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -131,11 +132,22 @@ class Registry:
         self._migrate()
 
     # ── Internal ──────────────────────────────────────────────────────────
-    def _con(self) -> sqlite3.Connection:
+    @contextmanager
+    def _con(self):
+        """Yield a short-lived connection that is always closed on exit.
+
+        NOTE: ``with sqlite3.connect(...) as con`` only manages transactions
+        (commit / rollback), it does **not** close the connection.  Using it
+        as a plain return value and then in a ``with`` block leaks a file
+        descriptor every call.  This wrapper guarantees ``close()`` is called.
+        """
         con = sqlite3.connect(self._path)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
-        return con
+        try:
+            yield con
+        finally:
+            con.close()
 
     def _migrate(self):
         with self._con() as con:
