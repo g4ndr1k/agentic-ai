@@ -218,7 +218,7 @@ The system alerts on:
   - `pwa/src/views/Settings.vue` — Sync + Import actions, pipeline run/status card, API health status card, grouped PDF workspace, hash-retained PDF processing state, recursive subfolder support, and persisted dashboard month-range controls
   - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual desktop override for wide-screen use
   - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace; mobile offline state is indicated by the header status dot turning red instead of showing a blocking banner
-  - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month, reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation
+  - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation
   - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints; successful GETs are persisted to IndexedDB and offline GETs fall back to cached responses; mutation endpoints queue offline writes; `console.warn` when API key is not configured
   - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (`injectManifest`) + `/api` proxy to `:8090`
   - Build output: `pwa/dist/` — 391 KB JS (132 KB gzipped), service worker + workbox generated
@@ -455,7 +455,7 @@ agentic-ai/
 │       ├── style.css             # CSS variables, cards, buttons, forms, toast, desktop shell rules
 │       ├── router/index.js       # 10 routes: /, /flows, /wealth, /holdings, /transactions, /review, /foreign, /settings, /group-drilldown, /category-drilldown
 │       ├── api/client.js         # fetch wrapper for all 25 /api/* endpoints + IndexedDB GET fallback + queued offline mutations
-│       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month, reviewCount, reactive dashboard month range
+│       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month (clamped to dashboardEndMonth), reviewCount, reactive dashboard month range
 │       ├── composables/
 │       │   └── useLayout.js      # Breakpoint detection + persisted desktop override
 │       ├── components/
@@ -3310,7 +3310,7 @@ AI narrative (via Ollama `gemma4:e4b`) runs after the deterministic summary and 
 | Route | View | Key features |
 |---|---|---|
 | `/` | Main Dashboard | Wealth-management landing page: total net worth hero, 30-day change, wealth-over-time chart, asset-allocation donut, and cash-flow summary. All dashboard widgets respect the Settings month range and never show data before Jan 2026. |
-| `/flows` | Flows | Original flows view: month/year navigation clamped to Jan 2026+, owner toggle, summary cards, spending-by-group rollup, trend explanation panel, Chart.js monthly trend, owner split table |
+| `/flows` | Flows | Original flows view: month/year navigation clamped to Jan 2026+, opens on the Settings dashboard end month (not the current calendar month), owner toggle, summary cards, spending-by-group rollup, trend explanation panel, Chart.js monthly trend, owner split table |
 | `/transactions` | Transactions | Year/month/owner/category/search filters; paginated list (50/page); mobile expandable detail rows; desktop sortable table with separate detail/editor pane; AI AMA bar for natural-language queries (active mode disables pagination and mutes standard filters) |
 | `/review` | Review Queue | Mobile accordion review flow plus desktop two-pane workspace; alias form writes via `POST /api/alias`; duplicate / zero-sum rows can be marked `Ignored` via category override (no alias write); removes affected rows locally and decrements badge |
 | `/foreign` | Foreign Spend | Year/month/owner filters; transactions grouped by `original_currency`; per-group subtotal row; summary cards (unique currencies, total IDR equivalent) |
@@ -3751,7 +3751,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 
 ### `Wealth.vue` — Net Worth Dashboard (`/wealth`)
 
-- **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
+- **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). On first load, the view opens on the most recent snapshot date within the Settings dashboard range end month (not the current calendar month). Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
 - **Hero card** — large Net Worth figure on dark gradient; MoM change with ▲/▼ indicator + percentage. January 2026 is treated as the start month and shows a non-comparison state instead of comparing against December 2025.
 - **Assets / Liabilities cards** — side-by-side summary grid
 - **Monthly Movement card** — deterministic month-over-month comparison rows for cash, investments, real estate, physical assets, liabilities, and net worth
@@ -3766,7 +3766,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 
 ### `Holdings.vue` — Asset Manager (`/holdings`)
 
-- **Month navigation** — `‹ Month Year ›` arrow buttons. Centre area also shows a `+` button to open an inline `<input type="month">` for jumping directly to any month.
+- **Month navigation** — `‹ Month Year ›` arrow buttons. On first load, opens on the most recent snapshot date within the Settings dashboard range end month (not the current calendar month). Centre area also shows a `+` button to open an inline `<input type="month">` for jumping directly to any month.
 - **Group filter tabs** — All · 🏦 Cash · 📈 Investments · 🏠 Real Estate · 🟡 Physical
 - **Focused section banner** — when a single asset group is selected, an inline banner shows the current section and a `Back to Condensed` action to return to the `All` view
 - **Collapsible sections** — in the `All` view, `Cash & Liquid`, `Investments`, `Real Estate`, and `Physical Assets` each have expand/collapse toggles and default to collapsed for denser browsing

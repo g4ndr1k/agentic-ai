@@ -47,12 +47,16 @@ export const useFinanceStore = defineStore('finance', () => {
   const reviewCount = ref(0)
 
   const now = new Date()
-  const selectedYear = ref(now.getFullYear())
-  const selectedMonth = ref(now.getMonth() + 1)
-  const selectedOwner = ref('')
   const currentMonthKey = computed(() => _getCurrentMonthKey())
   const dashboardStartMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_START_KEY), DASHBOARD_MIN_MONTH))
   const dashboardEndMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_END_KEY), currentMonthKey.value))
+
+  // Clamp selectedYear/selectedMonth to dashboard range end on init
+  const _initEnd = dashboardEndMonth.value || currentMonthKey.value
+  const [_ey, _em] = _initEnd.split('-').map(Number)
+  const selectedYear = ref(_ey || now.getFullYear())
+  const selectedMonth = ref(_em || (now.getMonth() + 1))
+  const selectedOwner = ref('')
 
   const categoryMap = computed(() => {
     const m = {}

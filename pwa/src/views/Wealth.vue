@@ -240,6 +240,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useFinanceStore } from '../stores/finance.js'
 import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { api } from '../api/client.js'
@@ -267,6 +268,8 @@ const followUpQuestion = ref('')
 const askingAi = ref(false)
 const qaHistory = ref([])
 const selectedDate = ref('')
+
+const store = useFinanceStore()
 
 const trendRef = ref(null)
 let trendChart = null
@@ -592,9 +595,18 @@ async function load() {
     qaHistory.value        = []
     followUpQuestion.value = ''
 
-    // Auto-select most recent date (prefer a date with a snapshot, fall back to any data date)
+    // Auto-select most recent date within dashboard range
+    // (prefer a date with a snapshot, fall back to any data date)
+    const endMonth = store.dashboardEndMonth || ''  // YYYY-MM
     if (!selectedDate.value) {
-      selectedDate.value = summary.snapshot_date || (collapsedDates.length ? collapsedDates[0] : '')
+      const apiDefault = summary.snapshot_date || (collapsedDates.length ? collapsedDates[0] : '')
+      // Clamp to dashboard range end month if the API default exceeds it
+      if (endMonth && monthKey(apiDefault) > endMonth) {
+        const clamped = collapsedDates.find(d => monthKey(d) <= endMonth) || (collapsedDates.length ? collapsedDates[collapsedDates.length - 1] : '')
+        selectedDate.value = clamped
+      } else {
+        selectedDate.value = apiDefault
+      }
     } else if (!collapsedDates.includes(selectedDate.value)) {
       selectedDate.value = collapsedDates.find(d => monthKey(d) === monthKey(selectedDate.value)) || selectedDate.value
     }

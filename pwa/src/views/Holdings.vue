@@ -857,14 +857,29 @@ onMounted(async () => {
   // Load available months from union endpoint
   try {
     snapshotDates.value = collapseMonthDates(await api.wealthSnapshotDates())
-    // Default to the most recent month with data
+    // Default to the most recent month within dashboard range
     if (snapshotDates.value.length) {
-      snapshotDate.value = snapshotDates.value[0]
+      const endMonth = store.dashboardEndMonth || ''  // YYYY-MM
+      if (endMonth) {
+        const clamped = snapshotDates.value.find(d => monthKey(d) <= endMonth)
+        snapshotDate.value = clamped || snapshotDates.value[snapshotDates.value.length - 1]
+      } else {
+        snapshotDate.value = snapshotDates.value[0]
+      }
     }
   } catch (_) {
-    // Fall back to today
+    // Fall back to today (clamped to dashboard end month)
     const now = new Date()
-    snapshotDate.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+    const endMonth = store.dashboardEndMonth || ''
+    if (endMonth && todayStr.slice(0, 7) > endMonth) {
+      // Use last day of the dashboard end month
+      const [y, m] = endMonth.split('-').map(Number)
+      const lastDay = new Date(y, m, 0).getDate()
+      snapshotDate.value = `${endMonth}-${String(lastDay).padStart(2, '0')}`
+    } else {
+      snapshotDate.value = todayStr
+    }
   }
   await loadItems()
 })
