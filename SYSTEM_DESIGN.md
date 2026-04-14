@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.10.3 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.10.4 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
-**Last validated against:** checked-in codebase 2026-04-14
+**Last validated against:** checked-in codebase 2026-04-15
 
 ---
 
@@ -1741,7 +1741,7 @@ The scheduler lives inside the bridge process and uses a non-blocking lock to pr
 | CIMB Niaga | Consolidated Portfolio | `parsers/cimb_niaga_consol.py` | Email `@cimbniaga.co.id` | Via customer name in header |
 | IPOT (Indo Premier) | Client Portfolio | `parsers/ipot_portfolio.py` | Manual upload | Via customer name ("To" line) |
 | IPOT (Indo Premier) | Client Statement (RDN) | `parsers/ipot_statement.py` | Manual upload | Via customer name ("To" line) |
-| BNI Sekuritas | Portfolio Statement (`CLIENT STATEMENT`) | `parsers/bni_sekuritas.py` | Manual upload | Via customer name in header |
+| BNI Sekuritas | Portfolio Statement (`CLIENT STATEMENT`) | `parsers/bni_sekuritas.py` | Manual upload | Via `"To : NAME"` line |
 | BNI Sekuritas | Legacy Portfolio Statement (`CONSOLIDATE ACCOUNT STATEMENT`) | `parsers/bni_sekuritas_legacy.py` | Manual upload | Via `Mr/Mrs.` header + client code |
 | Stockbit Sekuritas | Statement of Account | `parsers/stockbit_sekuritas.py` | Manual upload | Via "Client" line |
 
@@ -1801,8 +1801,9 @@ Detection is automatic — the router (`parsers/router.py`) reads the first (and
 - Date format: `"Sunday, DD-Mon-YYYY"` (English) for period; `DD/MM/YYYY` for transactions
 - Client name: `"To : CUSTOMER NAME"` line; client code: `"Customer : XXXXXXXX"` field
 - Stock and mutual fund rows: regex on raw text; funds have multi-line names (suffix line e.g. `"Kelas A"` appended if no digits and no ticker pattern)
-- RDN closing balance: `"End Balance"` row in the `"Cash RDN"` section
-- Detection: `"BNI Sekuritas"` + `"CLIENT STATEMENT"` (page 1, all caps)
+- RDN closing balance: `"End Balance"` row in the `"Cash RDN"` section; section boundary is the next `"Portfolio :"` header (not a fixed character limit)
+- Cash RDN transaction Amount column can be negative (e.g. withdrawal rows show `-35,000,000`); regex handles `(-?[\d,]+)` — Debet/Credit columns remain strictly positive
+- Detection: `"CLIENT STATEMENT"` (all-caps, page 1 only). The `"BNI Sekuritas"` brand name was removed as a detection requirement — from Mar-2026 onwards it only appears in the page-2 legal disclaimer, not page 1. All-caps `"CLIENT STATEMENT"` is unique to BNI Sekuritas; IPOT uses title-case `"Client Statement"` and is checked first in the router.
 
 **BNI Sekuritas Legacy** (`bni_sekuritas_legacy.py`):
 - Header: `Mr/Mrs. NAME (CLIENT_CODE)` with `Period : MONTH YYYY` and `Total Asset`

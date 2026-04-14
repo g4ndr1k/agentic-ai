@@ -2,7 +2,7 @@
 bni_sekuritas.py — Parser for PT BNI Sekuritas "CLIENT STATEMENT" (SOA) PDFs.
 
 Detection keywords (page 1):
-  "BNI Sekuritas" + "CLIENT STATEMENT"
+  "CLIENT STATEMENT"  (all-caps; sufficient — IPOT uses title-case "Client Statement")
 
 Note: "CLIENT STATEMENT" (all-caps) is BNI Sekuritas.
       "Client Statement" (title-case) is IPOT — they don't overlap.
@@ -131,7 +131,7 @@ _RE_CASH_TX_ROW = re.compile(
 # ── Public interface ───────────────────────────────────────────────────────────
 
 def can_parse(text: str) -> bool:
-    return "BNI Sekuritas" in text and "CLIENT STATEMENT" in text
+    return "CLIENT STATEMENT" in text
 
 
 def parse(
@@ -259,7 +259,9 @@ def _parse_rdn_end_balance(text: str, errors: list) -> Optional[float]:
     if start == -1:
         errors.append("BNI Sekuritas: Cash RDN section not found")
         return None
-    section = text[start: start + 500]
+    # Section ends at the next "Portfolio :" header (or end of text)
+    end = text.find("Portfolio :", start)
+    section = text[start: end if end != -1 else len(text)]
     m = _RE_RDN_END_BAL.search(section)
     if m:
         # Column order: Amount, Debet, Credit, Balance — we want group 4 (Balance)
@@ -402,7 +404,7 @@ def _parse_cash_transactions(
         r"(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+"   # Trade date
         r"(?:(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+)?"  # Settle date (optional)
         r"(.+?)\s+"                              # Description
-        r"([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)",  # Amount, Debet, Credit, Balance
+        r"(-?[\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)",  # Amount, Debet, Credit, Balance
         re.MULTILINE,
     )
 
