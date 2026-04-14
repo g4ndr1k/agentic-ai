@@ -571,7 +571,7 @@ onMounted(load)
   gap: 8px;
   margin: 6px 0 4px;
   padding: 6px 12px;
-  background: linear-gradient(90deg, rgba(30,58,95,0.07), rgba(30,58,95,0.03));
+  background: linear-gradient(90deg, rgba(15,118,110,0.07), rgba(15,118,110,0.03));
   border-left: 3px solid var(--primary);
   border-radius: 0 8px 8px 0;
   font-size: 13px;

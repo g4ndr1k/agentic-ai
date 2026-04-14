@@ -3751,7 +3751,7 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 
 ### `Wealth.vue` — Net Worth Dashboard (`/wealth`)
 
-- **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). On first load, the view opens on the most recent snapshot date within the Settings dashboard range end month (not the current calendar month). Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
+- **Month navigation** — `‹ Month Year ›` arrow buttons (same style as Dashboard/Flows). On first load, the view opens on the most recent snapshot date within the Settings dashboard range end month (not the current calendar month). If the initial API response lands outside the currently selected/clamped month, `Wealth.vue` immediately refetches `/api/wealth/summary` for the resolved date so the navigation label, hero card, movement card, and explanation panel all describe the same month. Left arrow disabled when on the oldest snapshot; right arrow disabled when on the newest.
 - **Hero card** — large Net Worth figure on dark gradient; MoM change with ▲/▼ indicator + percentage. January 2026 is treated as the start month and shows a non-comparison state instead of comparing against December 2025.
 - **Assets / Liabilities cards** — side-by-side summary grid
 - **Monthly Movement card** — deterministic month-over-month comparison rows for cash, investments, real estate, physical assets, liabilities, and net worth

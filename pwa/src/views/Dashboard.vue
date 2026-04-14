@@ -606,7 +606,7 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
   -webkit-tap-highlight-color: transparent;
 }
 .cat-row-tappable:hover  { background: var(--primary-dim); }
-.cat-row-tappable:active { background: rgba(30,58,95,0.14); }
+.cat-row-tappable:active { background: rgba(15,118,110,0.14); }
 
 .cat-drill-chevron {
   font-size: 14px;
@@ -651,7 +651,7 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(30,58,95,0.04), rgba(255,255,255,0.9));
+  background: linear-gradient(180deg, rgba(15,118,110,0.04), rgba(255,255,255,0.9));
 }
 
 .trend-explanation-topline {

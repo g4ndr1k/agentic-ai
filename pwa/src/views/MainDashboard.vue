@@ -740,7 +740,7 @@ onUnmounted(() => {
   text-align: center;
 }
 .dashboard-empty__icon { font-size: 40px; margin-bottom: 10px; }
-.dashboard-empty__title { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+.dashboard-empty__title { font-size: 20px; font-weight: 800; margin-bottom: 8px; color: var(--text); }
 .dashboard-empty__cta { margin-top: 18px; display: inline-flex; }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
@@ -862,14 +862,14 @@ onUnmounted(() => {
   font-weight: 700;
   letter-spacing: 0.10em;
   text-transform: uppercase;
-  color: #8da2bf;
+  color: var(--text-muted);
 }
 .dash-kpi__value {
   margin-top: 4px;
   font-size: 19px;
   font-weight: 800;
   line-height: 1.15;
-  color: #edf4ff;
+  color: var(--text);
 }
 
 .alloc-kpis {
@@ -920,12 +920,12 @@ onUnmounted(() => {
 .dash-card__title {
   font-size: 16px;
   font-weight: 800;
-  color: #edf4ff;
+  color: var(--text);
   letter-spacing: -0.01em;
 }
 .dash-card__sub {
   margin-top: 3px;
-  color: #8da2bf;
+  color: var(--text-muted);
   font-size: 13px;
   font-weight: 500;
 }
@@ -981,14 +981,14 @@ onUnmounted(() => {
   pointer-events: none;
 }
 .donut-center-label {
-  color: #8da2bf;
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .donut-center-value {
-  color: #edf4ff;
+  color: var(--text);
   font-size: 15px;
   font-weight: 800;
   margin-top: 4px;
@@ -1027,7 +1027,7 @@ onUnmounted(() => {
 .alloc-legend__label {
   font-size: 12px;
   font-weight: 600;
-  color: #c8d6e5;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1035,14 +1035,14 @@ onUnmounted(() => {
 .alloc-legend__pct {
   font-size: 11px;
   font-weight: 700;
-  color: #8da2bf;
+  color: var(--text-muted);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 .alloc-legend__val {
   font-size: 11px;
   font-weight: 800;
-  color: #edf4ff;
+  color: var(--text);
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -1076,7 +1076,7 @@ onUnmounted(() => {
   stroke-width: 1;
 }
 .chart-axis-label {
-  fill: #64748b;
+  fill: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
 }
@@ -1157,6 +1157,26 @@ onUnmounted(() => {
   }
   .alloc-legend--tight {
     max-width: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .dash-kpi__label,
+  .donut-center-label,
+  .alloc-legend__pct,
+  .dash-card__sub,
+  .chart-axis-label {
+    color: #57534e;
+    fill: #57534e;
+  }
+
+  .dash-kpi__value,
+  .dash-card__title,
+  .donut-center-value,
+  .alloc-legend__label,
+  .alloc-legend__val,
+  .dashboard-empty__title {
+    color: #1c1917;
   }
 }
 

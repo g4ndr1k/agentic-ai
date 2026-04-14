@@ -538,8 +538,8 @@ function buildChart() {
   const data   = history.value.map(h => Math.round(h.net_worth_idr / 1_000_000))
   const tickColor = isDesktop.value ? '#9db0c9' : '#64748b'
   const gridColor = isDesktop.value ? 'rgba(141,162,191,0.12)' : 'rgba(0,0,0,0.06)'
-  const strokeColor = isDesktop.value ? '#76a6ff' : '#1e3a5f'
-  const fillColor = isDesktop.value ? 'rgba(118,166,255,0.16)' : 'rgba(30,58,95,0.08)'
+  const strokeColor = isDesktop.value ? '#76a6ff' : '#0f766e'
+  const fillColor = isDesktop.value ? 'rgba(118,166,255,0.16)' : 'rgba(15,118,110,0.08)'
   trendChart = new Chart(trendRef.value, {
     type: 'line',
     data: {
@@ -577,13 +577,39 @@ async function load() {
   explanationLoading.value = true
   error.value              = null
   try {
+    const requestedDate = selectedDate.value || ''
+
     // Phase 1: critical data — render immediately
-    const [summary, hist] = await Promise.all([
-      api.wealthSummary({ snapshot_date: selectedDate.value || undefined }),
+    let [summary, hist] = await Promise.all([
+      api.wealthSummary({ snapshot_date: requestedDate || undefined }),
       api.wealthHistory(24),
     ])
-    const collapsedDates   = collapseMonthDates(summary.dates, summary.snapshot_date || selectedDate.value)
     const collapsedHistory = collapseMonthlyHistory(hist)
+
+    // Auto-select most recent date within dashboard range
+    // (prefer a date with a snapshot, fall back to any data date)
+    const endMonth = store.dashboardEndMonth || ''  // YYYY-MM
+    let resolvedDate = requestedDate
+    const initialDates = collapseMonthDates(summary.dates, summary.snapshot_date || requestedDate)
+
+    if (!resolvedDate) {
+      const apiDefault = summary.snapshot_date || (initialDates.length ? initialDates[0] : '')
+      if (endMonth && monthKey(apiDefault) > endMonth) {
+        resolvedDate = initialDates.find(d => monthKey(d) <= endMonth) || (initialDates.length ? initialDates[initialDates.length - 1] : '')
+      } else {
+        resolvedDate = apiDefault
+      }
+    } else if (!initialDates.includes(resolvedDate)) {
+      resolvedDate = initialDates.find(d => monthKey(d) === monthKey(resolvedDate)) || resolvedDate
+    }
+
+    // If the selected/clamped month changed after the first request, refetch the summary
+    // so the nav month and snapshot card always describe the same period.
+    if (resolvedDate && resolvedDate !== requestedDate) {
+      summary = await api.wealthSummary({ snapshot_date: resolvedDate })
+    }
+
+    const collapsedDates = collapseMonthDates(summary.dates, summary.snapshot_date || resolvedDate)
 
     snap.value             = summary.snapshot
     balances.value         = summary.balances
@@ -594,22 +620,8 @@ async function load() {
     explanation.value      = null
     qaHistory.value        = []
     followUpQuestion.value = ''
+    selectedDate.value     = resolvedDate || summary.snapshot_date || ''
 
-    // Auto-select most recent date within dashboard range
-    // (prefer a date with a snapshot, fall back to any data date)
-    const endMonth = store.dashboardEndMonth || ''  // YYYY-MM
-    if (!selectedDate.value) {
-      const apiDefault = summary.snapshot_date || (collapsedDates.length ? collapsedDates[0] : '')
-      // Clamp to dashboard range end month if the API default exceeds it
-      if (endMonth && monthKey(apiDefault) > endMonth) {
-        const clamped = collapsedDates.find(d => monthKey(d) <= endMonth) || (collapsedDates.length ? collapsedDates[collapsedDates.length - 1] : '')
-        selectedDate.value = clamped
-      } else {
-        selectedDate.value = apiDefault
-      }
-    } else if (!collapsedDates.includes(selectedDate.value)) {
-      selectedDate.value = collapsedDates.find(d => monthKey(d) === monthKey(selectedDate.value)) || selectedDate.value
-    }
     if (token !== loadToken) return
     await nextTick()
     buildChart()
@@ -741,7 +753,7 @@ onUnmounted(destroyChart)
 /* ── Hero net worth card ─────────────────────────────────────────────────────  */
 .nw-hero {
   margin: 12px 16px 0;
-  background: linear-gradient(135deg, var(--primary-deep) 0%, var(--primary) 100%);
+  background: linear-gradient(135deg, #0a5e58 0%, #0f766e 60%, #14b8a6 100%);
   border-radius: var(--radius-lg);
   padding: 20px 20px 18px;
   color: #fff;
@@ -810,7 +822,7 @@ onUnmounted(destroyChart)
   transition: background 0.12s;
 }
 .wealth-row:last-child  { border-bottom: none; }
-.wealth-row:active      { background: var(--primary-dim); }
+.wealth-row:active      { background: rgba(15,118,110,0.08); }
 .wealth-row-liab        { opacity: 0.9; }
 .wealth-row-header {
   display: flex;
@@ -831,7 +843,7 @@ onUnmounted(destroyChart)
   gap: 8px;
   margin-bottom: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(30, 58, 95, 0.1);
+  border: 1px solid rgba(15,118,110,0.10);
   border-radius: 14px;
   color: var(--text-muted);
   font-size: 13px;
@@ -845,9 +857,9 @@ onUnmounted(destroyChart)
 .trend-explanation {
   margin-bottom: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(30, 58, 95, 0.1);
+  border: 1px solid rgba(15,118,110,0.10);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(30, 58, 95, 0.04), rgba(30, 58, 95, 0.02));
+  background: linear-gradient(180deg, rgba(15,118,110,0.04), rgba(15,118,110,0.02));
 }
 .trend-explanation-topline {
   display: flex;
@@ -877,7 +889,7 @@ onUnmounted(destroyChart)
 .trend-explanation-headline {
   font-size: 13px;
   font-weight: 700;
-  color: var(--primary-deep);
+  color: #0a5e58;
   margin-bottom: 6px;
 }
 .trend-explanation-summary {
@@ -904,7 +916,7 @@ onUnmounted(destroyChart)
 .trend-ai {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid rgba(30, 58, 95, 0.08);
+  border-top: 1px solid rgba(15,118,110,0.08);
 }
 .trend-ai-label {
   font-size: 11px;
@@ -923,7 +935,7 @@ onUnmounted(destroyChart)
 .trend-suggestion-chip {
   border: 1px solid var(--border);
   background: #fff;
-  color: var(--primary-deep);
+  color: #0a5e58;
   border-radius: 999px;
   padding: 8px 12px;
   font-size: 12px;
@@ -957,7 +969,7 @@ onUnmounted(destroyChart)
 .trend-qa-question {
   font-size: 12px;
   font-weight: 700;
-  color: var(--primary-deep);
+  color: #0a5e58;
   margin-bottom: 6px;
 }
 .trend-qa-answer-title {
@@ -1024,7 +1036,7 @@ onUnmounted(destroyChart)
   z-index: 10;
   transition: background 0.15s;
 }
-.wealth-fab:active { background: var(--primary-deep); }
+.wealth-fab:active { background: #0a5e58; }
 
 @media (min-width: 1024px) {
   .nw-hero {

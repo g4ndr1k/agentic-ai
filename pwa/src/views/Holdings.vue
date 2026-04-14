@@ -918,7 +918,7 @@ onMounted(async () => {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(30,58,95,0.05), rgba(255,255,255,0.92));
+  background: linear-gradient(180deg, rgba(15,118,110,0.05), rgba(255,255,255,0.92));
   display: flex;
   align-items: center;
   justify-content: space-between;
