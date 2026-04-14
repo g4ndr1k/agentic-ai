@@ -9,6 +9,7 @@ import CategoryDrilldown  from '../views/CategoryDrilldown.vue'
 import GroupDrilldown     from '../views/GroupDrilldown.vue'
 import Wealth             from '../views/Wealth.vue'
 import Holdings           from '../views/Holdings.vue'
+import AuditCompleteness  from '../views/AuditCompleteness.vue'
 
 export default createRouter({
   history: createWebHistory(),
@@ -20,7 +21,8 @@ export default createRouter({
     { path: '/transactions',        component: Transactions,      meta: { title: 'Txns' } },
     { path: '/review',              component: ReviewQueue,       meta: { title: 'Review' } },
     { path: '/foreign',             component: ForeignSpend,      meta: { title: 'Foreign Spend' } },
-    { path: '/settings',            component: Settings,          meta: { title: 'More' } },
+    { path: '/settings',            component: Settings,           meta: { title: 'More' } },
+    { path: '/audit',              component: AuditCompleteness,  meta: { title: 'Audit' } },
     { path: '/group-drilldown',     component: GroupDrilldown,    meta: { title: 'Group Detail' } },
     { path: '/category-drilldown',  component: CategoryDrilldown, meta: { title: 'Category Detail' } },
   ],

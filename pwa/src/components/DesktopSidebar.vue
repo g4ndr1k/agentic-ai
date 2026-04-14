@@ -26,6 +26,7 @@ const { setLayoutMode } = useLayout()
         </span>
       </RouterLink>
       <RouterLink to="/foreign" class="desktop-sidebar__link">🌍 <span>Foreign Spend</span></RouterLink>
+      <RouterLink to="/audit" class="desktop-sidebar__link">📋 <span>Audit</span></RouterLink>
       <RouterLink to="/settings" class="desktop-sidebar__link">⚙️ <span>Settings</span></RouterLink>
     </div>
 

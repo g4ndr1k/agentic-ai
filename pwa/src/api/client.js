@@ -171,5 +171,6 @@ export const api = {
   pdfLocalWorkspace: () => get('/pdf/local-workspace'),
   processLocalPdf: (folder, relativePath) => post('/pdf/process-local', { folder, relative_path: relativePath }),
   pdfLocalStatus: (jobId) => get(`/pdf/local-status/${jobId}`),
+  auditCompleteness: (startMonth = '', endMonth = '') => get('/audit/completeness', { start_month: startMonth, end_month: endMonth }),
   postMultipart,
 }

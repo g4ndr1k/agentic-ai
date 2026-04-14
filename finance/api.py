@@ -2992,6 +2992,227 @@ async def pipeline_run():
         raise HTTPException(502, f"Bridge unreachable: {e}")
 
 
+# ── Document Completeness Audit ─────────────────────────────────────────────
+
+import re as _re
+
+def _parse_pdf_entity(filename: str) -> dict | None:
+    """Parse a PDF filename into {entity_key, entity_label, month_key, info}.
+
+    Supported patterns (derived from actual pdf_inbox contents):
+      BCA_2171138631_MM_YYYY.pdf       → entity "BCA - 2171138631", info "Stmt"
+      BCA_CC_YYYYMMDD.pdf              → entity "BCA - CC", info "CC"
+      CIMBNiagaCCYYYYMMDD.pdf          → entity "CIMB - CC", info "CC"
+      CIMBNiagaCSYYYYMMDD.pdf          → entity "CIMB - CS", info "CS"
+      IPOT_PORTFOLIO_YYYY-MM-DD.pdf    → entity "IPOT - Portfolio", info "Portfolio"
+      IPOT_STATEMENT_YYYY-MM-DD.pdf    → entity "IPOT - Statement", info "Statement"
+      Maybank_CC_YYYYMMDD.pdf          → entity "Maybank - CC", info "CC"
+      Maybank_CS_YYYYMMDD.pdf          → entity "Maybank - CS", info "CS"
+      Permata_Helen_MM_YYYY.pdf        → entity "Permata - Helen", info "Stmt"
+      Permata_Helen_ME_MM_YYYY.pdf     → entity "Permata - Helen ME", info "ME"
+      Permata_Gandrik_MM_YYYY.pdf      → entity "Permata - Gandrik", info "Stmt"
+      Permata_RDN_MM_YYYY.pdf          → entity "Permata - RDN", info "RDN"
+      Permata_Black_YYYYMMDD.pdf       → entity "Permata - Black", info "CC"
+      Permata_Infinite_YYYYMMDD.pdf    → entity "Permata - Infinite", info "CC"
+      Stockbit_SOA_YYYY_MM.pdf         → entity "Stockbit - SOA", info "SOA"
+      SOA_BNI_SEKURITAS_*_MonYYYY.pdf  → entity "BNI Sekuritas - SOA", info "SOA"
+      BCA_5500346622_MM_YYYY.pdf       → entity "BCA - 5500346622", info "Stmt"
+    """
+    name = filename
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+
+    # ── Pattern: SOA_BNI_SEKURITAS_{id}_{Mon}{YYYY}.pdf ──
+    m = _re.match(r"SOA_BNI_SEKURITAS_\w+_(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(\d{4})", stem, _re.I)
+    if m:
+        month_map = {"jan":"01","feb":"02","mar":"03","apr":"04","may":"05","jun":"06",
+                     "jul":"07","aug":"08","sep":"09","oct":"10","nov":"11","dec":"12"}
+        mon = month_map[m.group(1).lower()]
+        yr = m.group(2)
+        return {"entity_key": "bni-sekuritas-soa", "entity_label": "BNI Sekuritas - SOA",
+                "month_key": f"{yr}-{mon}", "info": "SOA"}
+
+    # ── Pattern: Bank_OwnerOrType_MM_YYYY.pdf (3 trailing numeric tokens) ──
+    m = _re.match(r"([A-Za-z]+)_([^_]+)_(\d{2})_(\d{4})$", stem)
+    if m:
+        bank = m.group(1)
+        subtype = m.group(2)
+        mm, yyyy = m.group(3), m.group(4)
+        if int(mm) <= 12 and 2020 <= int(yyyy) <= 2099:
+            type_labels = {"CC": "CC", "CS": "CS", "ME": "ME", "RDN": "RDN", "Black": "CC", "Infinite": "CC"}
+            info = type_labels.get(subtype, "Stmt")
+            display_label = subtype if subtype in type_labels else subtype
+            return {"entity_key": f"{bank.lower()}-{subtype.lower()}",
+                    "entity_label": f"{bank} - {display_label}", "month_key": f"{yyyy}-{mm}", "info": info}
+
+    # ── Pattern: Bank_Owner_Type_MM_YYYY.pdf (4 trailing tokens, e.g. Permata_Helen_ME) ──
+    m = _re.match(r"([A-Za-z]+)_([A-Za-z]+)_([A-Za-z]+)_(\d{2})_(\d{4})$", stem)
+    if m:
+        bank = m.group(1)
+        owner = m.group(2)
+        stype = m.group(3)
+        mm, yyyy = m.group(4), m.group(5)
+        if int(mm) <= 12 and 2020 <= int(yyyy) <= 2099:
+            type_labels = {"ME": "ME", "CC": "CC", "CS": "CS", "RDN": "RDN"}
+            info = type_labels.get(stype, stype)
+            return {"entity_key": f"{bank.lower()}-{owner.lower()}-{stype.lower()}",
+                    "entity_label": f"{bank} - {owner} {stype}", "month_key": f"{yyyy}-{mm}", "info": info}
+
+    # ── Pattern: Bank_Type_YYYYMMDD.pdf (date at end, no underscores in date) ──
+    m = _re.match(r"([A-Za-z]+)_([A-Za-z]+)_(\d{8})$", stem)
+    if m:
+        bank = m.group(1)
+        stype = m.group(2)
+        ds = m.group(3)
+        yr, mo = ds[:4], ds[4:6]
+        if int(mo) <= 12 and 2020 <= int(yr) <= 2099:
+            _cc_types = {"Black", "Infinite", "Platinum", "Gold"}
+            info = "CC" if stype in _cc_types else stype.upper()
+            return {"entity_key": f"{bank.lower()}-{stype.lower()}",
+                    "entity_label": f"{bank} - {stype}", "month_key": f"{yr}-{mo}", "info": info}
+
+    # ── Pattern: BankTypeYYYYMMDD.pdf (no underscores, fused) ──
+    m = _re.match(r"([A-Za-z]+?)([A-Z]{2})(\d{8})$", stem)
+    if m:
+        bank = m.group(1)
+        stype = m.group(2)
+        ds = m.group(3)
+        yr, mo = ds[:4], ds[4:6]
+        if int(mo) <= 12 and 2020 <= int(yr) <= 2099:
+            return {"entity_key": f"{bank.lower()}-{stype.lower()}",
+                    "entity_label": f"{bank} - {stype}", "month_key": f"{yr}-{mo}", "info": stype.upper()}
+
+    # ── Pattern: Name_Type_YYYY-MM-DD.pdf ──
+    m = _re.match(r"([A-Za-z]+)_([A-Za-z_]+)_(\d{4})-(\d{2})-(\d{2})$", stem)
+    if m:
+        bank = m.group(1)
+        stype = m.group(2).replace("_", " ").title()
+        yr, mo = m.group(3), m.group(4)
+        return {"entity_key": f"{bank.lower()}-{m.group(2).lower()}",
+                "entity_label": f"{bank} - {stype}", "month_key": f"{yr}-{mo}", "info": stype}
+
+    # ── Pattern: Name_Type_YYYY_MM.pdf ──
+    m = _re.match(r"([A-Za-z]+)_([A-Za-z]+)_(\d{4})_(\d{2})$", stem)
+    if m:
+        bank = m.group(1)
+        stype = m.group(2)
+        yr, mo = m.group(3), m.group(4)
+        if int(mo) <= 12 and 2020 <= int(yr) <= 2099:
+            return {"entity_key": f"{bank.lower()}-{stype.lower()}",
+                    "entity_label": f"{bank} - {stype}", "month_key": f"{yr}-{mo}", "info": stype.upper()}
+
+    return None
+
+
+@app.get("/api/audit/completeness")
+async def audit_completeness(
+    start_month: str = "", end_month: str = "", _auth=Depends(require_api_key)
+):
+    """
+    Document Completeness Audit.
+
+    Scans pdf_inbox + pdf_unlocked for PDF filenames, parses entity + month
+    from each filename, and returns a grid: rows=entities, columns=months,
+    cells=list of matching files with info labels.
+
+    Query params:
+      start_month  — YYYY-MM (defaults to 3 months before end_month)
+      end_month    — YYYY-MM (defaults to current month)
+
+    Returns:
+      {
+        "months": ["2026-01", "2026-02", "2026-03"],
+        "month_labels": ["Jan 2026", "Feb 2026", "Mar 2026"],
+        "entities": [
+          {
+            "key": "bca-2171138631",
+            "label": "BCA - 2171138631",
+            "months": {
+              "2026-01": [{"filename": "...", "info": "Stmt", "folder": "pdf_inbox"}],
+              "2026-02": null,
+              "2026-03": [{"filename": "...", "info": "Stmt", "folder": "pdf_inbox"}]
+            }
+          },
+          ...
+        ]
+      }
+    """
+    from datetime import date as _date
+
+    today = _date.today()
+    # Determine end_month
+    if end_month and len(end_month) == 7:
+        ey, em = int(end_month[:4]), int(end_month[5:7])
+    else:
+        ey, em = today.year, today.month
+
+    # Determine start_month — default to 3 months back from end_month
+    if start_month and len(start_month) == 7:
+        sy, sm = int(start_month[:4]), int(start_month[5:7])
+    else:
+        # 3 months including end_month → go back 2 more
+        sm_val = em - 2
+        sy = ey
+        if sm_val <= 0:
+            sm_val += 12
+            sy -= 1
+        sy, sm = sy, sm_val
+
+    # Build month list
+    months = []
+    cursor_y, cursor_m = sy, sm
+    while (cursor_y, cursor_m) <= (ey, em):
+        months.append(f"{cursor_y}-{str(cursor_m).zfill(2)}")
+        cursor_m += 1
+        if cursor_m > 12:
+            cursor_m = 1
+            cursor_y += 1
+
+    if len(months) > 3:
+        months = months[-3:]
+
+    _MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    month_labels = [f"{_MONTH_NAMES[int(m[5:7])-1]} {m[:4]}" for m in months]
+
+    # Scan all PDFs
+    all_files = []
+    for folder, dir_path in _PDF_FOLDERS.items():
+        if not dir_path.is_dir():
+            continue
+        for f in dir_path.rglob("*"):
+            if f.is_file() and f.suffix.lower() == ".pdf":
+                all_files.append({"filename": f.name, "folder": folder})
+
+    # Parse and group
+    entity_map: dict[str, dict] = {}  # key → {label, months: {month_key: [files]}}
+    for f in all_files:
+        parsed = _parse_pdf_entity(f["filename"])
+        if not parsed:
+            continue
+        ek = parsed["entity_key"]
+        mk = parsed["month_key"]
+        if mk not in months:
+            continue
+        if ek not in entity_map:
+            entity_map[ek] = {"label": parsed["entity_label"], "months": {}}
+        entity_map[ek]["months"].setdefault(mk, []).append({
+            "filename": f["filename"],
+            "info": parsed["info"],
+            "folder": f["folder"],
+        })
+
+    # Sort entities alphabetically by label
+    entities = []
+    for ek in sorted(entity_map, key=lambda k: entity_map[k]["label"]):
+        ent = entity_map[ek]
+        month_data = {}
+        for m in months:
+            files = ent["months"].get(m)
+            month_data[m] = files if files else None
+        entities.append({"key": ek, "label": ent["label"], "months": month_data})
+
+    return {"months": months, "month_labels": month_labels, "entities": entities}
+
+
 # ── AI AMA — natural-language transaction filter ──────────────────────────────
 
 _AI_QUERY_SYSTEM = """You are a transaction filter assistant for a personal finance app. Given a natural language query, return ONLY a JSON object.

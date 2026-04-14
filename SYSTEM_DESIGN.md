@@ -3270,6 +3270,7 @@ Port `8090` (from `[fastapi]` in `settings.toml`). All read endpoints query SQLi
 | `POST` | `/api/pipeline/run` | — | Proxy to bridge manual pipeline trigger |
 | `GET` | `/api/pipeline/status` | — | Proxy to bridge pipeline status |
 | `POST` | `/api/ai/query` | — | Body: `{ query }` → Ollama JSON-mode → returns filter object `{ year?, month?, owner?, category?, q?, sort?, limit?, income_only?, expense_only? }`; client applies filters + sorting |
+| `GET` | `/api/audit/completeness` | `start_month`, `end_month` (YYYY-MM) | Document completeness audit: scans `pdf_inbox` + `pdf_unlocked`, parses filenames into entity+month, returns a grid of entities × months showing which PDFs are present or missing. Defaults to 3 months ending at current month. |
 
 Additional operational endpoints are also live for PDF processing (`/api/pdf/*`) and wealth management (`/api/wealth/*`), covered later in this document.
 
@@ -3318,6 +3319,7 @@ AI narrative (via Ollama `gemma4:e4b`) runs after the deterministic summary and 
 | `/category-drilldown` | Category Drilldown | Category → transactions with inline edit flow |
 | `/wealth` | Wealth | Net worth dashboard, MoM movement, AI explanation panel, trend chart, snapshot refresh |
 | `/holdings` | Holdings / Assets | Holdings manager, month navigation, group tabs, edit/delete flows, snapshot generation |
+| `/audit` | Completeness Audit | Side-by-side comparison of PDF document coverage across the last 3 months; rows = entities (bank + account/type), columns = months; ✅ for present, ❌ Missing when a gap is detected in an entity seen in other months, — for not-yet-active entities |
 
 **Navigation and layout:** the PWA now has both a mobile shell and a desktop shell. Mobile keeps the dark navy top bar plus a bottom nav exposing Dashboard, Flows, Wealth, Assets, Transactions, Review, and More. Desktop switches to a sidebar layout with wider content areas, the same primary destinations, desktop transaction/review workspaces, and a manual `Desktop View` toggle persisted in local storage.
 
@@ -3779,6 +3781,51 @@ All endpoints are under `/api/wealth/` and follow Stage 2 conventions (JSON, SQL
 - **Scope** — `/holdings` is asset-only. Liabilities remain part of the wealth summary and net-worth calculations, but are no longer listed or edited in the asset manager UI.
 - **Desktop polish** — denser rows, wider modal sheet, and better use of horizontal space inside the desktop shell
 
+### `AuditCompleteness.vue` — Document Completeness Audit (`/audit`)
+
+A side-by-side grid comparing PDF document coverage across the last 3 months (aligned with the Settings dashboard range).
+
+**Backend:** `GET /api/audit/completeness?start_month=&end_month=` scans `pdf_inbox` and `pdf_unlocked`, parses every PDF filename using `_parse_pdf_entity()`, and returns:
+```json
+{
+  "months": ["2026-01", "2026-02", "2026-03"],
+  "month_labels": ["Jan 2026", "Feb 2026", "Mar 2026"],
+  "entities": [
+    {
+      "key": "bca-2171138631",
+      "label": "BCA - 2171138631",
+      "months": {
+        "2026-01": [{"filename": "BCA_2171138631_01_2026.pdf", "info": "Stmt", "folder": "pdf_inbox"}],
+        "2026-02": [...],
+        "2026-03": null
+      }
+    }
+  ]
+}
+```
+
+**Filename parser** (`_parse_pdf_entity` in `finance/api.py`) recognizes these patterns:
+
+| Pattern | Example | Entity | Info |
+|---|---|---|---|
+| `Bank_Account_MM_YYYY.pdf` | `BCA_2171138631_01_2026.pdf` | BCA - 2171138631 | Stmt |
+| `Bank_Type_YYYYMMDD.pdf` | `BCA_CC_20260103.pdf` | BCA - CC | CC |
+| `BankTypeYYYYMMDD.pdf` | `CIMBNiagaCC20260119.pdf` | CIMBNiaga - CC | CC |
+| `Name_Type_YYYY-MM-DD.pdf` | `IPOT_PORTFOLIO_2026-01-31.pdf` | IPOT - Portfolio | Portfolio |
+| `Bank_Owner_MM_YYYY.pdf` | `Permata_Helen_01_2026.pdf` | Permata - Helen | Stmt |
+| `Bank_Owner_Type_MM_YYYY.pdf` | `Permata_Helen_ME_01_2026.pdf` | Permata - Helen ME | ME |
+| `SOA_BNI_SEKURITAS_*_MonYYYY.pdf` | `SOA_BNI_SEKURITAS_23ON83941_Jan2026.pdf` | BNI Sekuritas - SOA | SOA |
+| `Name_Type_YYYY_MM.pdf` | `Stockbit_SOA_2026_01.pdf` | Stockbit - SOA | SOA |
+
+**Cell status logic:**
+- **✅ Present** — one or more files exist for this entity/month; shows info label (Stmt, CC, CS, etc.)
+- **❌ Missing** — entity appeared in at least one other month but is absent here (likely a missed download)
+- **—** — entity has not appeared in any month in the window (not-yet-active; no alert needed)
+
+**Summary bar** shows total found / missing / total cells at the top.
+
+**Desktop:** accessible via the sidebar `📋 Audit` link. **Mobile:** accessible via the `More → Settings` navigation (the `/audit` route works in the URL bar on any device).
+
 ### Navigation
 
 Mobile bottom nav uses the current primary navigation:
@@ -3793,7 +3840,7 @@ Mobile bottom nav uses the current primary navigation:
 | Review | 🔎 | `/review` |
 | More | ⚙︎ | `/settings` |
 
-Desktop layout replaces the bottom nav with a persistent sidebar. The app can switch automatically at desktop widths or be forced with the manual `Desktop View` toggle in the header; the sidebar includes an `Auto Layout` button to return to responsive mode.
+Desktop layout replaces the bottom nav with a persistent sidebar (Dashboard · Flows · Wealth · Assets · Transactions · Review · Foreign Spend · **Audit** · Settings). The app can switch automatically at desktop widths or be forced with the manual `Desktop View` toggle in the header; the sidebar includes an `Auto Layout` button to return to responsive mode.
 
 ---
 
