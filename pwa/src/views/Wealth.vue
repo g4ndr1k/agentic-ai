@@ -843,10 +843,11 @@ onUnmounted(destroyChart)
   gap: 8px;
   margin-bottom: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(15,118,110,0.10);
+  border: 1px solid var(--border);
   border-radius: 14px;
   color: var(--text-muted);
   font-size: 13px;
+  background: var(--card);
 }
 .spinner-sm {
   width: 14px;
@@ -857,9 +858,9 @@ onUnmounted(destroyChart)
 .trend-explanation {
   margin-bottom: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(15,118,110,0.10);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(15,118,110,0.04), rgba(15,118,110,0.02));
+  background: var(--card);
 }
 .trend-explanation-topline {
   display: flex;
@@ -889,7 +890,7 @@ onUnmounted(destroyChart)
 .trend-explanation-headline {
   font-size: 13px;
   font-weight: 700;
-  color: #0a5e58;
+  color: var(--primary);
   margin-bottom: 6px;
 }
 .trend-explanation-summary {
@@ -916,7 +917,7 @@ onUnmounted(destroyChart)
 .trend-ai {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid rgba(15,118,110,0.08);
+  border-top: 1px solid var(--border);
 }
 .trend-ai-label {
   font-size: 11px;
@@ -934,8 +935,8 @@ onUnmounted(destroyChart)
 }
 .trend-suggestion-chip {
   border: 1px solid var(--border);
-  background: #fff;
-  color: #0a5e58;
+  background: transparent;
+  color: var(--text);
   border-radius: 999px;
   padding: 8px 12px;
   font-size: 12px;
@@ -961,15 +962,15 @@ onUnmounted(destroyChart)
   margin-top: 12px;
 }
 .trend-qa-item {
-  background: rgba(255,255,255,0.7);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
 }
 .trend-qa-question {
   font-size: 12px;
   font-weight: 700;
-  color: #0a5e58;
+  color: var(--primary);
   margin-bottom: 6px;
 }
 .trend-qa-answer-title {

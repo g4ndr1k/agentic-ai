@@ -48,11 +48,11 @@ function cellStatus(entity, month, monthIdx) {
   return 'new'  // entity doesn't exist in any month — not missing, just not started yet
 }
 
-async function load() {
+async function load(forceFresh = true) {
   loading.value = true
   error.value = ''
   try {
-    data.value = await api.auditCompleteness(startMonth.value, endMonth.value)
+    data.value = await api.auditCompleteness(startMonth.value, endMonth.value, { forceFresh })
   } catch (e) {
     error.value = e.message || 'Failed to load audit data'
   } finally {
@@ -70,7 +70,7 @@ onMounted(() => { load() })
     <div class="audit-header">
       <div class="audit-title-row">
         <h1 class="audit-title">📋 Completeness Audit</h1>
-        <button class="btn btn-ghost btn-sm" :disabled="loading" @click="load">
+        <button class="btn btn-ghost btn-sm" :disabled="loading" @click="load(true)">
           {{ loading ? 'Loading…' : 'Refresh' }}
         </button>
       </div>

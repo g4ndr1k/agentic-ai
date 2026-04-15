@@ -33,6 +33,10 @@ const store = useFinanceStore()
         {{ store.reviewCount > 99 ? '99+' : store.reviewCount }}
       </span>
     </RouterLink>
+    <RouterLink to="/adjustment" class="nav-item">
+      <span class="nav-icon">🔧</span>
+      <span class="nav-label">Adjust</span>
+    </RouterLink>
     <RouterLink to="/settings" class="nav-item">
       <span class="nav-icon">⚙︎</span>
       <span class="nav-label">More</span>

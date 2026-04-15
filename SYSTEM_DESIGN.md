@@ -1,6 +1,6 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.10.4 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
+**Version:** 3.12.0 · Stage 1 complete · Stage 2 fully built · Stage 3 fully built ✅
 **Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
 **Last validated against:** checked-in codebase 2026-04-15
 
@@ -204,7 +204,7 @@ The system alerts on:
   - `finance/setup_sheets.py` — one-time Sheet initializer: creates tabs, writes formatted headers, seeds 22 default categories and 18 currency codes
   - `finance/db.py` — SQLite schema (5 tables + 6 indexes), WAL mode with `busy_timeout=5000`, `open_db()` connection helper, schema version tracking, 90-day sync_log retention; `merchant_aliases` table includes `owner_filter`/`account_filter` with UNIQUE constraint
   - `finance/sync.py` — Sheets → SQLite sync engine: atomic DELETE + INSERT per table, hash deduplication, auto-rehash with account field (writes updated hashes back to Sheets), connection leak-safe (try/finally), sync_log, `--status` CLI flag; reads Merchant Aliases columns A:G (including `owner_filter`/`account_filter`)
-  - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, pipeline proxy endpoints, wealth APIs, CORS (hardened with explicit methods/headers), in-memory rate limiting (60 req/min per endpoint), sanitized error messages, SQLite `_db()` context manager; `/api/backfill-aliases` now uses the same normalized/token-aware alias matching as `finance.categorizer`; also mounts `pwa/dist/` at `/` when present
+  - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, pipeline proxy endpoints, wealth APIs, CORS (hardened with explicit methods/headers), in-memory rate limiting (60 req/min per endpoint), sanitized error messages, SQLite `_db()` context manager; `/api/backfill-aliases` now uses the same normalized/token-aware alias matching as `finance.categorizer`; also mounts `pwa/dist/` at `/` when present; `GET /api/audit/completeness?start_month=YYYY-MM&end_month=YYYY-MM` — scans `pdf_inbox` + `pdf_unlocked` recursively, parses filenames via `_parse_pdf_entity()` (7 regex patterns covering BCA/CIMB/IPOT/Maybank/Permata/Stockbit/BNI Sekuritas naming conventions), and returns a `{months, month_labels, entities}` grid; BNI Sekuritas matched by `SOA_BNI_SEKURITAS_\w+_{Mon}{YYYY}` pattern → `entity_key="bni-sekuritas-soa"`, `info="SOA"`; this endpoint is excluded from the Workbox SW cache so it always hits the network
   - `finance/server.py` — uvicorn entry point: `python3 -m finance.server`; `--host`, `--port`, `--reload` overrides
   - `finance/Dockerfile` — `python:3.12-slim` image; installs google-auth, fastapi, uvicorn[standard], rapidfuzz, openpyxl; copies `pwa/dist/` for production static serving
   - `finance/requirements.txt` — Python dependencies: `google-auth`, `google-auth-oauthlib`, `google-api-python-client`, `rapidfuzz`, `fastapi`, `uvicorn[standard]`
@@ -215,12 +215,16 @@ The system alerts on:
   - `pwa/src/views/Transactions.vue` — year/month/owner/category/search filters, paginated list (50/page), mobile expandable detail rows, desktop sortable table + detail panel; AI AMA input box (natural-language query → `POST /api/ai/query` → applies filters client-side); AI mode active banner with clear button; standard filter bars muted while AI mode active
   - `pwa/src/views/ReviewQueue.vue` — inline alias form on mobile; desktop two-pane review workspace; toast feedback; review queue fetches bypass the 24-hour GET cache so desktop badge counts and queue contents stay consistent
   - `pwa/src/views/ForeignSpend.vue` — foreign transactions grouped by currency, per-currency subtotals, flag emojis
+  - `pwa/src/views/Adjustment.vue` — focused adjustment view (`/adjustment`): quick inline editing of market value, appraisal/statement date, and unrealized P&L for Real Estate and Jamsostek/Retirement holdings only; month picker reuses the same `wealthSnapshotDates` + `collapseMonthDates` pattern as Holdings; post-save `getHoldings` uses `forceFresh: true` to bypass the 24 h IndexedDB cache so the updated value is immediately visible; `unrealised_pnl_idr` is preserved from the holding (not recalculated from cost basis) and exposed as an editable field to allow correction of previously stored values
+  - `pwa/src/views/Audit.vue` — tabbed Audit section (`/audit`): **Call Over** tab (default) — side-by-side two-month asset comparison with variance; **PDF Completeness** tab — document completeness audit grid embedded via `AuditCompleteness.vue`; Call Over resolves the two latest months within `dashboardStartMonth`–`dashboardEndMonth`, fetches balances + holdings for both, deduplicates by month-key, and renders a grouped table (Cash & Liquid, Investments, Real Estate, Physical Assets) with per-row ▲/▼ variance, group subtotals, and grand total; assets present in one month but not the other show "—"; all rows sorted by biggest movers first; theme-aware styles with desktop dark-mode overrides
+  - `pwa/src/views/AuditCompleteness.vue` — document completeness audit grid (now embedded as a child tab inside Audit.vue): rows=bank entities, columns=last 3 months, cells=PDF filenames or ❌ Missing; "missing" is flagged only when an entity has files in other months but not this one (new entities with no files in any month show "—"); powered by `GET /api/audit/completeness`; Refresh button and `onMounted` both bypass the IndexedDB cache (`forceFresh: true`) so the view always reflects the current filesystem state
   - `pwa/src/views/Settings.vue` — Sync + Import actions, pipeline run/status card, API health status card, grouped PDF workspace, hash-retained PDF processing state, recursive subfolder support, persisted dashboard month-range controls, and a manual “Refresh Mobile Data Now” action for the iPhone PWA cache
   - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual desktop override for wide-screen use
   - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace; mobile offline state is indicated by the header status dot turning red instead of showing a blocking banner
   - `pwa/src/composables/useOfflineSync.js` — connectivity detection via periodic heartbeat (`GET /ping`, 30 s interval, 5 s `AbortController` timeout); catches `TypeError` (ERR_CONNECTION_REFUSED) and `AbortError` (ETIMEDOUT); probes immediately on mount and on tab foreground; browser `offline` event triggers immediate offline transition; `online` event triggers a probe rather than blindly trusting the OS signal; on recovery drains IndexedDB sync queue then calls the `onReconnect` callback
   - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation, and optional `forceFresh` bootstrap/resource loading for desktop and explicit refresh paths
   - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints; successful GETs are persisted to IndexedDB, reused for up to 24 hours by default on the iPhone PWA, and offline GETs fall back to cached responses; mutation endpoints queue offline writes; selected calls can pass `forceFresh: true` to bypass cached GET data; `console.warn` when API key is not configured
+  - `pwa/src/sw.js` — workbox service worker: static assets (`StaleWhileRevalidate`, 7-day expiry); `/api/wealth/*` GETs use `NetworkFirst` (8 s timeout, 10-min cache) so POST mutations are immediately reflected in subsequent GETs; all other `/api/*` GETs use `StaleWhileRevalidate` (10-min expiry); audit and workspace endpoints (`/api/audit/`, `/api/pdf/local-workspace`) are excluded from SW caching so they always hit the network; mutation endpoints (`/sync`, `/import`, `/alias`, `/api/ai/*`) use `NetworkFirst` with 10 s timeout; `skipWaiting` + `clientsClaim` so new deployments take over all open tabs immediately
   - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (`injectManifest`) + `/api` proxy to `:8090`
   - Build output: `pwa/dist/` — 391 KB JS (132 KB gzipped), service worker + workbox generated
 - Stage 3 Wealth Management backend (`finance/`) — see §34–40
@@ -233,8 +237,10 @@ The system alerts on:
   - `pwa/src/views/Wealth.vue` — net worth dashboard: arrow month navigation, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, month-over-month movement card, AI explanation panel, Chart.js trend, "Refresh Snapshot" button, FAB to Assets
   - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 2-mode entry form (Balance / Holding), "Save Snapshot" button; ↺ inline refresh button in month-nav bar
   - `pwa/src/api/client.js` — extended with 13 new wealth API calls + `del()` helper
-  - `pwa/src/router/index.js` — root dashboard at `/`, restored Flows view at `/flows`, plus `/wealth` and `/holdings`
-  - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; desktop bootstrap forces fresh shared data while the iPhone PWA keeps the 24-hour cache policy; mobile bottom nav and desktop sidebar expose Dashboard, Flows, Wealth, Assets, Transactions, Review, and Settings/More
+  - `pwa/src/router/index.js` — root dashboard at `/`, restored Flows view at `/flows`, plus `/wealth`, `/holdings`, `/audit` (tabbed: Call Over + PDF Completeness), and `/adjustment` (keepAlive)
+  - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; desktop bootstrap forces fresh shared data while the iPhone PWA keeps the 24-hour cache policy; mobile bottom nav and desktop sidebar expose Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, and Settings/More
+  - `pwa/src/components/BottomNav.vue` — mobile bottom nav: Dashboard, Flows, Wealth, Assets, Txns, Review, Adjust, More
+  - `pwa/src/components/DesktopSidebar.vue` — desktop sidebar: Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, Settings
 
 ### Present but NOT integrated
 
@@ -454,7 +460,7 @@ agentic-ai/
 │       ├── main.js
 │       ├── App.vue               # Shell switcher: mobile shell vs desktop shell
 │       ├── style.css             # CSS variables, cards, buttons, forms, toast, desktop shell rules
-│       ├── router/index.js       # 10 routes: /, /flows, /wealth, /holdings, /transactions, /review, /foreign, /settings, /group-drilldown, /category-drilldown
+│       ├── router/index.js       # 11 routes: /, /flows, /wealth, /holdings, /transactions, /review, /foreign, /settings, /audit, /group-drilldown, /category-drilldown
 │       ├── api/client.js         # fetch wrapper for all 25 /api/* endpoints + IndexedDB GET fallback + queued offline mutations
 │       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month (clamped to dashboardEndMonth), reviewCount, reactive dashboard month range
 │       ├── composables/
@@ -479,6 +485,8 @@ agentic-ai/
 │           ├── Transactions.vue      # Mobile expandable list + desktop table/detail workspace
 │           ├── ReviewQueue.vue       # Mobile inline form + desktop review workspace + toast
 │           ├── ForeignSpend.vue      # Grouped by currency, per-currency subtotals
+│           ├── Adjustment.vue        # Quick value + date + P&L edit for Real Estate and Jamsostek holdings
+│           ├── Audit.vue             # Tabbed audit: Call Over (2-month asset comparison w/ variance) + PDF Completeness
 │           └── Settings.vue          # Sync, Import, pipeline controls, health status, dashboard range selector, grouped PDF workspace
 ├── config/
 │   └── settings.toml             # All runtime configuration (Stage 1 + Stage 2 sections)
@@ -1999,3 +2007,296 @@ python3 scripts/batch_process.py --dry-run
 
 # Wipe all XLS output before processing
 python3 scripts/batch_process.py --clear-output
+
+---
+
+## 34. Stage 3 Overview & Goals
+
+Stage 3 extends the personal finance pipeline with a full **Wealth Management** layer — net worth tracking, investment holdings, liabilities, and snapshots — served through dedicated `/api/wealth/*` endpoints and a purpose-built PWA frontend.
+
+### Goals
+
+- Track total net worth over time with monthly snapshots
+- Manage all asset classes: cash, investments (stocks, mutual funds, bonds), real estate, physical assets (gold, vehicles), retirement funds
+- Track liabilities (credit card balances, loans)
+- Visualize asset allocation, month-over-month movement, and long-term trends
+- Provide a fast, mobile-first PWA that works offline
+
+### Scope
+
+All Stage 3 features are fully built and production-deployed. Backend runs in Docker alongside Stage 2. PWA is bundled and served from the same FastAPI origin.
+
+---
+
+## 35. Stage 3 Architecture
+
+```
+PWA (Vue 3 + Vite)
+  ↓  /api/wealth/*  (X-Api-Key header)
+FastAPI (finance/api.py)
+  ↓
+SQLite (data/finance.db) — WAL mode
+  Tables: account_balances, holdings, liabilities, net_worth_snapshots
+```
+
+### Key design decisions
+
+- **Carry-forward**: `CARRY_FORWARD_CLASSES = {retirement, real_estate, vehicle, gold, other}` — when a holding is upserted for month M, `_cascade_holding_update()` propagates the new value forward to all future months that currently hold the same identity (snapshot_date, asset_class, asset_name, owner, institution)
+- **Snapshot generation**: `POST /api/wealth/snapshot` aggregates all balances and holdings for a date into a single `net_worth_snapshots` row with 24 asset-class breakdown columns
+- **Two-layer caching in PWA**: `client.js` stores GET responses in IndexedDB (24 h TTL); service worker adds a `NetworkFirst` layer specifically for `/api/wealth/*` so POST mutations are immediately reflected in the next GET
+
+---
+
+## 36. Stage 3 Data Schemas
+
+### `account_balances`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `snapshot_date` | TEXT | `YYYY-MM-DD` end-of-month |
+| `account_name` | TEXT | |
+| `institution` | TEXT | |
+| `account_type` | TEXT | e.g. `savings`, `checking`, `rdn` |
+| `currency` | TEXT | |
+| `balance` | REAL | |
+| `balance_idr` | REAL | |
+| `owner` | TEXT | |
+| `notes` | TEXT | |
+| `updated_at` | TEXT | |
+
+UNIQUE: `(snapshot_date, account_name, institution, owner)`
+
+### `holdings`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `snapshot_date` | TEXT | |
+| `asset_class` | TEXT | `cash`, `stock`, `mutual_fund`, `bond`, `real_estate`, `gold`, `vehicle`, `retirement`, `other` |
+| `asset_name` | TEXT | |
+| `isin_or_code` | TEXT | |
+| `institution` | TEXT | |
+| `account` | TEXT | |
+| `owner` | TEXT | |
+| `currency` | TEXT | |
+| `quantity` | REAL | |
+| `unit_price` | REAL | |
+| `market_value` | REAL | In native currency |
+| `market_value_idr` | REAL | |
+| `cost_basis` | REAL | |
+| `cost_basis_idr` | REAL | |
+| `unrealised_pnl_idr` | REAL | Stored; not recomputed from cost_basis on every upsert |
+| `exchange_rate` | REAL | |
+| `maturity_date` | TEXT | Bonds |
+| `coupon_rate` | REAL | Bonds |
+| `last_appraised_date` | TEXT | Real estate and retirement — shown as "appraised YYYY-MM-DD" in Assets view |
+| `notes` | TEXT | |
+| `updated_at` | TEXT | |
+
+UNIQUE: `(snapshot_date, asset_class, asset_name, owner, institution)`
+
+### `liabilities`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `snapshot_date` | TEXT | |
+| `liability_name` | TEXT | |
+| `institution` | TEXT | |
+| `account` | TEXT | |
+| `owner` | TEXT | |
+| `currency` | TEXT | |
+| `outstanding_balance` | REAL | |
+| `outstanding_balance_idr` | REAL | |
+| `credit_limit` | REAL | |
+| `interest_rate` | REAL | |
+| `notes` | TEXT | |
+| `updated_at` | TEXT | |
+
+UNIQUE: `(snapshot_date, liability_name, institution, account, owner)`
+
+### `net_worth_snapshots`
+
+24-column breakdown including total_assets_idr, total_liabilities_idr, net_worth_idr, and per-asset-class subtotals. Generated by `POST /api/wealth/snapshot`.
+
+---
+
+## 37. Stage 3 API Endpoints
+
+All endpoints under `/api/wealth/`. All require `X-Api-Key` header.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/wealth/snapshot-dates` | List all months that have snapshot data |
+| GET | `/api/wealth/summary` | Net worth summary for a date |
+| GET | `/api/wealth/history` | Net worth time series |
+| POST | `/api/wealth/snapshot` | (Re)generate snapshot for a date |
+| GET | `/api/wealth/balances` | Account balances for a date |
+| POST | `/api/wealth/balances` | Upsert account balance |
+| DELETE | `/api/wealth/balances/{id}` | Delete balance |
+| GET | `/api/wealth/holdings` | Holdings for a date |
+| POST | `/api/wealth/holdings` | Upsert holding (triggers carry-forward) |
+| DELETE | `/api/wealth/holdings/{id}` | Delete holding |
+| GET | `/api/wealth/liabilities` | Liabilities for a date |
+| POST | `/api/wealth/liabilities` | Upsert liability |
+| DELETE | `/api/wealth/liabilities/{id}` | Delete liability |
+
+---
+
+## 38. Stage 3 PWA Views
+
+### `MainDashboard.vue` (`/`)
+
+Root landing page. Desktop-first premium layout with:
+- Total net worth hero + 30-day change
+- Chart.js asset-allocation doughnut
+- Chart.js assets-over-time bar chart
+- Chart.js cash-flow summary line chart
+- Compact KPI stack beside the allocation chart
+- Filtered by user-selected month range (hard floor: Jan 2026)
+
+### `Wealth.vue` (`/wealth`)
+
+Net worth dashboard with:
+- Arrow month navigation
+- Hero net-worth card with MoM change %
+- Asset-group breakdown bars with sub-category chips
+- Month-over-month movement card
+- AI explanation panel
+- Chart.js trend
+- "Refresh Snapshot" button
+- FAB → Assets
+
+### `Holdings.vue` (`/holdings`)
+
+Asset manager with:
+- Group filter tabs (All / Cash / Investments / Real Estate / Physical)
+- Snapshot date picker using `wealthSnapshotDates`
+- Per-item delete
+- FAB → bottom-sheet modal with 2-mode entry form (Balance / Holding)
+- "Save Snapshot" button
+- ↺ inline refresh button in month-nav bar
+- `appraised YYYY-MM-DD` chip displayed for real estate and retirement holdings
+
+### `Adjustment.vue` (`/adjustment`)
+
+Focused quick-edit view for the two asset classes that change irregularly and require manual re-entry each cycle:
+
+- **Real Estate** (`asset_class === 'real_estate'`): Grogol, Kemanggisan, etc.
+- **Jamsostek / Retirement** (`asset_class === 'retirement'`): BPJS Ketenagakerjaan balance
+
+Per-row inline form fields:
+- Market value (IDR)
+- Appraisal / statement date (defaults to today)
+- Unrealised P&L (editable — preserves stored value rather than recalculating from cost basis, preventing accidental overwrite when `cost_basis_idr = 0`)
+
+On **Save**:
+1. `api.upsertHolding(...)` — updates `market_value_idr`, `last_appraised_date`, `unrealised_pnl_idr`
+2. `api.createSnapshot({ snapshot_date })` — regenerates the net worth snapshot
+3. `loadItems({ fresh: true })` — reloads with `forceFresh: true` to bypass the 24 h IndexedDB cache
+4. Toast: `Saved ✓`
+
+The save correctly updates the "appraised YYYY-MM-DD" date displayed in the Assets view for real estate rows, and the balance + date shown for Jamsostek rows.
+
+**Caching note**: Two bypass layers ensure saves are immediately visible:
+- `forceFresh: true` → skips the 24 h IndexedDB cache in `client.js`
+- SW `NetworkFirst` on `/api/wealth/*` → ensures the fresh GET after save hits the network, not the SW cache
+
+### `Audit.vue` (`/audit`)
+
+Tabbed audit view:
+- **Call Over** tab (default): side-by-side two-month asset comparison with ▲/▼ variance per row, group subtotals, grand total; assets present in only one month show "—"; sorted by biggest movers
+- **PDF Completeness** tab: embeds `AuditCompleteness.vue`
+
+### `AuditCompleteness.vue`
+
+Document completeness grid: rows = bank entities, columns = last 3 months, cells = PDF filenames or ❌ Missing. New entities with no files in any month show "—". Always bypasses IndexedDB cache (`forceFresh: true`).
+
+---
+
+## 39. Stage 3 Monthly Workflow
+
+At the end of each month (or whenever new PDF statements arrive):
+
+### 1. Process incoming PDFs
+
+```bash
+# Drop PDFs into data/pdf_inbox/ (or use Settings → PDF Workspace in PWA)
+# The pipeline runs automatically on schedule, or trigger manually:
+TOKEN=$(cat secrets/bridge.token)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9100/pdf/pipeline/trigger
+```
+
+Brokerage PDFs (IPOT, BNI Sekuritas, Stockbit) auto-upsert holdings and account balances.
+
+### 2. Sync transactions to SQLite
+
+```bash
+python3 -m finance.sync
+# or use Settings → Sync in PWA
+```
+
+### 3. Review and categorize
+
+Open `/review` in PWA. Assign categories to unrecognized merchants. Apply aliases.
+
+### 4. Update manually-tracked holdings via Adjustment view
+
+Open `/adjustment` in PWA (🔧 Adjust in bottom nav / sidebar):
+
+1. Select the target month from the date picker
+2. **Real Estate section**: for each property (Grogol, Kemanggisan, etc.):
+   - Enter the current appraised market value (IDR)
+   - Set the appraisal date
+   - Verify or correct the unrealised P&L field
+   - Tap **Save** — the "appraised YYYY-MM-DD" chip in Assets view updates immediately
+3. **Jamsostek / Retirement section**: enter the latest BPJS Ketenagakerjaan balance from the periodic statement, set the statement date, save
+
+Each save regenerates the net worth snapshot for that month. Carry-forward propagates the new values to all future months automatically.
+
+### 5. Update other manual holdings (if needed)
+
+For holdings not covered by Adjustment (e.g. private bonds, vehicles), use the FAB modal in `/holdings`.
+
+### 6. Verify in Wealth view
+
+Open `/wealth` and step through recent months. Confirm net worth, asset breakdown, and MoM changes look correct.
+
+### 7. Call Over audit
+
+Open `/audit` → Call Over tab. Compare the two most recent months side by side. Investigate any unexpected variances.
+
+---
+
+## 40. Stage 3 Setup Checklist
+
+### Prerequisites
+
+- Stage 2 fully operational (sync running, SQLite DB populated)
+- Finance API running (`docker compose up -d finance-api`)
+
+### Initial data entry
+
+```bash
+# Seed gold holdings (Antam Logam Mulia — fetches historical XAU/IDR prices)
+python3 scripts/seed_gold_holdings.py
+
+# Generate first snapshot
+curl -X POST http://localhost:8090/api/wealth/snapshot \
+  -H "X-Api-Key: $FINANCE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"snapshot_date": "2026-01-31"}'
+```
+
+### Enter historical real estate and retirement values
+
+Use the Adjustment view (`/adjustment`) for each historical month, or enter directly via the Holdings modal in `/holdings`.
+
+### Verify snapshot chain
+
+Open `/wealth` and step through each month. Use the Refresh Snapshot button if any month looks wrong.
+
+### PDF completeness baseline
+
+Open `/audit` → PDF Completeness. Confirm all expected statements are present for the current month before closing the books.

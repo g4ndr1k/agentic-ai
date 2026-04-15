@@ -31,6 +31,7 @@ __pycache__/
 
 # Claude Code session data
 .claude/
+.qwen/
 
 # Docker override files with local secrets
 docker-compose.override.yml

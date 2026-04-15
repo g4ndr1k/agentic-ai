@@ -44,13 +44,30 @@ registerRoute(
   })
 )
 
+// Wealth endpoints mutate frequently — always fetch from network first so
+// a POST (upsert/snapshot) is immediately visible in the next GET.
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/api/wealth/'),
+  new NetworkFirst({
+    cacheName: 'api-cache-wealth',
+    networkTimeoutSeconds: 8,
+    plugins: [
+      new ExpirationPlugin({ maxEntries: 30, maxAgeSeconds: 10 * 60 }),
+      new CacheableResponsePlugin({ statuses: [0, 200] }),
+    ],
+  })
+)
+
 registerRoute(
   ({ url }) =>
     url.pathname.startsWith('/api/') &&
+    !url.pathname.startsWith('/api/wealth/') &&
     !url.pathname.endsWith('/sync') &&
     !url.pathname.endsWith('/import') &&
     !url.pathname.endsWith('/alias') &&
-    !url.pathname.startsWith('/api/ai/'),
+    !url.pathname.startsWith('/api/ai/') &&
+    !url.pathname.startsWith('/api/audit/') &&
+    !url.pathname.startsWith('/api/pdf/local-workspace'),
   new StaleWhileRevalidate({
     cacheName: 'api-cache',
     plugins: [
