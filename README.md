@@ -16,7 +16,7 @@ The system is built for a personal Apple-centric workflow:
 ## What it does
 
 - Reads Apple Mail and Messages data on macOS
-- Classifies financial emails with Ollama (local) and Anthropic (cloud fallback)
+- Classifies financial emails with Ollama (local)
 - Sends iMessage alerts through Messages.app
 - Parses password-protected bank and brokerage PDFs (BCA, CIMB, Maybank, Permata, BNI Sekuritas, Stockbit, IPOT)
 - Imports and categorizes transactions into Google Sheets with a 4-layer categorization engine
