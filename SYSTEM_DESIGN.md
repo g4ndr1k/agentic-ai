@@ -1,7 +1,7 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.13.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅
-**Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema)
+**Version:** 3.14.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅
+**Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema) · Synology DS920+ (AMD64 Docker)
 **Last validated against:** checked-in codebase 2026-04-16
 
 ---
@@ -56,6 +56,10 @@
 38. [Stage 3 PWA Views](#38-stage-3-pwa-views)
 39. [Stage 3 Monthly Workflow](#39-stage-3-monthly-workflow)
 40. [Stage 3 Setup Checklist](#40-stage-3-setup-checklist)
+
+### NAS — Read-Only Replica (live ✅)
+
+41. [NAS Read-Only Replica](#41-nas-read-only-replica)
 
 ---
 
@@ -135,7 +139,21 @@ The system alerts on:
 │  Messages.app  → ~/Library/Messages/chat.db     │
 │  Bank PDFs     → data/pdf_inbox/                │
 │  XLS output    → output/xls/                    │
-└─────────────────────────────────────────────────┘
+└──────────────────┬──────────────────────────────┘
+                   │ daily rsync + on-demand
+┌──────────────────┴──────────────────────────────┐
+│ Synology DS920+ · DSM (always-on)               │
+│                                                  │
+│  ┌────────────────────────────────────────────┐  │
+│  │ finance-api-nas (Docker · AMD64)           │  │
+│  │ · FINANCE_READ_ONLY=true                   │  │
+│  │ · finance_readonly.db at /volume1/finance/ │  │
+│  │ · PWA served at :8090                      │  │
+│  └────────────────────────────────────────────┘  │
+│                                                  │
+│  Mobile users bookmark http://nas:8090            │
+│  Blue read-only banner · write controls hidden   │
+└──────────────────────────────────────────────────┘
 ```
 
 ### Trust boundaries
@@ -239,6 +257,16 @@ The system alerts on:
   - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; desktop bootstrap forces fresh shared data while the iPhone/mobile PWA keeps the 24-hour cache policy; mobile bottom nav and desktop sidebar expose Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, and Settings/More
   - `pwa/src/components/BottomNav.vue` — mobile bottom nav: Dashboard, Flows, Wealth, Assets, Txns, Review, Adjust, More
   - `pwa/src/components/DesktopSidebar.vue` — desktop sidebar: Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, Settings
+- NAS Read-Only Replica (`docker-compose.nas.yml`, `finance/backup.py`, `finance/api.py`, `pwa/`) — see §41
+  - `FINANCE_READ_ONLY` env flag — when `true`, all write endpoints return 403; `GET /api/health` exposes `"read_only": true`
+  - `require_writable` dependency guarded on 15+ write routes (aliases, backfill, category edits, import, wealth CRUD, review-queue suggest, nas-sync)
+  - `finance/backup.py` — `sync_to_nas()` function: rsync latest backup to `NAS_SYNC_TARGET` via SSH (dedicated key pair at `secrets/nas_sync_key`), 24h throttle on auto-sync, state tracked in `data/.nas_sync_state.json`; auto-called after every `backup_db()` (post-import); `POST /api/nas-sync` endpoint for manual trigger (force bypasses throttle); `GET /api/nas-sync/status` returns last sync time
+  - `docker-compose.nas.yml` — NAS overlay: `FINANCE_READ_ONLY=true`, SQLite DB at `/volume1/finance/finance_readonly.db` (read-only mount), Ollama host cleared (not needed on NAS), no XLS/secrets volumes
+  - AMD64 Docker image built via `docker buildx build --platform linux/amd64` for Synology DS920+ Container Manager; loaded via `docker load`
+  - PWA read-only detection: `financeStore.isReadOnly` set from `/api/health` response; blue `ReadOnlyBanner.vue` component (fixed top, shows "Read-only · NAS replica · Updated Xh ago"); all write controls hidden via `v-if="!store.isReadOnly"` across ReviewQueue, Transactions, Adjustment, Holdings, Wealth, Settings
+  - Settings NAS Sync section: shows last sync time from `GET /api/nas-sync/status`; manual "Sync to NAS Now" button calls `POST /api/nas-sync` with spinner + toast; only visible when `!isReadOnly` and NAS configured
+  - Dedicated SSH key pair (`secrets/nas_sync_key` / `secrets/nas_sync_key.pub`) for rsync to NAS; `NAS_SYNC_TARGET` in `.env` pointing to `g4ndr1k@192.168.1.44:/volume1/finance/finance_readonly.db`
+  - Daily auto-sync triggers after every import (via `backup_db()`); manual sync available in Settings; mobile users bookmark `http://192.168.1.44:8090`
 
 ### Present but NOT integrated
 
@@ -516,11 +544,14 @@ agentic-ai/
 │   ├── bridge.token               # Bearer token for bridge API auth
 │   ├── banks.toml                # Bank PDF passwords
 │   ├── google_service_account.json # Stage 2 — service account key JSON (exported from Keychain)
-│   └── google_credentials.json   # Stage 2 fallback — OAuth 2.0 Desktop client JSON
-├── .env                          # Docker Compose env vars (gitignored; FINANCE_API_KEY etc.)
+│   ├── google_credentials.json   # Stage 2 fallback — OAuth 2.0 Desktop client JSON
+│   ├── nas_sync_key              # SSH private key for rsync to NAS
+│   └── nas_sync_key.pub          # SSH public key (authorized on NAS)
+├── .env                          # Docker Compose env vars (gitignored; FINANCE_API_KEY, NAS_SYNC_TARGET etc.)
 ├── app-bundle/
 │   └── AgenticAI.app/             # .app bundle for stable TCC identity (installed to /Applications)
-└── docker-compose.yml
+├── docker-compose.yml
+└── docker-compose.nas.yml        # NAS read-only overlay (Synology DS920+)
 ```
 
 ---
@@ -2611,3 +2642,103 @@ Open `/wealth` and step through each month. Use the Refresh Snapshot button if a
 ### PDF completeness baseline
 
 Open `/audit` → PDF Completeness. Confirm all expected statements are present for the current month before closing the books.
+
+---
+
+## 41. NAS Read-Only Replica
+
+### Overview
+
+The Mac (authoritative) periodically syncs `finance.db` to a Synology DS920+ NAS via rsync over SSH. The NAS runs the same `finance-api` Docker image with `FINANCE_READ_ONLY=true`, serving the PWA at `http://192.168.1.44:8090`. Mobile users bookmark the NAS URL for always-on read access — when the Mac sleeps, the PWA remains fully accessible.
+
+### Architecture
+
+```
+Mac (authoritative)                           Synology DS920+ (always-on)
+────────────────────                          ──────────────────────────
+data/finance.db  ──daily rsync + on-demand──▶  /volume1/finance/finance_readonly.db
+finance-api :8090  (read+write)                finance-api-nas :8090 (read-only)
+                                               FINANCE_READ_ONLY=true
+```
+
+- NAS runs the **same Docker image** built for `linux/amd64` — no separate codebase
+- PWA detects `read_only: true` in `/api/health` and adapts the UI automatically
+- Blue read-only banner replaces write controls across all views
+
+### Sync mechanism
+
+**Dedicated SSH key pair** at `secrets/nas_sync_key` / `secrets/nas_sync_key.pub` (not the user's personal key).
+
+`NAS_SYNC_TARGET` in `.env`:
+```
+NAS_SYNC_TARGET=g4ndr1k@192.168.1.44:/volume1/finance/finance_readonly.db
+```
+
+**Auto-sync:** After every `backup_db()` call (which runs post-import), `sync_to_nas()` rsyncs the latest backup file to the NAS. A 24-hour throttle prevents redundant syncs. State is tracked in `data/.nas_sync_state.json`.
+
+**Manual sync:** `POST /api/nas-sync` (force=True, bypasses throttle). Triggered from Settings → "Sync to NAS Now" button.
+
+**Status:** `GET /api/nas-sync/status` returns last sync time and whether NAS is configured.
+
+### Read-only mode
+
+When `FINANCE_READ_ONLY=true`:
+- `GET /api/health` returns `"read_only": true` (PWA reads this on startup)
+- All write endpoints return HTTP 403 via `require_writable` dependency
+- Affected routes: alias, backfill-aliases, transaction category patch, import, all wealth CRUD, review-queue suggest, nas-sync
+- All GET/read endpoints work normally
+
+### PWA adaptation
+
+- `financeStore.isReadOnly` — set from health response
+- `ReadOnlyBanner.vue` — blue fixed-position top banner: "Read-only · NAS replica · Updated Xh ago"
+- `v-if="!store.isReadOnly"` hides write controls in: ReviewQueue (Confirm/Save), Transactions (category edit), Adjustment (all inputs), Holdings (Add/Edit/Delete), Wealth (mutation controls), Settings (Import, Pipeline, PDF sections)
+- Settings NAS Sync section only visible on the Mac instance (when `!isReadOnly`)
+
+### NAS deployment
+
+```bash
+# Build AMD64 image on Mac (for Synology's x86_64 CPU)
+docker buildx build --platform linux/amd64 -t finance-api-nas -f finance/Dockerfile .
+
+# Save and transfer
+docker save finance-api-nas | gzip > /tmp/finance-api-nas.tar.gz
+scp /tmp/finance-api-nas.tar.gz g4ndr1k@192.168.1.44:/tmp/
+
+# On NAS (via SSH)
+ssh g4ndr1k@192.168.1.44
+docker load < /tmp/finance-api-nas.tar.gz
+```
+
+NAS container configuration (via Container Manager or CLI):
+```bash
+docker run -d \
+  --name finance-api-nas \
+  --restart unless-stopped \
+  -p 8090:8090 \
+  -e FINANCE_READ_ONLY=true \
+  -e FINANCE_SQLITE_DB=/app/data/finance_readonly.db \
+  -e FINANCE_API_KEY=<same-key-as-mac> \
+  -e OLLAMA_FINANCE_HOST="" \
+  -v /volume1/finance:/app/data:ro \
+  finance-api-nas
+```
+
+### One-time NAS setup
+
+1. Install Container Manager from Synology Package Center
+2. Create shared folder `finance` at `/volume1/finance`
+3. Copy initial `finance_readonly.db` to `/volume1/finance/`
+4. Add `nas_sync_key.pub` to NAS `~/.ssh/authorized_keys`
+5. Build + load AMD64 image (see above)
+6. Start container with env vars above
+7. Set `NAS_SYNC_TARGET` in Mac's `.env`
+8. Run first sync: Settings → "Sync to NAS Now" (or `curl -X POST .../api/nas-sync`)
+
+### Verification
+
+1. **NAS reachable**: `curl -s http://192.168.1.44:8090/api/health` → `{"status":"ok","read_only":true}`
+2. **Write blocked**: `curl -X POST http://192.168.1.44:8090/api/alias -H 'X-Api-Key: ...'` → 403
+3. **Data present**: `curl -s http://192.168.1.44:8090/api/transactions?limit=1` → returns transaction data
+4. **PWA loads**: Open `http://192.168.1.44:8090` on iPhone — blue banner visible, write buttons hidden
+5. **Sync works**: Trigger manual sync from Mac Settings → verify `finance_readonly.db` timestamp updated on NAS
