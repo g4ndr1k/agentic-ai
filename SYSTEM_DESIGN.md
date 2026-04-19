@@ -1,7 +1,7 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
 **Version:** 3.16.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅
-**Platform:** Apple Silicon Mac · macOS (Tahoe-era Mail schema) · Synology DS920+ (AMD64 Docker)
+**Platform:** Apple Silicon Mac · macOS · Synology DS920+ (AMD64 Docker)
 **Last validated against:** checked-in codebase 2026-04-17
 
 ---
@@ -119,7 +119,7 @@ The system alerts on:
 │                                                 │
 │  ┌───────────────────────────────────────────┐  │
 │  │ Bridge (host Python · 127.0.0.1:9100)     │  │
-│  │ · Reads Mail.app SQLite DB                │  │
+│  │ · Polls Gmail via IMAP (app passwords)    │  │
 │  │ · Reads Messages.app SQLite DB            │  │
 │  │ · Sends iMessage via AppleScript          │  │
 │  │ · HTTP API with bearer auth               │  │
@@ -136,7 +136,7 @@ The system alerts on:
 │  │ · Handles iMessage commands               │  │
 │  └───────────────────────────────────────────┘  │
 │                                                 │
-│  Mail.app syncs → ~/Library/Mail/V*/…/          │
+│  Gmail IMAP    → imap.gmail.com:993              │
 │  Messages.app  → ~/Library/Messages/chat.db     │
 │  Bank PDFs     → data/pdf_inbox/                │
 │  XLS output    → output/xls/                    │
@@ -175,12 +175,12 @@ The system alerts on:
 
 - Host bridge service (Python, HTTP)
 - Dockerized agent service (Python, Docker Compose)
-- Mail.app SQLite polling with schema validation
+- Gmail IMAP polling via app passwords (`bridge/gmail_source.py`) — no Full Disk Access required
 - Messages.app SQLite command polling
 - iMessage sending via AppleScript (with injection-safe argument passing)
 - Ollama local LLM classification (cloud fallbacks removed)
 - macOS Keychain secret management (`bridge/secret_manager.py`) — single source of truth for all secrets
-- `.app` bundle TCC identity (`/Applications/AgenticAI.app`) — stable Full Disk Access across Homebrew upgrades
+- `.app` bundle TCC identity (`/Applications/AgenticAI.app`) — stable Full Disk Access for Messages.app across Homebrew upgrades
 - Docker secret export bridge (`scripts/export-secrets-for-docker.py`) — populates `secrets/` for containers
 - Apple Mail category prefilter (skips promotions)
 - Message-ID deduplication
@@ -190,7 +190,7 @@ The system alerts on:
 - Rotating bridge log file
 - Bearer token auth on all bridge endpoints except `/healthz`
 - ACK-token checkpoint system (mail + commands)
-- LaunchAgent plists for Ollama, bridge, Mail.app, Docker agent
+- LaunchAgent plists for Ollama, bridge, Docker agent
 - PDF statement processor (see §19)
   - Password-protected PDF unlock (pikepdf + AppleScript fallback)
   - Maybank Credit Card statement parser
@@ -209,7 +209,7 @@ The system alerts on:
   - Auto-detection of bank/statement type from PDF content (bank-name-first detection strategy, 11 detectors in priority order)
   - 3-layer parsing: pdfplumber tables → Python regex → Ollama LLM fallback
   - Multi-owner XLS export: `{Bank}_{Owner}.xlsx` per bank/owner pair + flat `ALL_TRANSACTIONS.xlsx` with Owner column
-  - Mail.app attachment auto-scanner for bank PDFs
+  - Mail.app attachment folder auto-scanner for bank PDFs (reads `~/Library/Mail/…/Attachments/`)
   - Auto-upsert pipeline in `bridge/pdf_handler.py` after every portfolio parse: savings/consol closing balance → `account_balances`; bond holdings → `holdings`; mutual-fund holdings → `holdings`; equity/fund holdings with month-end gap-fill → `holdings`; RDN cash balance → `account_balances`
   - Gap-fill logic — carries the most recent brokerage holdings forward month-by-month (INSERT OR IGNORE) until either the current month or the first month that already has data for that institution, preventing dashboard gaps between monthly PDFs
   - End-to-end bridge pipeline orchestrator (`bridge/pipeline.py`) with scheduled runs, manual trigger/status endpoints, import/backup chaining, month-complete notification tracking, and recursive scanning of nested folders inside `data/pdf_inbox/`
@@ -345,10 +345,24 @@ ollama pull gemma4:e4b
 ollama list                            # confirm model present
 ```
 
-### Mail.app
+### Gmail app passwords
 
-- Add at least one mail account and let it sync locally
-- Mail.app **must be running** for the database to stay current
+The bridge polls Gmail directly over IMAP using [app passwords](https://myaccount.google.com/apppasswords) — no Mail.app or Full Disk Access required.
+
+Create `secrets/gmail.toml` (not committed) with one entry per monitored Gmail account:
+
+```toml
+[[accounts]]
+email = "your@gmail.com"
+# Generate at https://myaccount.google.com/apppasswords
+# Value format: 16 characters, spaces are stripped at load time
+
+[[accounts]]
+email = "second@gmail.com"
+# Each account needs its own entry
+```
+
+Then fill in the actual app passwords for each account. The bridge verifies IMAP connectivity at startup; if login fails, mail features are disabled and the error is logged.
 
 ### Messages.app
 
@@ -357,51 +371,18 @@ ollama list                            # confirm model present
 
 ### macOS Full Disk Access
 
-The bridge process reads protected databases:
+FDA is required **only for Messages.app** (`~/Library/Messages/chat.db`) — no longer needed for mail.
 
-```
-~/Library/Mail/V*/MailData/Envelope Index
-~/Library/Messages/chat.db
-```
-
-When run via launchd, it does **not** inherit Terminal's TCC grants. You must grant FDA to the **actual Python binary** — macOS TCC does not follow symlinks.
-
-**Step 1 — Find the real binary path:**
-
-```bash
-realpath /opt/homebrew/bin/python3
-# Example: /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/bin/python3.14
-```
-
-**Step 2 — Install .app bundle for stable TCC identity** (recommended):
-
-The bridge now ships with an `.app` bundle wrapper. TCC Full Disk Access
-is granted to the bundle path (`/Applications/AgenticAI.app`), which stays
-stable across Homebrew Python upgrades. The bundle resolves the actual
-Python interpreter dynamically at launch time.
+When run via launchd, the bridge does **not** inherit Terminal's TCC grants. Grant FDA to the `.app` bundle:
 
 ```bash
 cd ~/agentic-ai
-./scripts/setup-app.sh     # installs bundle, registers LaunchAgent
+./scripts/setup-app.sh     # installs /Applications/AgenticAI.app, registers LaunchAgent
 ```
 
-Then grant FDA:
-1. Open **System Settings → Privacy & Security → Full Disk Access**
-2. Click **+** and add `/Applications/AgenticAI.app`
-3. Toggle **ON**
+Then: **System Settings → Privacy & Security → Full Disk Access → + → `/Applications/AgenticAI.app` → ON**
 
-> ⚠️ The old approach (granting FDA directly to the Python binary) breaks
-> on every `brew upgrade python@3.14` because the Cellar path changes.
-> The `.app` bundle approach eliminates this problem entirely.
-
-**Alternative — direct Python binary** (breaks on brew upgrade):
-
-1. Open **Finder** → **Cmd+Shift+G** → paste the directory from Step 1 (everything up to `/bin/`)
-2. Keep **System Settings → Privacy & Security → Full Disk Access** visible alongside Finder
-3. **Drag** `python3.14` from Finder directly into the FDA list
-4. Toggle **ON**
-
-> ⚠️ **After every `brew upgrade python@3.14`**, the Cellar path changes. Remove the old FDA entry, run `realpath /opt/homebrew/bin/python3` again, and re-add the new path.
+> ⚠️ Do not grant FDA to the raw Python binary — the Cellar path changes on every `brew upgrade python@3.14` and breaks the grant. The `.app` bundle path is stable.
 
 ---
 
@@ -429,21 +410,22 @@ agentic-ai/
 │           ├── openai_provider.py   # stub
 │           └── gemini_provider.py   # stub
 ├── bridge/
-│   ├── server.py                 # HTTP server + endpoint routing + input validation + Content-Type enforcement + preflight FDA check
+│   ├── server.py                 # HTTP server + endpoint routing + input validation + Content-Type enforcement
 │   ├── auth.py                   # Bearer token loader + timing-safe check (length equality + hmac.compare_digest; Keychain-first, warning on fallback)
 │   ├── secret_manager.py        # macOS Keychain CLI: init/get/set/delete/list + hex-decode + resolve_env_key
-│   ├── tcc_check.py              # Pre-flight FDA/automation permission probe
+│   ├── tcc_check.py              # Pre-flight FDA/automation permission probe (Messages.app only)
 │   ├── config.py                 # TOML loader + validation
 │   ├── state.py                  # SQLite state DB (bridge.db)
 │   ├── rate_limit.py             # Sliding-window rate limiter
-│   ├── mail_source.py            # Mail.app SQLite adapter
+│   ├── gmail_source.py           # Gmail IMAP adapter (app passwords · no FDA required)
+│   ├── mail_source.py            # Mail.app SQLite adapter (legacy · not used when source=gmail)
 │   ├── messages_source.py        # Messages.app SQLite adapter + AppleScript sender
 │   ├── pdf_handler.py            # PDF processor endpoints (/pdf/*); auto-upsert pipeline for holdings/balances
 │   ├── pipeline.py               # Scheduled/manual PDF→import→backup orchestrator
 │   ├── pdf_unlock.py             # pikepdf unlock + AppleScript fallback
 │   ├── fx_rate.py                # Historical FX rates via fawazahmed0/currency-api (free, no key)
 │   ├── gold_price.py             # IDR/gram gold price via XAU/IDR from fx_rate (historical-capable)
-│   ├── attachment_scanner.py     # Mail.app attachment watcher
+│   ├── attachment_scanner.py     # Mail.app attachment folder watcher (scans local ~/Library/Mail for bank PDFs)
 │   └── static/
 ├── parsers/                      # Bank statement parsers (host Python)
 │   ├── __init__.py
@@ -624,15 +606,19 @@ sleep 3
 ollama pull gemma4:e4b
 ```
 
-### Step 6 — Grant Full Disk Access to Python
+### Step 6 — Grant Full Disk Access (Messages.app only)
 
-See [§4 Prerequisites](#4-prerequisites). Do this before trying to start the bridge.
+See [§4 Prerequisites](#4-prerequisites). FDA is required for Messages.app (`chat.db`); mail now uses Gmail IMAP directly.
 
-### Step 7 — Verify Mail.app is running and syncing
+### Step 7 — Populate Gmail secrets
+
+Create `secrets/gmail.toml` with app passwords for each monitored Gmail account (see §4 Prerequisites).
+Verify IMAP connectivity:
 
 ```bash
-pgrep -l Mail    # should show the Mail process
-find ~/Library/Mail -path "*/MailData/Envelope Index" 2>/dev/null
+TOKEN=$(cat secrets/bridge.token)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:9100/health | python3 -m json.tool
+# → "mail_available": true
 ```
 
 ### Step 8 — Start the bridge manually (first test)
@@ -853,16 +839,15 @@ During normal operation, owner detection loads from SQLite first and only falls 
 ### Startup sequence
 
 1. Load settings, validate required sections
-2. Run pre-flight TCC check (`bridge/tcc_check.py`) — probe for Full Disk Access; fail fast if missing
-3. Load auth token (Keychain-first via `bridge/secret_manager.py`, fallback to file)
-4. Initialize `bridge.db` (checkpoints + request log tables)
-5. Initialize `pdf_jobs.db` (PDF processing job queue)
-6. Initialize `MailSource` — discover Mail DB, verify schema
-7. Initialize `MessagesSource` — open `chat.db`
-8. If `[pipeline].enabled = true`, arm the first scheduled pipeline cycle after `startup_delay_seconds`
-9. Start HTTP server on configured host:port
-
-**If Mail DB is inaccessible or schema validation fails, the bridge exits immediately.** Check `logs/bridge-launchd-err.log` for the error.
+2. Load auth token (Keychain-first via `bridge/secret_manager.py`, fallback to file)
+3. Initialize `bridge.db` (checkpoints + request log tables)
+4. Initialize `pdf_jobs.db` (PDF processing job queue)
+5. Initialize mail source:
+   - `source = "gmail"` → `GmailSource` — load `secrets/gmail.toml`, verify IMAP login; disabled if login fails
+   - `source = "mailapp"` → run TCC pre-flight (`tcc_check.py`), open Mail SQLite DB, validate schema; disabled if FDA missing or schema invalid
+6. Initialize `MessagesSource` — open `chat.db` (requires FDA)
+7. If `[pipeline].enabled = true`, arm the first scheduled pipeline cycle after `startup_delay_seconds`
+8. Start HTTP server on configured host:port
 
 ### Log locations
 
@@ -995,10 +980,7 @@ Messages.app dates use the **Apple epoch** (2001-01-01):
 datetime(2001, 1, 1) + timedelta(seconds=apple_time)
 ```
 
-Mail.app dates use the **Unix epoch** (1970-01-01):
-```python
-datetime.fromtimestamp(unix_ts)
-```
+Gmail IMAP dates are RFC 2822 strings parsed via `email.utils.parsedate_to_datetime()` and normalised to UTC ISO-8601 by `bridge/gmail_source.py`.
 
 Do not mix these up when debugging date issues.
 
@@ -1274,8 +1256,9 @@ Four macOS LaunchAgents ensure everything starts after a login:
 |---|---|---|
 | `com.agentic.ollama` | Ollama LLM server | `true` |
 | `com.agentic.bridge` | Bridge HTTP service | `true` |
-| `com.agentic.mailapp` | Mail.app | `false` (one-shot) |
 | `com.agentic.agent` | Docker agent container | `false` (one-shot) |
+
+> The `com.agentic.mailapp` LaunchAgent is no longer needed — mail is fetched directly from Gmail via IMAP. You can unload and remove it if present.
 
 The agent LaunchAgent runs `scripts/start_agent.sh` which waits up to 120 seconds for Docker Desktop to be ready, then calls `docker compose up -d`. The container's own `restart: unless-stopped` policy handles subsequent restarts.
 
@@ -1392,36 +1375,15 @@ Create `~/Library/LaunchAgents/com.agentic.ollama.plist`:
 
 ---
 
-### Mail.app LaunchAgent plist
+### Mail.app LaunchAgent plist (obsolete)
 
-Create `~/Library/LaunchAgents/com.agentic.mailapp.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.agentic.mailapp</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/open</string>
-        <string>-a</string>
-        <string>Mail</string>
-    </array>
-
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>KeepAlive</key>
-    <false/>
-</dict>
-</plist>
-```
-
-> `KeepAlive` is `false` — we only launch Mail.app once to keep the database current.
+> This LaunchAgent is no longer needed. Mail is fetched directly from Gmail via IMAP (`bridge/gmail_source.py`).
+> If you have `com.agentic.mailapp.plist` installed, unload and remove it:
+>
+> ```bash
+> launchctl unload ~/Library/LaunchAgents/com.agentic.mailapp.plist
+> rm ~/Library/LaunchAgents/com.agentic.mailapp.plist
+> ```
 
 ---
 
@@ -2215,15 +2177,22 @@ python3 -c "import tomllib; tomllib.load(open('config/settings.toml','rb'))"
 ### Mail not polling
 
 ```bash
-# Verify Mail.app is running
-pgrep -l Mail
+# Check bridge health — mail_available must be true
+TOKEN=$(cat secrets/bridge.token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9100/health | python3 -m json.tool
 
-# Verify DB path
-find ~/Library/Mail -path "*/MailData/Envelope Index" 2>/dev/null
+# Test Gmail IMAP directly
+TOKEN=$(cat secrets/bridge.token)
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:9100/mail/pending?limit=3" | python3 -m json.tool
 
-# Test from bridge directly
-curl -s -H "Authorization: Bearer $(cat secrets/bridge.token)" http://127.0.0.1:9100/mail/schema
+# Check bridge log for IMAP login errors
+tail -40 logs/bridge.log | grep -i "gmail\|imap\|mail"
+
+# Verify secrets file exists and is valid TOML
+python3 -c "import tomllib; print(tomllib.load(open('secrets/gmail.toml','rb')))"
 ```
+
+If `mail_available: false`, the Gmail IMAP login is failing. Re-check the app password in `secrets/gmail.toml` (spaces are stripped automatically) and confirm 2-Step Verification is enabled on the Google account.
 
 ### Finance API not responding
 
@@ -2292,8 +2261,7 @@ As of version 3.16.0 (2026-04-17):
 
 ```
 Bank emails arrive
-  → Mail.app syncs locally
-  → Bridge polls Envelope Index every 30 s
+  → Bridge polls Gmail IMAP directly (imap.gmail.com:993, app passwords)
   → Agent classifies via Ollama (gemma4:e4b)
   → Alert sent to iPhone via iMessage
 
@@ -2320,6 +2288,7 @@ Bank PDF arrives (email attachment or manual drop)
 - `CircuitBreaker` dicts bounded with LRU eviction (max 128 providers)
 - `hmac.compare_digest` now preceded by length equality check
 - `logging.getLogger` hoisted to module level in `mail_source.py`
+- Mail source migrated from Mail.app SQLite (FDA-dependent, fragile) to Gmail IMAP with app passwords — eliminates Full Disk Access as a mail dependency
 - PWA `visibilitychange` cache-clear on background
 - PWA `AbortController` cleanup for PDF processing loop on unmount
 - PWA `/:pathMatch(.*)*` catch-all route added

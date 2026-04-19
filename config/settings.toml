@@ -10,7 +10,8 @@ token_source = "keychain"            # "file" (default) or "keychain"
 keychain_service = "agentic-ai-bridge"
 
 [mail]
-source = "mailapp"
+source = "gmail"
+gmail_secrets_file = "/Users/g4ndr1k/agentic-ai/secrets/gmail.toml"
 max_batch = 25
 max_body_text_bytes = 200000
 initial_lookback_days = 15

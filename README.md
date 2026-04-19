@@ -10,7 +10,7 @@ A self-hosted, privacy-first system for email monitoring, iMessage alerts, bank 
 
 | Capability | How |
 |---|---|
-| Monitors Mail.app for financial emails | Reads Apple Mail's local SQLite DB every 60 m |
+| Monitors Gmail for financial emails | Direct IMAP polling via app passwords — no Mail.app or Full Disk Access required |
 | Classifies emails with a local LLM | Ollama + `gemma4:e4b` — no cloud API required |
 | Sends iMessage alerts to iPhone | Messages.app via AppleScript |
 | Parses password-protected bank PDFs | pdfplumber + pikepdf; 13 bank/statement parsers |
@@ -36,7 +36,8 @@ Tailscale VPN (private access only)
 
 Mac Mini (host)
   ├── Bridge  ·  Python  ·  127.0.0.1:9100
-  │     Reads Mail.app + Messages.app SQLite DBs
+  │     Polls Gmail via IMAP (app passwords)
+  │     Reads Messages.app SQLite DB
   │     Sends iMessage via AppleScript
   │     Processes bank PDFs → XLS → SQLite
   ├── Mail Agent  (Docker)
@@ -67,8 +68,8 @@ Synology DS920+ (always-on)
 ### Mail alerts
 
 ```
-Mail.app syncs locally
-  ↓  bridge polls Envelope Index (SQLite) every 30 s
+Gmail IMAP polled directly (imap.gmail.com:993, app passwords)
+  ↓  bridge fetches new messages via UID checkpointing
 Agent classifies via Ollama (gemma4:e4b)
   ↓  financial category detected
 iMessage alert sent to iPhone
@@ -111,7 +112,7 @@ Detection is automatic — the router reads the first page of any PDF and identi
 ```
 agentic-ai/
 ├── agent/              # Dockerized mail agent (classifier, iMessage command handler)
-├── bridge/             # Host Python HTTP server (Mail.app, Messages.app, PDF processor)
+├── bridge/             # Host Python HTTP server (Gmail IMAP, Messages.app, PDF processor)
 ├── parsers/            # Bank statement parsers (one file per bank/statement type)
 ├── exporters/          # XLS writer (ALL_TRANSACTIONS.xlsx + per-bank files)
 ├── finance/            # FastAPI backend, SQLite schema, importer, categorizer, backup
@@ -235,7 +236,7 @@ After each successful import the pipeline creates a new backup and syncs it to t
 
 - **Network boundary** — private tools are Tailscale-only. No public port forwarding.
 - **Authentication** — bridge bearer token: constant-time `hmac.compare_digest` with length equality pre-check. Finance API `X-Api-Key`: constant-time compare resolved at startup.
-- **Injection defenses** — NAS SSH remote path uses `shlex.quote()`; mdfind predicate validates RFC 2822 message-ID format; PDF password tempfiles use `chmod 0o600` + zero-wipe before deletion.
+- **Injection defenses** — NAS SSH remote path uses `shlex.quote()`; mdfind predicate validates RFC 2822 message-ID format; PDF password tempfiles use `chmod 0o600` + zero-wipe before deletion. Gmail app passwords are stored in a gitignored `secrets/gmail.toml`, never in env vars or config.
 - **API hardening** — CORS wildcards forbidden at startup; all `limit=` params server-side capped at 1000; Pydantic request models have `max_length` bounds; `snapshot_date` validated as `YYYY-MM-DD` at the API boundary.
 - **Local-first** — financial data never leaves your Mac/NAS. No Google APIs, no external database, no cloud auth.
 
@@ -246,7 +247,7 @@ After each successful import the pipeline creates a new backup and syncs it to t
 | Requirement | Notes |
 |---|---|
 | Apple Silicon Mac | 16 GB RAM recommended |
-| macOS — Full Disk Access | Required for Mail.app + Messages.app SQLite access |
+| macOS — Full Disk Access | Required for Messages.app SQLite access only (not mail) |
 | Python 3.14 (Homebrew) | `brew install python@3.14` |
 | Ollama + `gemma4:e4b` | `ollama pull gemma4:e4b` |
 | Docker Desktop | For agent + finance API containers |
@@ -271,29 +272,33 @@ brew install python@3.14
 OLLAMA_HOST=0.0.0.0 ollama serve &
 ollama pull gemma4:e4b
 
-# 4. Set up .app bundle for stable Full Disk Access
+# 4. Set up .app bundle for stable Full Disk Access (Messages.app)
 ./scripts/setup-app.sh
 # Then: System Settings → Privacy & Security → Full Disk Access → add AgenticAI.app
 
-# 5. Store bridge token in Keychain + export for Docker
+# 5. Add Gmail app passwords
+cp secrets/gmail.toml.example secrets/gmail.toml   # if example exists
+# Or create secrets/gmail.toml manually (see §4 in SYSTEM_DESIGN.md)
+
+# 6. Store bridge token in Keychain + export for Docker
 python3 -c "import secrets; print(secrets.token_hex(32))" | \
   xargs -I{} security add-generic-password -s agentic-ai-bridge -a bridge_token -w {}
 python3 scripts/export-secrets-for-docker.py
 
-# 6. Edit config
+# 7. Edit config
 cp config/settings.toml config/settings.toml.bak
 nano config/settings.toml   # set primary_recipient and authorized_senders
 
-# 7. Build PWA
+# 8. Build PWA
 cd pwa
 cp .env.example .env.local   # add VITE_FINANCE_API_KEY=your-key
 npm install && npm run build
 cd ..
 
-# 8. Start containers
+# 9. Start containers
 docker compose up --build -d
 
-# 9. Start bridge on host
+# 10. Start bridge on host
 PYTHONPATH=$(pwd) python3 -m bridge.server
 # (Or load the LaunchAgent — see SYSTEM_DESIGN.md §15)
 ```
@@ -334,6 +339,7 @@ All secrets are stored in the **macOS Keychain** under service `agentic-ai-bridg
 | File | Contents |
 |---|---|
 | `secrets/bridge.token` | Bearer token for bridge API |
+| `secrets/gmail.toml` | Gmail app passwords for IMAP polling (one entry per account) |
 | `secrets/banks.toml` | Bank PDF passwords |
 | `secrets/nas_sync_key` | SSH private key for NAS sync |
 | `secrets/nas_sync_key.pub` | SSH public key (add to NAS `authorized_keys`) |
@@ -356,6 +362,7 @@ All secrets are stored in the **macOS Keychain** under service `agentic-ai-bridg
 - Stage 3 — Wealth management: ✅ complete
 - NAS read-only replica: ✅ live
 - Security hardening (April 2026): ✅ applied
+- Gmail IMAP migration (April 2026): ✅ Mail.app dependency removed
 
 ---
 

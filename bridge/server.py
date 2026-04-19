@@ -48,39 +48,55 @@ class AppContext:
         self.settings = load_settings(str(SETTINGS_PATH))
         validate_settings(self.settings)
 
-        # ── TCC pre-flight: check Full Disk Access before anything else ────
-        # NOTE: TCC/FDA is only checked at startup. If FDA is revoked while
-        # the server is running, subsequent Mail DB reads will fail with
-        # permission errors. A server restart is required to re-check.
-        tcc = preflight_check()
         self.token = resolve_token(self.settings)
         self.state = BridgeState(DATA_DB)
         self.rate = RateLimiter(DATA_DB)
         self.messages = MessagesSource(self.settings)
 
-        if not tcc["fda"]:
-            logger.warning(
-                "Full Disk Access not granted to %s — Mail features disabled. "
-                "Grant FDA: System Settings → Privacy & Security → Full Disk Access",
-                tcc["executable"],
-            )
-            self.mail = None
-        else:
-            self.mail = MailSource(self.settings)
+        mail_source_type = self.settings["mail"].get("source", "mailapp")
+
+        if mail_source_type == "gmail":
+            from bridge.gmail_source import GmailSource
+            secrets_path = Path(
+                self.settings["mail"]["gmail_secrets_file"])
+            self.mail = GmailSource(self.settings, secrets_path)
             if not self.mail.can_access():
                 logger.warning(
-                    "Cannot access Mail database — Mail features disabled. "
-                    "Check Full Disk Access permissions.")
+                    "Gmail IMAP not accessible — Mail features disabled")
                 self.mail = None
             else:
-                schema = self.mail.verify_schema()
-                if not schema["valid"]:
+                logger.info(
+                    "Gmail IMAP source ready (%d account(s))",
+                    len(self.mail.accounts))
+        else:
+            # ── TCC pre-flight: check Full Disk Access before anything else ──
+            # NOTE: TCC/FDA is only checked at startup. If FDA is revoked while
+            # the server is running, subsequent Mail DB reads will fail with
+            # permission errors. A server restart is required to re-check.
+            tcc = preflight_check()
+            if not tcc["fda"]:
+                logger.warning(
+                    "Full Disk Access not granted to %s — Mail features disabled. "
+                    "Grant FDA: System Settings → Privacy & Security → Full Disk Access",
+                    tcc["executable"],
+                )
+                self.mail = None
+            else:
+                self.mail = MailSource(self.settings)
+                if not self.mail.can_access():
                     logger.warning(
-                        "Incompatible Mail schema: %s — Mail features disabled.",
-                        schema["errors"])
+                        "Cannot access Mail database — Mail features disabled. "
+                        "Check Full Disk Access permissions.")
                     self.mail = None
                 else:
-                    logger.info("Mail database accessible, schema valid")
+                    schema = self.mail.verify_schema()
+                    if not schema["valid"]:
+                        logger.warning(
+                            "Incompatible Mail schema: %s — Mail features disabled.",
+                            schema["errors"])
+                        self.mail = None
+                    else:
+                        logger.info("Mail database accessible, schema valid")
 
         cfg = self.settings
         pdf_config = {
@@ -193,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.ctx.mail is None:
                     self._json(503, {"error": "Mail features unavailable — FDA not granted"})
                     return
-                if not self.ctx.rate.allow("mail_pending"):
+                if not self.ctx.rate.allow("mail_pending", 120):
                     self._json(429, {"error": "Rate limit exceeded"})
                     return
                 try:

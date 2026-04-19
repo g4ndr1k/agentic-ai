@@ -28,28 +28,43 @@ codingholic-homepage-stag
 
 ## Golden rules
 
-- Edit code on the **Mac**
-- NAS is the **deploy target**
+- Edit code on the **NAS stag folder** via Mac SMB mount
+- NAS is the **source of truth** and **deploy target**
 - `stag` is the default deploy target
 - Test on `staging.codingholic.fun`
 - Promote to `prod` only when satisfied
 
 ---
 
-## Recommended local Mac structure
+## NAS Mount Setup (one-time)
 
-Use one local source folder:
+### 1. Connect via SMB
 
 ```text
-~/codingholic-homepage
+Finder → Go → Connect to Server → smb://192.168.1.44
 ```
 
-This is your source of truth.
+Mount the **docker** shared folder. The stag folder will appear at:
 
-Suggested tools:
-- VS Code for main editing
-- Claude Code / Hermes for refactors and UI generation
-- terminal for deploy
+```text
+/Volumes/docker/codingholic-homepage/stag
+```
+
+### 2. Auto-mount on login
+
+```text
+System Settings → General → Login Items → + → select the mounted volume
+```
+
+This ensures the mount is ready every time you start your Mac.
+
+### 3. Open in VS Code
+
+```bash
+code /Volumes/docker/codingholic-homepage/stag
+```
+
+Files you save in VS Code write directly to the NAS. No sync step needed.
 
 ---
 
@@ -195,18 +210,6 @@ This keeps production clean while making staging unmistakable.
 
 ---
 
-## One-command deploy workflow from the Mac
-
-### Philosophy
-
-- Work only from the Mac
-- Sync code to `stag`
-- Deploy `stag`
-- Test on `staging.codingholic.fun`
-- Promote to `prod` with one explicit command
-
----
-
 ## Mac deploy script: `~/deploy-codingholic.sh`
 
 Create on the Mac:
@@ -221,34 +224,21 @@ Paste:
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOCAL_DIR="$HOME/codingholic-homepage"
 NAS_USER="g4ndr1k"
 NAS_HOST="192.168.1.44"
-BASE_DIR="/volume1/docker/codingholic-homepage"
-STAG_DIR="${BASE_DIR}/stag"
+STAG_DIR="/volume1/docker/codingholic-homepage/stag"
+MOUNT_PATH="/Volumes/docker/codingholic-homepage/stag"
 
 echo "==> Safety check"
-if [ ! -f "$LOCAL_DIR/package.json" ] || [ ! -f "$LOCAL_DIR/docker-compose.yml" ] || [ ! -d "$LOCAL_DIR/app" ]; then
-  echo "ERROR: LOCAL_DIR does not look like the homepage project"
-  echo "LOCAL_DIR=$LOCAL_DIR"
+if [ ! -f "$MOUNT_PATH/package.json" ] || [ ! -d "$MOUNT_PATH/app" ]; then
+  echo "ERROR: NAS not mounted or stag dir missing expected files"
+  echo "Mount path expected: $MOUNT_PATH"
   exit 1
 fi
 
-echo "==> Dry-run preview to staging"
-rsync -av --dry-run --delete   --exclude node_modules   --exclude .next   --exclude .git   --exclude .gitignore   --exclude .DS_Store   "$LOCAL_DIR/" "${NAS_USER}@${NAS_HOST}:${STAG_DIR}/"
-
-echo
-read -r -p "Proceed with sync to staging? [y/N] " reply
-if [[ ! "$reply" =~ ^[Yy]$ ]]; then
-  echo "Aborted."
-  exit 0
-fi
-
-echo "==> Syncing to staging"
-rsync -av --delete   --exclude node_modules   --exclude .next   --exclude .git   --exclude .gitignore   --exclude .DS_Store   "$LOCAL_DIR/" "${NAS_USER}@${NAS_HOST}:${STAG_DIR}/"
-
 echo "==> Deploying staging on NAS"
-ssh -t "${NAS_USER}@${NAS_HOST}" "cd ${STAG_DIR} && sudo docker compose up -d --build && sudo docker image prune -f"
+ssh -t "${NAS_USER}@${NAS_HOST}" \
+  "cd ${STAG_DIR} && sudo docker compose up -d --build && sudo docker image prune -f"
 
 echo "✅ Staging deploy complete"
 echo "👉 Test at: https://staging.codingholic.fun"
@@ -293,7 +283,13 @@ STAG_DIR="${BASE_DIR}/stag"
 PROD_DIR="${BASE_DIR}/prod"
 
 echo "==> Preview promote: staging -> prod"
-ssh -t "${NAS_USER}@${NAS_HOST}" "rsync -av --dry-run --delete   --exclude node_modules   --exclude .next   --exclude .git   --exclude .gitignore   --exclude .DS_Store   ${STAG_DIR}/ ${PROD_DIR}/"
+ssh -t "${NAS_USER}@${NAS_HOST}" "rsync -av --dry-run --delete \
+  --exclude node_modules \
+  --exclude .next \
+  --exclude .git \
+  --exclude .gitignore \
+  --exclude .DS_Store \
+  ${STAG_DIR}/ ${PROD_DIR}/"
 
 echo
 read -r -p "Promote staging to production? [y/N] " reply
@@ -303,7 +299,13 @@ if [[ ! "$reply" =~ ^[Yy]$ ]]; then
 fi
 
 echo "==> Syncing staging to prod"
-ssh -t "${NAS_USER}@${NAS_HOST}" "rsync -av --delete   --exclude node_modules   --exclude .next   --exclude .git   --exclude .gitignore   --exclude .DS_Store   ${STAG_DIR}/ ${PROD_DIR}/"
+ssh -t "${NAS_USER}@${NAS_HOST}" "rsync -av --delete \
+  --exclude node_modules \
+  --exclude .next \
+  --exclude .git \
+  --exclude .gitignore \
+  --exclude .DS_Store \
+  ${STAG_DIR}/ ${PROD_DIR}/"
 
 echo "==> Deploying prod on NAS"
 ssh -t "${NAS_USER}@${NAS_HOST}" "cd ${PROD_DIR} && sudo docker compose up -d --build && sudo docker image prune -f"
@@ -328,12 +330,13 @@ chmod +x ~/promote-codingholic.sh
 
 ## Recommended day-to-day workflow
 
-### 1. Edit locally on the Mac
+### 1. Open stag in VS Code
 
 ```bash
-cd ~/codingholic-homepage
-code .
+code /Volumes/docker/codingholic-homepage/stag
 ```
+
+Edit and save. Changes write directly to the NAS.
 
 ### 2. Deploy to staging
 
@@ -365,17 +368,12 @@ https://codingholic.fun
 
 ---
 
-## Optional GitHub workflow
+## Version control (optional)
 
-Best practice:
-- Git lives on the Mac only
-- GitHub is backup and version history
-- NAS remains deploy-only
-
-Suggested local Git workflow:
+If you want git history, init a repo directly in the stag folder:
 
 ```bash
-cd ~/codingholic-homepage
+cd /Volumes/docker/codingholic-homepage/stag
 git init
 git add .
 git commit -m "baseline"
@@ -392,20 +390,21 @@ git push
 ~/deploy-codingholic.sh
 ```
 
+The NAS is the source of truth either way — git is optional backup and history only.
+
 ---
 
 ## Safety checklist before every deploy
 
-On the Mac, confirm:
+On the Mac, confirm the mount is live and the key files are present:
 
 ```bash
-cd ~/codingholic-homepage
-ls app Dockerfile docker-compose.yml package.json
+ls /Volumes/docker/codingholic-homepage/stag/app \
+   /Volumes/docker/codingholic-homepage/stag/Dockerfile \
+   /Volumes/docker/codingholic-homepage/stag/package.json
 ```
 
-If any of those are missing, do **not** deploy.
-
-Always read the `rsync --dry-run` output before confirming.
+If the mount is missing or files are absent, do **not** deploy.
 
 ---
 
@@ -414,12 +413,14 @@ Always read the `rsync --dry-run` output before confirming.
 ### Fast rollback for production
 
 If the last promotion was bad:
-1. restore previous code into `prod`
-2. redeploy `prod`
+1. SSH to NAS
+2. Restore previous code into `prod` (from a git checkout on the mount, or manual edit)
+3. Redeploy `prod`
 
-If you use Git on the Mac:
+If you use git:
 
 ```bash
+cd /Volumes/docker/codingholic-homepage/stag
 git checkout <previous-good-commit>
 ~/deploy-codingholic.sh
 ~/promote-codingholic.sh
@@ -427,7 +428,7 @@ git checkout <previous-good-commit>
 
 ### Fast rollback for tunnel config
 
-Usually not needed anymore, because `prod` and `stag` have fixed domains and fixed ports.
+Usually not needed, because `prod` and `stag` have fixed domains and fixed ports.
 
 ---
 
@@ -435,14 +436,14 @@ Usually not needed anymore, because `prod` and `stag` have fixed domains and fix
 
 ```text
 Mac
-├── ~/codingholic-homepage
-├── ~/deploy-codingholic.sh
-└── ~/promote-codingholic.sh
+├── /Volumes/docker → smb://192.168.1.44/docker (NAS mount, auto on login)
+├── ~/deploy-codingholic.sh   (SSH → docker compose up --build on stag)
+└── ~/promote-codingholic.sh  (SSH → rsync stag→prod + docker compose up --build)
 
 NAS
 └── /volume1/docker/codingholic-homepage
-    ├── prod  → 3002 → codingholic.fun
-    └── stag  → 3003 → staging.codingholic.fun
+    ├── stag  → 3003 → staging.codingholic.fun  ← edit here via VS Code
+    └── prod  → 3002 → codingholic.fun
 ```
 
-This keeps your naming clean, your workflow predictable, and your production site stable.
+Edit on the mount. Deploy with one command. Promote with one command.
