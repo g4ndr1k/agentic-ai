@@ -56,17 +56,17 @@ class AppContext:
         mail_source_type = self.settings["mail"].get("source", "mailapp")
 
         if mail_source_type == "gmail":
-            from bridge.gmail_source import GmailSource
+            from bridge.imap_source import ImapSource
             secrets_path = Path(
                 self.settings["mail"]["gmail_secrets_file"])
-            self.mail = GmailSource(self.settings, secrets_path)
+            self.mail = ImapSource(self.settings, secrets_path)
             if not self.mail.can_access():
                 logger.warning(
-                    "Gmail IMAP not accessible — Mail features disabled")
+                    "IMAP not accessible — Mail features disabled")
                 self.mail = None
             else:
                 logger.info(
-                    "Gmail IMAP source ready (%d account(s))",
+                    "IMAP source ready (%d account(s))",
                     len(self.mail.accounts))
         else:
             # ── TCC pre-flight: check Full Disk Access before anything else ──

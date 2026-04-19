@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.16.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅
+**Version:** 3.17.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅ · Public homepage with Snake game live ✅ · Multi-provider IMAP (Gmail + iCloud) ✅
 **Platform:** Apple Silicon Mac · macOS · Synology DS920+ (AMD64 Docker)
-**Last validated against:** checked-in codebase 2026-04-17
+**Last validated against:** checked-in codebase 2026-04-19
 
 ---
 
@@ -1100,12 +1100,43 @@ Each provider has an in-memory **circuit breaker**:
 - Disabled: `enabled = false` in settings; `ANTHROPIC_API_KEY` deleted from Keychain
 - If re-enabling: store key in Keychain (`security add-generic-password -s agentic-ai-bridge -a ANTHROPIC_API_KEY -w <key>`) and set `enabled = true`
 
+### iMessage alert format
+
+Normal (Ollama succeeded):
+```
+🔔 Transaction Alert [HIGH]
+From: notification@bca.co.id
+Subject: Transaksi BCA
+Date: 2026-04-19 10:00
+Summary: Debit Rp 250,000 at GrabFood — 19 Apr 10:00
+```
+
+Classification failed (Ollama unreachable/timed out):
+```
+🔔 Financial Other [MEDIUM]
+From: notification@bca.co.id
+Subject: Transaksi BCA
+Date: 2026-04-19 10:00
+Body: Dengan hormat, kami informasikan bahwa telah terjadi transaksi...
+      [first 800 chars of raw email body]
+```
+
+The `Summary:` / `Body:` label distinguishes the two cases. Format logic: `agent/app/orchestrator.py` `_format_alert()`.
+
+---
+
 ### Total failure behavior
 
 | `generic_alert_on_total_failure` | Result |
 |---|---|
-| `true` (default) | Returns `financial_other` → triggers alert |
+| `true` (default) | Returns `financial_other` → triggers alert with raw body |
 | `false` | Returns `not_financial` → no alert, mail silently skipped |
+
+When all providers fail and `generic_alert_on_total_failure = true`, the iMessage alert
+replaces the (unavailable) LLM summary with the first **800 chars of the raw email body**,
+so the content is visible even without a successful classification. The label changes from
+`Summary:` to `Body:` to distinguish the two cases. Logic lives in
+`agent/app/orchestrator.py` `_format_alert()`.
 
 ### Classification output schema
 
@@ -2289,6 +2320,7 @@ Bank PDF arrives (email attachment or manual drop)
 - `hmac.compare_digest` now preceded by length equality check
 - `logging.getLogger` hoisted to module level in `mail_source.py`
 - Mail source migrated from Mail.app SQLite (FDA-dependent, fragile) to Gmail IMAP with app passwords — eliminates Full Disk Access as a mail dependency
+- Classification failure fallback now includes first 800 chars of raw email body instead of generic "may be important" string — body visible even when Ollama is unreachable
 - PWA `visibilitychange` cache-clear on background
 - PWA `AbortController` cleanup for PDF processing loop on unmount
 - PWA `/:pathMatch(.*)*` catch-all route added
@@ -3227,3 +3259,50 @@ chmod 600 /var/services/homes/g4ndr1k/.config/acme/env.sh
 - Valid HTTPS (no warnings)
 - Auto-renewed certificates
 - Fully local-first architecture
+
+---
+
+## 43. Public Homepage (codingholic-homepage-v2)
+
+### Overview
+
+Next.js 14 + Tailwind + Framer Motion public landing page at `codingholic.fun`. Served from Synology NAS via Docker (port 3002 prod, 3003 staging) behind Cloudflare Tunnel.
+
+### Architecture
+
+```
+Internet → Cloudflare Tunnel → codingholic.fun → NAS 127.0.0.1:3002 (prod)
+                                            └── staging.codingholic.fun → NAS 127.0.0.1:3003 (stag)
+```
+
+### Public Tools
+
+| Tool | Route | Status | Notes |
+|------|-------|--------|-------|
+| Snake game | `/game` | Live | Canvas-based, localStorage leaderboard (top 3 initials + scores), keyboard/WASD/swipe/mobile D-pad |
+| Homepage card | `/` | Live | "Things anyone can explore" section |
+
+### Private Tools (Tailscale only)
+
+| Tool | URL | Notes |
+|------|-----|-------|
+| Personal Wealth Management | mac.codingholic.fun | Read/write finance dashboard |
+| Demo of PWM | ro.codingholic.fun | NAS read-only replica |
+| Future Lab | future.codingholic.fun | Internal experiments |
+
+### Deploy Workflow
+
+- Edit on NAS: `/volume1/docker/codingholic-homepage/stag/` (via SMB mount or SSH)
+- Deploy staging: `ssh NAS "cd /stag && sudo docker compose up -d --build"`
+- Test: `https://staging.codingholic.fun`
+- Promote: `rsync stag/ prod/` (excluding node_modules, .next, .git) + `docker compose up -d --build`
+- Note: prod's `docker-compose.yml` must have `container_name: codingholic-homepage-prod`, port `3002`, and `NEXT_PUBLIC_SITE_ENV: production` (stale rsync will overwrite this — re-apply after rsync)
+
+### Snake Game Details
+
+- Canvas-based, 20×20 grid, dark neon aesthetic (emerald snake, amber food, dot grid)
+- Escape quits to menu, Space/P pauses, Arrow keys/WASD for direction
+- Top 3 leaderboard with 3-letter initials, persisted in browser localStorage
+- Mobile: D-pad controls + swipe gestures
+- Files: `app/game/snake-game.tsx` (client component), `app/game/page.tsx` (page wrapper)
+- Replaced BaZi Fortune Teller placeholder (Apr 2026)
