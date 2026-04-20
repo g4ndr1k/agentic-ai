@@ -15,8 +15,7 @@ CATEGORIES = [
     ("meals",              "Makanan & Minuman",       2),
     ("snacks",             "Jajan / Camilan",         3),
     ("gas_lpg",            "Gas LPG",                 4),
-    ("electricity_token",  "Token Listrik",           5),
-    ("water",              "Air (Galon / PDAM)",      6),
+    ("water",              "Air (Galon / PDAM)",      5),
     ("transport",          "Transportasi",            7),
     ("household_supplies", "Peralatan Rumah Tangga",  8),
     ("laundry",            "Laundry",                 9),
@@ -28,9 +27,9 @@ CATEGORIES = [
     ("other",              "Lainnya",                 99),
 ]
 
-DEFAULT_USERNAME = "asisten"
+DEFAULT_USERNAME = "kaksum"
 DEFAULT_PASSWORD = "rumah123"
-DEFAULT_DISPLAY_NAME = "Asisten"
+DEFAULT_DISPLAY_NAME = "Kak Sum"
 
 
 def seed_all(db_path: str | None = None) -> None:

@@ -166,6 +166,19 @@ async function patch(path, body = {}) {
   return res.json()
 }
 
+async function put(path, body = {}) {
+  const res = await fetch(BASE + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`${res.status}: ${text || res.statusText}`)
+  }
+  return res.json()
+}
+
 async function patchQueued(path, body = {}) {
   try {
     return await patch(path, body)
@@ -226,6 +239,9 @@ export const api = {
   manualBackup: () => post('/backups/manual'),
   nasSyncStatus: (options = {}) => get('/nas-sync/status', {}, options),
   nasSync: () => post('/nas-sync'),
+
+  preferences: (options = {}) => get('/preferences', {}, options),
+  savePreferences: (body) => put('/preferences', body),
 
   aiQuery: (query) => post('/ai/query', { query }),
   pdfLocalFiles: (options = {}) => get('/pdf/local-files', {}, options),

@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.18.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅ · Public homepage with Snake game live ✅ · Multi-provider IMAP (Gmail + iCloud) ✅ · Household Expense PWA on NAS ✅
+**Version:** 3.19.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅ · Public homepage with Snake game live ✅ · Multi-provider IMAP (Gmail + iCloud) ✅ · Household Expense PWA on NAS ✅
 **Platform:** Apple Silicon Mac · macOS · Synology DS920+ (AMD64 Docker)
-**Last validated against:** checked-in codebase 2026-04-19
+**Last validated against:** checked-in codebase 2026-04-20
 
 ---
 
@@ -214,7 +214,7 @@ The system alerts on:
   - 3-layer parsing: pdfplumber tables → Python regex → Ollama LLM fallback
   - Multi-owner XLS export: `{Bank}_{Owner}.xlsx` per bank/owner pair + flat `ALL_TRANSACTIONS.xlsx` with Owner column
   - Mail.app attachment folder auto-scanner for bank PDFs (reads `~/Library/Mail/…/Attachments/`)
-  - Auto-upsert pipeline in `bridge/pdf_handler.py` after every portfolio parse: savings/consol closing balance → `account_balances`; bond holdings → `holdings`; mutual-fund holdings → `holdings`; equity/fund holdings with month-end gap-fill → `holdings`; RDN cash balance → `account_balances`
+  - Auto-upsert pipeline in `bridge/pdf_handler.py` after every portfolio parse: savings/consol closing balance → `account_balances`; bond holdings → `holdings`; mutual-fund holdings → `holdings`; equity/fund holdings with month-end gap-fill → `holdings`; RDN cash balance → `account_balances`; when a known owner (not "Unknown") is resolved, stale `owner='Unknown'` rows for the same snapshot date and institution are deleted to prevent double-counting from earlier imports that lacked owner_mappings
   - Gap-fill logic — carries the most recent brokerage holdings forward month-by-month (INSERT OR IGNORE) until either the current month or the first month that already has data for that institution, preventing dashboard gaps between monthly PDFs
   - End-to-end bridge pipeline orchestrator (`bridge/pipeline.py`) with scheduled runs, manual trigger/status endpoints, import/backup chaining, month-complete notification tracking, and recursive scanning of nested folders inside `data/pdf_inbox/`
 - Stage 2 finance package (`finance/`) — see §25–33
@@ -223,9 +223,9 @@ The system alerts on:
   - `finance/categorizer.py` — account-aware categorization engine: normalized exact alias → token-aware contains alias (specificity-sorted by length) → regex → Ollama AI suggestion (retry wrapper, `format_json=True` for Gemma 4 JSON-mode reliability) → review queue flag, plus cross-account internal transfer matching; alias matching now tolerates inserted timestamps / transfer codes by tokenizing descriptions and dropping volatile numeric fragments; filtered rules (owner/account) are sorted before generic rules so they always win on conflict; `Categorizer.__init__()` persists `ollama_host`/`ollama_model`/`ollama_timeout` on the instance for all Layer 3 calls
   - `finance/importer.py` — CLI entry point and `direct_import()` implementation: reads `ALL_TRANSACTIONS.xlsx`, maps columns, deduplicates by hash, categorizes, and writes directly to SQLite; after import it also auto-syncs the carried real-estate holding `Grogol 2` from any transactions whose `raw_description` contains `Teguh Pranoto Chen`, using 2026-01-31 as a zero-value baseline and rolling the cumulative value month-by-month into the `holdings` table; `--dry-run`, `--overwrite`, `--file`, `-v`
   - `finance/ollama_utils.py` — shared Ollama retry wrapper with exponential backoff (1s, 2s, 4s); retries on `URLError`, `TimeoutError`, `ConnectionError`; optional `format_json=True` forces Ollama JSON-mode output (`"format": "json"` in payload); uses streaming aggregation (`stream=True`) because `gemma4:e4b` can return empty `response` payloads in non-stream mode; used by categorizer and API AI endpoints
-  - `finance/db.py` — authoritative SQLite schema with WAL mode, `busy_timeout=5000`, `secure_delete=ON`, `auto_vacuum=FULL`, schema version tracking, `category_overrides`, `import_log`, `audit_log`, `owner_mappings`, and the `transactions_resolved` view; `merchant_aliases` includes `owner_filter`/`account_filter` with UNIQUE constraint; `transactions` stores nullable `ollama_suggestion` and `suggested_merchant` so Layer 3 review-queue hints survive reloads
+  - `finance/db.py` — authoritative SQLite schema with WAL mode, `busy_timeout=5000`, `secure_delete=ON`, `auto_vacuum=FULL`, schema version tracking, `category_overrides`, `import_log`, `audit_log`, `owner_mappings`, `user_preferences` (server-side key/value store for dashboard range and other cross-device settings), and the `transactions_resolved` view; `merchant_aliases` includes `owner_filter`/`account_filter` with UNIQUE constraint; `transactions` stores nullable `ollama_suggestion` and `suggested_merchant` so Layer 3 review-queue hints survive reloads
   - `finance/backup.py` — online SQLite backup helper using `sqlite3.Connection.backup()` with pruning and restrictive file permissions; NAS sync uses `shlex.quote()` on remote path and raises `FileNotFoundError` if an explicitly configured SSH key file is missing
-  - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, pipeline proxy endpoints, wealth APIs, CORS (hardened: explicit methods/headers, wildcard assertion at startup, no `allow_credentials` + wildcard combo), in-memory rate limiting (60 req/min per endpoint), sanitized error messages, SQLite `_db()` context manager; all Pydantic request models have `max_length` bounds and validated `snapshot_date` fields; reads from `transactions_resolved`, writes aliases and overrides directly to SQLite, keeps `POST /api/sync` as a no-op compatibility endpoint, exposes `/api/backfill-aliases`, and mounts `pwa/dist/` at `/` when present; `GET /api/audit/completeness?start_month=YYYY-MM&end_month=YYYY-MM` scans `pdf_inbox` + `pdf_unlocked` recursively, parses filenames via `_parse_pdf_entity()` (7 regex patterns covering BCA/CIMB/IPOT/Maybank/Permata/Stockbit/BNI Sekuritas naming conventions), and returns a `{months, month_labels, entities}` grid; BNI Sekuritas matched by `SOA_BNI_SEKURITAS_\w+_{Mon}{YYYY}` pattern → `entity_key="bni-sekuritas-soa"`, `info="SOA"`; this endpoint is excluded from the Workbox SW cache so it always hits the network
+  - `finance/api.py` — FastAPI app: finance read/write APIs, monthly and annual summaries, review queue, PDF-local proxy endpoints, pipeline proxy endpoints, wealth APIs, user preferences (`GET/PUT /api/preferences` for server-side cross-device settings like dashboard range), CORS (hardened: explicit methods/headers, wildcard assertion at startup, no `allow_credentials` + wildcard combo), in-memory rate limiting (60 req/min per endpoint), sanitized error messages, SQLite `_db()` context manager; all Pydantic request models have `max_length` bounds and validated `snapshot_date` fields; reads from `transactions_resolved`, writes aliases and overrides directly to SQLite, keeps `POST /api/sync` as a no-op compatibility endpoint, exposes `/api/backfill-aliases`, and mounts `pwa/dist/` at `/` when present; `GET /api/audit/completeness?start_month=YYYY-MM&end_month=YYYY-MM` scans `pdf_inbox` + `pdf_unlocked` recursively, parses filenames via `_parse_pdf_entity()` (7 regex patterns covering BCA/CIMB/IPOT/Maybank/Permata/Stockbit/BNI Sekuritas naming conventions), and returns a `{months, month_labels, entities}` grid; BNI Sekuritas matched by `SOA_BNI_SEKURITAS_\\w+_{Mon}{YYYY}` pattern → `entity_key="bni-sekuritas-soa"`, `info="SOA"`; this endpoint is excluded from the Workbox SW cache so it always hits the network
   - `finance/server.py` — uvicorn entry point: `python3 -m finance.server`; `--host`, `--port`, `--reload` overrides
   - `finance/Dockerfile` — `python:3.12-slim` image; installs the SQLite-first finance stack (`fastapi`, `uvicorn[standard]`, `rapidfuzz`, `openpyxl`, etc.) and copies `pwa/dist/` for production static serving
   - `finance/requirements.txt` — Python dependencies for the SQLite-first API/import stack; Google Sheets client dependencies removed
@@ -245,7 +245,7 @@ The system alerts on:
   - `pwa/src/components/AppHeader.vue` — route-aware mobile header with sync status pill (red dot when offline) and `🙈/👁` privacy toggle button; tap sets `store.hideNumbers` and persists to `localStorage` (key `finance.hideNumbers`, default `true` so amounts are hidden on first open)
   - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace; mobile offline state is indicated by the header status dot turning red instead of showing a blocking banner
   - `pwa/src/composables/useOfflineSync.js` — connectivity detection via periodic heartbeat (`GET /ping`, 30 s interval, 5 s `AbortController` timeout); catches `TypeError` (ERR_CONNECTION_REFUSED) and `AbortError` (ETIMEDOUT); probes immediately on mount and on tab foreground; browser `offline` event triggers immediate offline transition; `online` event triggers a probe rather than blindly trusting the OS signal; on recovery drains IndexedDB sync queue then calls the `onReconnect` callback
-  - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation, optional `forceFresh` bootstrap/resource loading for desktop and explicit refresh paths, and `hideNumbers` ref (default `true`) + `setHideNumbers()` for the global privacy toggle
+  - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation, optional `forceFresh` bootstrap/resource loading for desktop and explicit refresh paths, `hideNumbers` ref (default `true`) + `setHideNumbers()` for the global privacy toggle, and **server-backed preferences**: on `bootstrap()` the store fetches `GET /api/preferences` and overrides localStorage values so the dashboard range is consistent across browsers and survives hard refreshes; `setDashboardRange()` debounces a `PUT /api/preferences` call (500 ms) so changes persist server-side while still writing to localStorage for instant local recovery
   - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints including category-definition writes (`POST /api/categories`); successful GETs are persisted to IndexedDB, reused for up to 24 hours only on the iPhone/mobile PWA, and offline GETs fall back to cached responses on both mobile and desktop; desktop layouts bypass the long-lived 24-hour TTL and hit the network by default (determined from `pwa_layout_mode` / `useLayout` viewport rules); mutation endpoints queue offline writes; selected calls can pass `forceFresh: true` to bypass cached GET data explicitly; direct non-queued calls are used for latency-sensitive actions such as `enrichReviewQueue()` (`POST /api/review-queue/suggest`) and Settings category edits; `console.warn` when API key is not configured
   - `pwa/src/sw.js` — workbox service worker: static assets (`StaleWhileRevalidate`, 7-day expiry); `/api/wealth/*` GETs use `NetworkFirst` (8 s timeout, 10-min cache) so POST mutations are immediately reflected in subsequent GETs; all other `/api/*` GETs use `StaleWhileRevalidate` (10-min expiry); audit and workspace endpoints (`/api/audit/`, `/api/pdf/local-workspace`) are excluded from SW caching so they always hit the network; mutation endpoints (`/sync`, `/import`, `/alias`, `/api/ai/*`) use `NetworkFirst` with 10 s timeout; `skipWaiting` + `clientsClaim` so new deployments take over all open tabs immediately
   - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (`injectManifest`) + `/api` proxy to `:8090`
@@ -424,7 +424,7 @@ agentic-ai/
 │   ├── gmail_source.py           # Gmail IMAP adapter (app passwords · no FDA required)
 │   ├── mail_source.py            # Mail.app SQLite adapter (legacy · not used when source=gmail)
 │   ├── messages_source.py        # Messages.app SQLite adapter + AppleScript sender
-│   ├── pdf_handler.py            # PDF processor endpoints (/pdf/*); auto-upsert pipeline for holdings/balances
+│   ├── pdf_handler.py            # PDF processor endpoints (/pdf/*); auto-upsert pipeline for holdings/balances; owner dedup on upsert (deletes stale Unknown-owner rows when known owner resolves)
 │   ├── pipeline.py               # Scheduled/manual PDF→import→backup orchestrator
 │   ├── pdf_unlock.py             # pikepdf unlock + AppleScript fallback
 │   ├── fx_rate.py                # Historical FX rates via fawazahmed0/currency-api (free, no key)
@@ -458,9 +458,9 @@ agentic-ai/
 │   ├── categorizer.py            # 4-layer engine: exact → contains (specificity-sorted) → regex → Ollama JSON-mode suggestion → review queue
 │   ├── importer.py               # CLI + direct_import(): ALL_TRANSACTIONS.xlsx → SQLite
 │   ├── ollama_utils.py           # Shared Ollama retry wrapper (exponential backoff, retries on URLError/Timeout/ConnectionError)
-│   ├── db.py                     # SQLite schema + open_db() + WAL mode; authoritative Stage 2/3 store with overrides, audit log, owner mappings, and resolved transaction view
+│   ├── db.py                     # SQLite schema + open_db() + WAL mode; authoritative Stage 2/3 store with overrides, audit log, owner mappings, user_preferences, and resolved transaction view
 │   ├── backup.py                 # SQLite online backup helper (post-import snapshots + pruning)
-│   ├── api.py                    # FastAPI: 40+ REST endpoints (Stage 2 + Stage 3 wealth + PDF/pipeline proxies + AI Q&A) + rate limiting + CORS hardening + PWA static mount
+│   ├── api.py                    # FastAPI: 40+ REST endpoints (Stage 2 + Stage 3 wealth + PDF/pipeline proxies + AI Q&A + user preferences) + rate limiting + CORS hardening + PWA static mount
 │   ├── server.py                 # uvicorn entry point (python3 -m finance.server)
 │   ├── Dockerfile                # python:3.12-slim; copies finance/ + pwa/dist/
 │   └── requirements.txt          # rapidfuzz, fastapi, uvicorn, openpyxl, sqlite-first finance stack (Google deps removed)
@@ -474,8 +474,8 @@ agentic-ai/
 │       ├── App.vue               # Shell switcher: mobile shell vs desktop shell
 │       ├── style.css             # CSS variables, cards, buttons, forms, toast, desktop shell rules
 │       ├── router/index.js       # 12 routes: /, /flows, /wealth, /holdings, /transactions, /review, /foreign, /settings, /audit, /group-drilldown, /category-drilldown, /:pathMatch(*) catch-all
-│       ├── api/client.js         # fetch wrapper for all 25+ /api/* endpoints + IndexedDB GET fallback + queued offline mutations + direct review-queue enrichment call; cache cleared on visibilitychange (app backgrounded)
-│       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month (clamped to dashboardEndMonth), reviewCount, reactive dashboard month range
+│       ├── api/client.js         # fetch wrapper for all 25+ /api/* endpoints + IndexedDB GET fallback + queued offline mutations + direct review-queue enrichment call + preferences GET/PUT; cache cleared on visibilitychange (app backgrounded)
+│       ├── stores/finance.js     # Pinia: owners, categories, years, selectedYear/Month (clamped to dashboardEndMonth), reviewCount, reactive dashboard month range, server-backed preferences
 │       ├── composables/
 │       │   ├── useLayout.js      # Breakpoint detection + persisted desktop override
 │       │   └── useOfflineSync.js # Heartbeat-based connectivity: periodic /ping probe, AbortController timeout, drain sync queue on recovery
@@ -2410,6 +2410,7 @@ Tier 1 is deterministic re-parse from PDFs and XLS artifacts. Tier 2 is implemen
 | `import_log` | Import run history |
 | `audit_log` | Lightweight append-only operational log |
 | `sync_log` | Legacy history retained for backward compatibility |
+| `user_preferences` | Server-side key/value store for cross-device PWA settings (dashboard range, etc.) |
 
 ### Override-layer design
 
@@ -2545,6 +2546,8 @@ Because the upstream Sheets workbook is no longer maintained, re-running this sc
 - `POST /api/ai/query` — natural-language transaction search
 - `GET  /api/pdf/local-files`, `GET /api/pdf/local-workspace`, `POST /api/pdf/process-local`, `GET /api/pdf/local-status/{job_id}` — PWA ↔ bridge PDF workspace proxies
 - `GET  /api/pipeline/status`, `POST /api/pipeline/run` — pipeline proxies
+- `GET  /api/preferences` — returns all user preferences as key→value dict
+- `PUT  /api/preferences` — upserts key→value pairs (blocked in read-only mode)
 
 Stage 3 endpoints are listed in §37.
 
@@ -2782,6 +2785,18 @@ UNIQUE: `(snapshot_date, liability_name, institution, account, owner)`
 ### `net_worth_snapshots`
 
 24-column breakdown including total_assets_idr, total_liabilities_idr, net_worth_idr, and per-asset-class subtotals. Generated by `POST /api/wealth/snapshot`.
+
+### `user_preferences`
+
+Server-side key/value store for cross-device PWA settings. Currently stores the dashboard month range (`dashboard_start_month`, `dashboard_end_month`).
+
+| Column | Type | Notes |
+|---|---|---|
+| `key` | TEXT PK | Preference key (e.g. `dashboard_start_month`) |
+| `value` | TEXT | Preference value (e.g. `2026-01`) |
+| `updated_at` | TEXT | Auto-set to `datetime('now')` on upsert |
+
+Accessed via `GET /api/preferences` and `PUT /api/preferences`. Write blocked in read-only mode.
 
 ---
 
@@ -3436,7 +3451,7 @@ Key tables:
 | `household_transactions` | Expenses with `client_txn_id` dedup, soft-delete, reconcile status |
 | `household_categories` | 15 categories with English `code` + Indonesian `label_id` |
 | `cash_pools` | ATM withdrawal tracking (backend only, hidden from PWA UI) |
-| `app_users` | Single user: `asisten` / bcrypt-hashed password |
+| `app_users` | Single user: `kaksum` / bcrypt-hashed password |
 
 ### Authentication
 
@@ -3490,9 +3505,9 @@ API key is a 64-character hex token. Constant-time comparison using `hmac.compar
 
 | Field | Value |
 |---|---|
-| Username | `asisten` |
+| Username | `kaksum` |
 | Password | `rumah123` |
-| Display name | `Asisten` |
+| Display name | `Kak Sum` |
 
 ### Amount formatting
 

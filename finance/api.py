@@ -1289,6 +1289,35 @@ def health():
     }
 
 
+# ── /api/preferences ────────────────────────────────────────────────────────
+
+@app.get("/api/preferences", dependencies=[Depends(require_api_key)])
+def get_preferences():
+    """Return all user preferences as a key→value dict."""
+    with _db() as conn:
+        rows = conn.execute("SELECT key, value FROM user_preferences").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+@app.put("/api/preferences", dependencies=[Depends(require_api_key)])
+def put_preferences(body: dict):
+    """Upsert key→value pairs into user_preferences."""
+    if _READ_ONLY:
+        raise HTTPException(403, "Read-only mode")
+    if not isinstance(body, dict) or not body:
+        raise HTTPException(400, "Body must be a non-empty JSON object")
+    with _db() as conn:
+        for key, value in body.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise HTTPException(400, f"Key and value must be strings: {key!r}")
+            conn.execute(
+                "INSERT INTO user_preferences (key, value, updated_at) VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (key, value),
+            )
+    return {"ok": True}
+
+
 # ── /api/owners ───────────────────────────────────────────────────────────────
 
 @app.get("/api/owners", dependencies=[Depends(require_api_key)])

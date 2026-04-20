@@ -263,6 +263,12 @@ CREATE TABLE IF NOT EXISTS owner_mappings (
     added_at        TEXT    NOT NULL DEFAULT (datetime('now')),
     notes           TEXT    DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 TRANSACTIONS_RESOLVED_VIEW = """

@@ -44,6 +44,15 @@ function normalizeDashboardMonth(value, fallback) {
   return value
 }
 
+// Debounce helper — coalesces rapid calls within *ms* milliseconds.
+function debounce(fn, ms) {
+  let timer = null
+  return (...args) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }
+}
+
 export const useFinanceStore = defineStore('finance', () => {
   const owners = ref([])
   const categories = ref([])
@@ -176,6 +185,20 @@ export const useFinanceStore = defineStore('finance', () => {
     reviewCount.value = Math.max(0, n)
   }
 
+  // ── Server-side preference persistence ────────────────────────────────────
+  // Debounced save: coalesces rapid start+end changes into a single PUT.
+  const _savePrefsToServer = debounce(async () => {
+    try {
+      await api.savePreferences({
+        dashboard_start_month: dashboardStartMonth.value,
+        dashboard_end_month: dashboardEndMonth.value,
+      })
+    } catch (e) {
+      // Non-critical — localStorage is the local fallback
+      console.warn('[Preferences] Server save failed:', e.message)
+    }
+  }, 500)
+
   function setDashboardRange(startMonth, endMonth) {
     const normalizedStart = normalizeDashboardMonth(startMonth, DASHBOARD_MIN_MONTH)
     const normalizedEnd = normalizeDashboardMonth(endMonth, currentMonthKey.value)
@@ -186,6 +209,7 @@ export const useFinanceStore = defineStore('finance', () => {
       dashboardStartMonth.value = normalizedEnd
       dashboardEndMonth.value = normalizedStart
     }
+    _savePrefsToServer()
   }
 
   watch(dashboardStartMonth, (value) => {
@@ -198,7 +222,21 @@ export const useFinanceStore = defineStore('finance', () => {
     if (value < dashboardStartMonth.value) dashboardStartMonth.value = value
   })
 
+  async function _loadServerPreferences() {
+    try {
+      const prefs = await api.preferences()
+      const srvStart = normalizeDashboardMonth(prefs.dashboard_start_month, null)
+      const srvEnd = normalizeDashboardMonth(prefs.dashboard_end_month, null)
+      if (srvStart) dashboardStartMonth.value = srvStart
+      if (srvEnd) dashboardEndMonth.value = srvEnd
+    } catch {
+      // Server unavailable — keep localStorage values
+    }
+  }
+
   async function bootstrap(options = {}) {
+    // Load server preferences first so dashboard range is authoritative
+    await _loadServerPreferences()
     await Promise.all([loadHealth(options), loadOwners(options), loadCategories(options), loadYears(options)])
   }
 

@@ -1,20 +1,20 @@
 <template>
   <div class="min-h-screen flex items-center justify-center p-6">
-    <form @submit.prevent="doLogin" class="w-full max-w-sm space-y-4">
-      <h1 class="text-2xl font-bold text-center mb-6">{{ L.appName }}</h1>
+    <form @submit.prevent="doLogin" class="w-full max-w-sm space-y-5">
+      <h1 class="text-3xl font-bold text-center mb-6">{{ L.appName }}</h1>
       <div>
-        <label class="block text-sm font-medium mb-1">{{ L.username }}</label>
+        <label class="block text-xl font-semibold mb-2">{{ L.username }}</label>
         <input v-model="username" type="text" autocomplete="username"
-          class="w-full border rounded-lg px-3 py-2 text-lg" required />
+          class="w-full border-2 rounded-lg px-4 py-3 text-xl" required />
       </div>
       <div>
-        <label class="block text-sm font-medium mb-1">{{ L.password }}</label>
+        <label class="block text-xl font-semibold mb-2">{{ L.password }}</label>
         <input v-model="password" type="password" autocomplete="current-password"
-          class="w-full border rounded-lg px-3 py-2 text-lg" required />
+          class="w-full border-2 rounded-lg px-4 py-3 text-xl" required />
       </div>
-      <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+      <p v-if="error" class="text-red-600 text-xl">{{ error }}</p>
       <button type="submit" :disabled="loading"
-        class="w-full bg-blue-600 text-white rounded-lg py-3 text-lg font-semibold disabled:opacity-50">
+        class="w-full bg-blue-600 text-white rounded-lg py-4 text-xl font-semibold disabled:opacity-50">
         {{ loading ? '...' : L.login }}
       </button>
     </form>

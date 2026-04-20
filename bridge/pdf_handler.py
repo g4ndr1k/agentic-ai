@@ -662,6 +662,14 @@ def _upsert_closing_balance(result, logs: list):
                     )
 
             # ── Upsert ────────────────────────────────────────────────────
+            # If we now know the owner (not "Unknown"), clean up any stale
+            # rows left by a previous import that couldn't resolve the owner.
+            if owner and owner != "Unknown":
+                con.execute(
+                    "DELETE FROM account_balances"
+                    " WHERE snapshot_date=? AND institution=? AND account=? AND owner='Unknown'",
+                    (snapshot_date, result.bank, str(account_id)),
+                )
             con.execute("""
                 INSERT INTO account_balances
                     (snapshot_date, institution, account, account_type, asset_group,
@@ -1167,6 +1175,16 @@ def _upsert_investment_holdings(result, logs: list):
         upserted = 0
 
         # ── Upsert the snapshot date's holdings ───────────────────────────────
+        # If we now know the owner, clean up stale "Unknown"-owner rows from
+        # a previous import that couldn't resolve the owner.
+        resolved_owner = result.owner or ""
+        if resolved_owner and resolved_owner != "Unknown":
+            con.execute(
+                "DELETE FROM holdings"
+                " WHERE snapshot_date=? AND institution=? AND owner='Unknown'",
+                (snapshot_date, result.bank),
+            )
+
         for h in holdings:
             note = (
                 f"Auto-imported from {result.bank} portfolio ({snapshot_date})"

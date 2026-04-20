@@ -14,7 +14,7 @@ export default {
   paymentMethod: 'Metode Pembayaran',
   cash: 'Tunai',
   transfer: 'Transfer',
-  ewallet: 'E-wallet',
+  ewallet: 'Lainnya',
   date: 'Tanggal',
   time: 'Jam',
   note: 'Catatan',

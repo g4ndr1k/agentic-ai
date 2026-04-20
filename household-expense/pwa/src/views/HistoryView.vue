@@ -1,37 +1,37 @@
 <template>
   <div class="p-4">
-    <h1 class="text-xl font-bold mb-4">{{ L.history }}</h1>
+    <h1 class="text-2xl font-bold mb-4">{{ L.history }}</h1>
 
-    <div v-if="transactions.length === 0 && !loading" class="text-center text-gray-500 mt-12">
+    <div v-if="transactions.length === 0 && !loading" class="text-center text-gray-500 mt-12 text-xl">
       {{ L.noTransactions }}
     </div>
 
-    <div class="space-y-2">
+    <div class="space-y-3">
       <router-link v-for="txn in transactions" :key="txn.id"
         :to="`/edit/${txn.id}`"
-        class="block bg-white rounded-lg border p-3 shadow-sm active:bg-gray-50">
+        class="block bg-white rounded-lg border-2 p-4 shadow-sm active:bg-gray-50">
         <div class="flex justify-between items-start">
           <div class="flex-1 min-w-0">
-            <div class="text-xs text-gray-500">{{ displayDatetime(txn.txn_datetime) }}</div>
-            <div class="font-semibold text-sm truncate">
-              {{ txn.merchant || txn.description || txn.category_code }}
+            <div class="text-base text-gray-500">{{ displayDatetime(txn.txn_datetime) }}</div>
+            <div class="font-semibold text-xl truncate">
+              {{ txn.description || txn.merchant || txn.category_code }}
             </div>
-            <div class="text-xs text-gray-400">
+            <div class="text-base text-gray-400">
               {{ categoryLabel(txn.category_code) }}
             </div>
           </div>
-          <div class="text-right ml-2">
-            <div class="font-bold text-blue-700">{{ formatIDR(txn.amount) }}</div>
-            <div class="text-xs text-gray-400">{{ paymentLabel(txn.payment_method) }}</div>
+          <div class="text-right ml-3">
+            <div class="font-bold text-xl text-blue-700">{{ formatIDR(txn.amount) }}</div>
+            <div class="text-base text-gray-400">{{ paymentLabel(txn.payment_method) }}</div>
           </div>
         </div>
       </router-link>
     </div>
 
-    <div v-if="loading" class="text-center text-gray-400 mt-4">Memuat...</div>
+    <div v-if="loading" class="text-center text-gray-400 mt-4 text-xl">Memuat...</div>
 
     <button v-if="hasMore && !loading" @click="loadMore"
-      class="w-full mt-4 py-2 border rounded-lg text-blue-600 text-sm">
+      class="w-full mt-4 py-3 border-2 rounded-lg text-blue-600 text-xl">
       {{ L.loadMore }}
     </button>
   </div>
