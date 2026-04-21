@@ -6,7 +6,7 @@ Endpoints
   GET  /api/health
   GET  /api/owners
   GET  /api/categories
-  GET  /api/transactions           ?year= &month= &owner= &category= &uncategorised_only= &q= &limit= &offset=
+  GET  /api/transactions           ?year= &month= &owner= &account= &category= &uncategorised_only= &q= &limit= &offset=
   GET  /api/transactions/foreign   ?year= &month= &owner=
   GET  /api/summary/years
   GET  /api/summary/year/{year}
@@ -42,10 +42,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from finance.config import (
+    HouseholdConfig,
     load_config,
     get_finance_config,
     get_fastapi_config,
     get_ollama_finance_config,
+    get_household_config,
 )
 from finance.db import open_db
 
@@ -58,6 +60,7 @@ _cfg           = load_config()
 _finance_cfg   = get_finance_config(_cfg)
 _fastapi_cfg   = get_fastapi_config(_cfg)
 _ollama_cfg    = get_ollama_finance_config(_cfg)
+_household_cfg = get_household_config(_cfg)
 
 _db_path: str = _finance_cfg.sqlite_db
 
@@ -183,6 +186,36 @@ def require_writable():
     """Dependency: raises 403 when running in read-only mode (NAS replica)."""
     if _READ_ONLY:
         raise HTTPException(status_code=403, detail="read_only_mode")
+
+
+def _read_household_api_key() -> str:
+    try:
+        with open(_household_cfg.api_key_file, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=f"Household API key file missing: {_household_cfg.api_key_file}") from exc
+
+
+def _household_request(method: str, path: str, body: Optional[dict] = None) -> dict:
+    api_key = _read_household_api_key()
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{_household_cfg.base_url}{path}",
+        data=data,
+        method=method.upper(),
+        headers={
+            "Content-Type": "application/json",
+            "X-Api-Key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Household API error {exc.code}: {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=503, detail=f"Household API unreachable: {exc.reason}") from exc
+    return json.loads(payload.decode("utf-8")) if payload else {}
 
 
 # ── DB connection helper ──────────────────────────────────────────────────────
@@ -1241,6 +1274,23 @@ class CategoryUpsertRequest(BaseModel):
     subcategory:       str            = Field("", max_length=100)
 
 
+class HouseholdTransactionCategoryRequest(BaseModel):
+    category_code: str = Field(..., max_length=50)
+
+
+class HouseholdCategoryUpsertRequest(BaseModel):
+    code: str = Field(..., max_length=50)
+    label_id: str = Field(..., max_length=100)
+    sort_order: int = Field(99, ge=0, le=999)
+
+
+class HouseholdCashPoolUpdateRequest(BaseModel):
+    remaining_amount: Optional[int] = Field(None, ge=0, le=999_999_999)
+    adjustment_amount: Optional[int] = Field(None, ge=-999_999_999, le=999_999_999)
+    notes: str = Field("", max_length=500)
+    status: Optional[str] = Field(None, max_length=50)
+
+
 class WealthQuestionRequest(BaseModel):
     snapshot_date: Optional[str] = None
     question:      str           = Field(..., max_length=1000)
@@ -1315,10 +1365,76 @@ def put_preferences(body: dict):
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                 (key, value),
             )
-    return {"ok": True}
+    return {"ok": True, "updated": sorted(body.keys())}
 
 
-# ── /api/owners ───────────────────────────────────────────────────────────────
+# ── /api/household/* ─────────────────────────────────────────────────────────
+
+@app.get("/api/household/settings", dependencies=[Depends(require_api_key)])
+def get_household_settings():
+    try:
+        return {
+            "available": True,
+            "base_url": _household_cfg.base_url,
+            "categories": _household_request("GET", "/api/household/categories"),
+            "recent_transactions": _household_request("GET", "/api/household/transactions?limit=6"),
+            "cash_pools": _household_request("GET", "/api/household/cash-pools"),
+        }
+    except HTTPException as exc:
+        return {
+            "available": False,
+            "base_url": _household_cfg.base_url,
+            "error": exc.detail,
+            "categories": [],
+            "recent_transactions": [],
+            "cash_pools": [],
+        }
+
+
+@app.put("/api/household/transaction/{txn_id}/category", dependencies=[Depends(require_api_key), Depends(require_writable)])
+def put_household_transaction_category(txn_id: int, req: HouseholdTransactionCategoryRequest):
+    return _household_request("PUT", f"/api/household/transactions/{txn_id}", {"category_code": req.category_code})
+
+
+@app.post("/api/household/categories", dependencies=[Depends(require_api_key), Depends(require_writable)])
+def put_household_category(req: HouseholdCategoryUpsertRequest):
+    return _household_request("POST", "/api/household/categories", {
+        "code": req.code,
+        "label_id": req.label_id,
+        "sort_order": req.sort_order,
+    })
+
+
+@app.put("/api/household/categories/{code}", dependencies=[Depends(require_api_key), Depends(require_writable)])
+def patch_household_category(code: str, req: HouseholdCategoryUpsertRequest):
+    return _household_request("PUT", f"/api/household/categories/{code}", {
+        "code": req.code,
+        "label_id": req.label_id,
+        "sort_order": req.sort_order,
+    })
+
+
+@app.delete("/api/household/categories/{code}", dependencies=[Depends(require_api_key), Depends(require_writable)])
+def delete_household_category(code: str):
+    return _household_request("DELETE", f"/api/household/categories/{code}")
+
+
+@app.put("/api/household/cash-pools/{pool_id}", dependencies=[Depends(require_api_key), Depends(require_writable)])
+def put_household_cash_pool(pool_id: str, req: HouseholdCashPoolUpdateRequest):
+    body = {
+        key: value
+        for key, value in {
+            "remaining_amount": req.remaining_amount,
+            "adjustment_amount": req.adjustment_amount,
+            "notes": req.notes,
+            "status": req.status,
+        }.items()
+        if value is not None
+    }
+    return _household_request("PUT", f"/api/household/cash-pools/{pool_id}", body)
+
+
+# ── /api/categories ───────────────────────────────────────────────────────────
 
 @app.get("/api/owners", dependencies=[Depends(require_api_key)])
 def get_owners():
@@ -1328,6 +1444,27 @@ def get_owners():
             "WHERE owner != '' ORDER BY owner"
         ).fetchall()
     return [r[0] for r in rows]
+
+
+# ── /api/accounts ─────────────────────────────────────────────────────────────
+
+@app.get("/api/accounts", dependencies=[Depends(require_api_key)])
+def get_accounts():
+    """Return distinct accounts with institution and owner for display labels."""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT account, institution, owner FROM transactions "
+            "WHERE account IS NOT NULL AND account != '' ORDER BY owner, institution, account"
+        ).fetchall()
+    return [
+        {
+            "account": r[0],
+            "institution": r[1] or "",
+            "owner": r[2] or "",
+            "label": f"{r[0]}  ({r[1] or '?'}, {r[2] or '?'})",
+        }
+        for r in rows
+    ]
 
 
 # ── /api/categories ───────────────────────────────────────────────────────────
@@ -1436,6 +1573,7 @@ def get_transactions(
     year:     Optional[int] = Query(None, description="Filter by calendar year"),
     month:    Optional[int] = Query(None, ge=1, le=12, description="Filter by month (1–12)"),
     owner:    Optional[str] = Query(None, description="Owner name, or omit for all"),
+    account:  Optional[str] = Query(None, description="Account number/name, or omit for all"),
     category: Optional[str] = Query(None, description="Exact category match"),
     category_group: Optional[str] = Query(None, description="Category group match"),
     uncategorised_only: bool = Query(False, description="Only transactions with no resolved category"),
@@ -1444,7 +1582,7 @@ def get_transactions(
     limit:    int           = Query(100, ge=1, le=1000),
     offset:   int           = Query(0, ge=0),
 ):
-    qp = _tx_where(year, month, owner, category, category_group, uncategorised_only, q, income_only=income_only)
+    qp = _tx_where(year, month, owner, category, category_group, uncategorised_only, q, income_only=income_only, account=account)
     with _db() as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM transactions_resolved{qp.clause}", qp.params).fetchone()[0]
         rows  = conn.execute(
@@ -1493,6 +1631,7 @@ def _tx_where(
     uncategorised_only: bool,
     q:        Optional[str],
     income_only: bool = False,
+    account:  Optional[str] = None,
 ) -> _QueryParts:
     """Build a WHERE clause + params list for transaction queries."""
     conditions: list[str] = []
@@ -1523,6 +1662,9 @@ def _tx_where(
         escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         conditions.append("(raw_description LIKE ? ESCAPE '\\' OR merchant LIKE ? ESCAPE '\\')")
         params += [f"%{escaped_q}%", f"%{escaped_q}%"]
+    if account:
+        conditions.append("account = ?")
+        params.append(account)
 
     clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     return _QueryParts(clause, params)

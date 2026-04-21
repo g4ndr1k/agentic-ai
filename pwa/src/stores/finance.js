@@ -11,6 +11,7 @@ const HIDE_NUMBERS_KEY = 'finance.hideNumbers'
 const CACHE_KEYS = {
   health: 'finance.health',
   owners: 'finance.owners',
+  accounts: 'finance.accounts',
   categories: 'finance.categories',
   years: 'finance.years',
 }
@@ -55,6 +56,7 @@ function debounce(fn, ms) {
 
 export const useFinanceStore = defineStore('finance', () => {
   const owners = ref([])
+  const accounts = ref([])
   const categories = ref([])
   const years = ref([])
   const health = ref(null)
@@ -157,6 +159,16 @@ export const useFinanceStore = defineStore('finance', () => {
     }
   }
 
+  async function loadAccounts(options = {}) {
+    try {
+      await loadCachedResource(CACHE_KEYS.accounts, (requestOptions) => api.accounts(requestOptions), (value) => {
+        accounts.value = value
+      }, options)
+    } catch {
+      // no cached fallback available
+    }
+  }
+
   async function loadCategories(options = {}) {
     try {
       await loadCachedResource(CACHE_KEYS.categories, (requestOptions) => api.categories(requestOptions), (value) => {
@@ -237,7 +249,7 @@ export const useFinanceStore = defineStore('finance', () => {
   async function bootstrap(options = {}) {
     // Load server preferences first so dashboard range is authoritative
     await _loadServerPreferences()
-    await Promise.all([loadHealth(options), loadOwners(options), loadCategories(options), loadYears(options)])
+    await Promise.all([loadHealth(options), loadOwners(options), loadAccounts(options), loadCategories(options), loadYears(options)])
   }
 
   function setAutoAiRefine(value) {
@@ -251,11 +263,11 @@ export const useFinanceStore = defineStore('finance', () => {
   }
 
   return {
-    owners, categories, years, health, reviewCount, isReadOnly, autoAiRefine,
+    owners, accounts, categories, years, health, reviewCount, isReadOnly, autoAiRefine,
     selectedYear, selectedMonth, selectedOwner,
     dashboardStartMonth, dashboardEndMonth,
     categoryMap, categoryNames, dashboardMonthOptions, dashboardRangeLabel,
-    loadHealth, loadOwners, loadCategories, loadYears,
+    loadHealth, loadOwners, loadAccounts, loadCategories, loadYears,
     decrementReviewCount, setReviewCount, setDashboardRange, setAutoAiRefine, setHideNumbers, bootstrap,
     hideNumbers,
   }

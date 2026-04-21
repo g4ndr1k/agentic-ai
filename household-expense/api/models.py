@@ -67,10 +67,23 @@ class TransactionResponse(BaseModel):
 
 # ── Categories ────────────────────────────────────────────────────────
 
+class CategoryCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    label_id: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=99, ge=0, le=999)
+
+
+class CategoryUpdate(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    label_id: str = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=99, ge=0, le=999)
+
+
 class CategoryResponse(BaseModel):
     code: str
     label_id: str
     sort_order: int
+    is_active: int
 
 
 # ── Cash pools ────────────────────────────────────────────────────────
@@ -80,6 +93,16 @@ class CashPoolCreate(BaseModel):
     funded_amount: int = Field(gt=0, le=999_999_999)
     funded_at: str = Field(min_length=1, max_length=30)
     notes: str = Field(default="", max_length=500)
+
+
+class CashPoolUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    funded_amount: int | None = Field(default=None, gt=0, le=999_999_999)
+    funded_at: str | None = Field(default=None, min_length=1, max_length=30)
+    remaining_amount: int | None = Field(default=None, ge=0, le=999_999_999)
+    adjustment_amount: int | None = Field(default=None, ge=-999_999_999, le=999_999_999)
+    status: str | None = Field(default=None, max_length=50)
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class CashPoolResponse(BaseModel):

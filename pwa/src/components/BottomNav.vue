@@ -26,6 +26,10 @@ const store = useFinanceStore()
       <span class="nav-icon">🧾</span>
       <span class="nav-label">Txns</span>
     </RouterLink>
+    <RouterLink to="/goal" class="nav-item">
+      <span class="nav-icon">🎯</span>
+      <span class="nav-label">Goal</span>
+    </RouterLink>
     <RouterLink to="/review" class="nav-item">
       <span class="nav-icon">🔎</span>
       <span class="nav-label">Review</span>

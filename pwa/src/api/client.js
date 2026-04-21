@@ -196,6 +196,7 @@ async function patchQueued(path, body = {}) {
 export const api = {
   health: (options = {}) => get('/health', {}, options),
   owners: (options = {}) => get('/owners', {}, options),
+  accounts: (options = {}) => get('/accounts', {}, options),
   categories: (options = {}) => get('/categories', {}, options),
   saveCategoryDefinition: (body) => post('/categories', body),
   transactions: (p = {}, options = {}) => get('/transactions', p, options),
@@ -239,6 +240,13 @@ export const api = {
   manualBackup: () => post('/backups/manual'),
   nasSyncStatus: (options = {}) => get('/nas-sync/status', {}, options),
   nasSync: () => post('/nas-sync'),
+
+  householdSettings: (options = {}) => get('/household/settings', {}, options),
+  createHouseholdCategory: (body) => post('/household/categories', body),
+  updateHouseholdCategory: (code, body) => put(`/household/categories/${code}`, body),
+  deleteHouseholdCategory: (code) => del(`/household/categories/${code}`),
+  updateHouseholdTransactionCategory: (id, body) => put(`/household/transaction/${id}/category`, body),
+  updateHouseholdCashPool: (id, body) => put(`/household/cash-pools/${id}`, body),
 
   preferences: (options = {}) => get('/preferences', {}, options),
   savePreferences: (body) => put('/preferences', body),

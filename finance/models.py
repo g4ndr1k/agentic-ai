@@ -66,7 +66,7 @@ def make_hash(date: str, amount: float,
               raw_description: str, institution: str,
               owner: str, account: str = "") -> str:
     """
-    16-hex-char dedup fingerprint.
+    32-hex-char dedup fingerprint.
     Deterministic: same inputs always produce the same hash.
     """
     key = f"{date}|{amount:.2f}|{raw_description}|{institution}|{owner}|{account}"
@@ -117,6 +117,7 @@ def parse_xlsx_date(val) -> Optional[str]:
     m = re.match(r"^(\d{1,2})-(\d{2})-(\d{2})$", s)
     if m:
         d, mo, yr_raw = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        # TODO: revisit before 2080 — heuristic breaks for yr_raw >= 80 in 2080+
         century = "19" if yr_raw >= 80 else "20"
         yr = int(f"{century}{yr_raw:02d}")
         if _validate_date(yr, mo, d):

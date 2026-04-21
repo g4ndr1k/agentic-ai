@@ -9,7 +9,9 @@ class FixedDateTime:
     _current = datetime(2026, 4, 16, 12, 0, 0)
 
     @classmethod
-    def now(cls):
+    def now(cls, tz=None):
+        if tz is not None:
+            return cls._current.astimezone(tz) if cls._current.tzinfo else cls._current.replace(tzinfo=tz)
         return cls._current
 
     @classmethod
@@ -79,6 +81,15 @@ def test_backup_status_reports_each_tier_and_due_state(tmp_path, monkeypatch):
     assert status['weekly']['status'] == 'missing'
     assert status['manual']['count'] == 1
     assert status['manual']['latest_file'].endswith('finance_manual_20260416_113000.db')
+
+
+def test_resolve_backup_dir_prefers_env_override(tmp_path, monkeypatch):
+    env_backup_root = tmp_path / 'env-backups'
+    monkeypatch.setenv('FINANCE_BACKUP_DIR', str(env_backup_root))
+
+    resolved = backup._resolve_backup_dir(None)
+
+    assert resolved == env_backup_root
 
 
 def test_sync_to_nas_uses_latest_backup_available(tmp_path, monkeypatch):

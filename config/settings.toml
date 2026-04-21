@@ -151,3 +151,10 @@ cors_origins = ["http://localhost:5173", "https://adrianto.synology.me:8443"]
 host            = "http://localhost:11434"
 model           = "gemma4:e2b"
 timeout_seconds = 60
+
+[household]
+base_url = "http://192.168.1.44:8088"
+api_key_file = "/Users/g4ndr1k/agentic-ai/household-expense/secrets/household_api.key"
+
+[backups]
+dir = "/Users/g4ndr1k/agentic-ai/data/backups"

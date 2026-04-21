@@ -607,6 +607,18 @@ def _upsert_closing_balance(result, logs: list):
             # Fall back to owner_mappings keyed by account number.
             owner = result.owner or owner_mappings.get(str(account_id), "")
 
+            # ── Skip RDN-linked brokerage cash accounts ───────────────────────
+            # These duplicate the Permata/BCA RDN statement balances for the same
+            # underlying accounts.  Transactions are already auto-ignored by
+            # _auto_ignore_merchant() in importer.py; skip balances too.
+            inst_lower = result.bank.lower()
+            if inst_lower == "ipot" and str(account_id) == "R10001044423":
+                continue
+            if inst_lower == "bni sekuritas" and str(account_id) == "23ON83941":
+                continue
+            if inst_lower == "stockbit sekuritas" and str(account_id) == "0501074":
+                continue
+
             # ── Currency & IDR value ───────────────────────────────────────
             currency = acct.currency or "IDR"
 

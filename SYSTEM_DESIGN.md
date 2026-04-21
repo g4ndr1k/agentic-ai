@@ -1,8 +1,8 @@
 # Agentic Mail Alert & Personal Finance System — Build & Operations Guide
 
-**Version:** 3.19.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅ · Public homepage with Snake game live ✅ · Multi-provider IMAP (Gmail + iCloud) ✅ · Household Expense PWA on NAS ✅
+**Version:** 3.20.0 · Stage 1 complete · Stage 2 SQLite migration complete · Stage 3 fully built ✅ · NAS read-only replica live ✅ · Security hardening applied ✅ · Public homepage with Snake game live ✅ · Multi-provider IMAP (Gmail + iCloud) ✅ · Household Expense PWA on NAS ✅ · Goal view (Investment Income tracking) ✅
 **Platform:** Apple Silicon Mac · macOS · Synology DS920+ (AMD64 Docker)
-**Last validated against:** checked-in codebase 2026-04-20
+**Last validated against:** checked-in codebase 2026-04-21
 
 ---
 
@@ -214,14 +214,14 @@ The system alerts on:
   - 3-layer parsing: pdfplumber tables → Python regex → Ollama LLM fallback
   - Multi-owner XLS export: `{Bank}_{Owner}.xlsx` per bank/owner pair + flat `ALL_TRANSACTIONS.xlsx` with Owner column
   - Mail.app attachment folder auto-scanner for bank PDFs (reads `~/Library/Mail/…/Attachments/`)
-  - Auto-upsert pipeline in `bridge/pdf_handler.py` after every portfolio parse: savings/consol closing balance → `account_balances`; bond holdings → `holdings`; mutual-fund holdings → `holdings`; equity/fund holdings with month-end gap-fill → `holdings`; RDN cash balance → `account_balances`; when a known owner (not "Unknown") is resolved, stale `owner='Unknown'` rows for the same snapshot date and institution are deleted to prevent double-counting from earlier imports that lacked owner_mappings
+  - Auto-upsert pipeline in `bridge/pdf_handler.py` after every portfolio parse: savings/consol closing balance → `account_balances`; bond holdings → `holdings`; mutual-fund holdings → `holdings`; equity/fund holdings with month-end gap-fill → `holdings`; RDN cash balance → `account_balances`; **RDN-linked brokerage cash accounts are skipped** (IPOT `R10001044423`, BNI Sekuritas `23ON83941`, Stockbit Sekuritas `0501074`) because their balances duplicate the underlying bank RDN accounts (Permata `9912259088`/`9916181458`, BCA `04952478749`); when a known owner (not "Unknown") is resolved, stale `owner='Unknown'` rows for the same snapshot date and institution are deleted to prevent double-counting from earlier imports that lacked owner_mappings
   - Gap-fill logic — carries the most recent brokerage holdings forward month-by-month (INSERT OR IGNORE) until either the current month or the first month that already has data for that institution, preventing dashboard gaps between monthly PDFs
   - End-to-end bridge pipeline orchestrator (`bridge/pipeline.py`) with scheduled runs, manual trigger/status endpoints, import/backup chaining, month-complete notification tracking, and recursive scanning of nested folders inside `data/pdf_inbox/`
 - Stage 2 finance package (`finance/`) — see §25–33
   - `finance/config.py` — loads `[finance]`, `[fastapi]`, and `[ollama_finance]` sections from `settings.toml`
   - `finance/models.py` — `FinanceTransaction` dataclass, SHA-256 hash generation (`date|amount|description|institution|owner|account`), XLSX date parser with calendar validation and DD-MM-YY century heuristic
   - `finance/categorizer.py` — account-aware categorization engine: normalized exact alias → token-aware contains alias (specificity-sorted by length) → regex → Ollama AI suggestion (retry wrapper, `format_json=True` for Gemma 4 JSON-mode reliability) → review queue flag, plus cross-account internal transfer matching; alias matching now tolerates inserted timestamps / transfer codes by tokenizing descriptions and dropping volatile numeric fragments; filtered rules (owner/account) are sorted before generic rules so they always win on conflict; `Categorizer.__init__()` persists `ollama_host`/`ollama_model`/`ollama_timeout` on the instance for all Layer 3 calls
-  - `finance/importer.py` — CLI entry point and `direct_import()` implementation: reads `ALL_TRANSACTIONS.xlsx`, maps columns, deduplicates by hash, categorizes, and writes directly to SQLite; after import it also auto-syncs the carried real-estate holding `Grogol 2` from any transactions whose `raw_description` contains `Teguh Pranoto Chen`, using 2026-01-31 as a zero-value baseline and rolling the cumulative value month-by-month into the `holdings` table; `--dry-run`, `--overwrite`, `--file`, `-v`
+  - `finance/importer.py` — CLI entry point and `direct_import()` implementation: reads `ALL_TRANSACTIONS.xlsx`, maps columns, deduplicates by hash, categorizes, and writes directly to SQLite; includes `_auto_ignore_merchant()` which auto-sets `category="Ignored"` for RDN-linked brokerage transactions (IPOT Client Statement → `IPOT RDN`, BNI Sekuritas → `BNIS RDN`, Stockbit Sekuritas → `Stockbit RDN`) to prevent double-counting against the underlying bank RDN statements; after import it also auto-syncs the carried real-estate holding `Grogol 2` from any transactions whose `raw_description` contains `Teguh Pranoto Chen`, using 2026-01-31 as a zero-value baseline and rolling the cumulative value month-by-month into the `holdings` table; `--dry-run`, `--overwrite`, `--file`, `-v`
   - `finance/ollama_utils.py` — shared Ollama retry wrapper with exponential backoff (1s, 2s, 4s); retries on `URLError`, `TimeoutError`, `ConnectionError`; optional `format_json=True` forces Ollama JSON-mode output (`"format": "json"` in payload); uses streaming aggregation (`stream=True`) because `gemma4:e4b` can return empty `response` payloads in non-stream mode; used by categorizer and API AI endpoints
   - `finance/db.py` — authoritative SQLite schema with WAL mode, `busy_timeout=5000`, `secure_delete=ON`, `auto_vacuum=FULL`, schema version tracking, `category_overrides`, `import_log`, `audit_log`, `owner_mappings`, `user_preferences` (server-side key/value store for dashboard range and other cross-device settings), and the `transactions_resolved` view; `merchant_aliases` includes `owner_filter`/`account_filter` with UNIQUE constraint; `transactions` stores nullable `ollama_suggestion` and `suggested_merchant` so Layer 3 review-queue hints survive reloads
   - `finance/backup.py` — online SQLite backup helper using `sqlite3.Connection.backup()` with pruning and restrictive file permissions; NAS sync uses `shlex.quote()` on remote path and raises `FileNotFoundError` if an explicitly configured SSH key file is missing
@@ -233,11 +233,11 @@ The system alerts on:
   - `pwa/src/views/Dashboard.vue` — restored Flows view: month/owner navigation, summary cards, **spending by group** rollup with category chips, Chart.js 12-month trend, owner split table, and desktop-only higher-contrast Monthly Trend explanation styling for readability in the dark shell
   - `pwa/src/views/GroupDrilldown.vue` — Level 1 drill-down: group → category list with amounts, tx counts, mini bar chart
   - `pwa/src/views/CategoryDrilldown.vue` — Level 2 drill-down: category → transaction list with inline edit (merchant, category, alias, notes, apply-to-similar); breadcrumb back to group
-  - `pwa/src/views/Transactions.vue` — year/month/owner/category-group/category/search filters, paginated list (50/page), uncategorised-only filter, mobile expandable detail rows, desktop sortable table + detail panel; category-group filtering is resolved server-side via the `categories.category_group` reference data; transaction fetches bypass the long-lived GET cache so review status and category changes stay current; AI AMA input box (natural-language query → `POST /api/ai/query` → applies filters client-side); AI mode active banner with clear button; standard filter bars muted while AI mode active
+  - `pwa/src/views/Transactions.vue` — unified filter panel card with 6-column labelled grid (year, month, owner, account with institution+owner labels sorted by owner→institution, category group, category), full-width search bar, and conditional reset button; server-side `account` filter param for exact match; supports deep-link query params (`year`, `month`, `owner`, `account`, `categoryGroup`, `category`, `q`) so the Call Over and Goal views can navigate to pre-filtered transactions; uses both `onMounted` and `onActivated` to re-sync filters from query params — required because the component is kept alive via `<KeepAlive>` and `onMounted` only fires on first render; paginated list (50/page), uncategorised-only filter, mobile expandable detail rows, desktop sortable table + detail panel; category-group filtering is resolved server-side via the `categories.category_group` reference data; transaction fetches bypass the long-lived GET cache so review status and category changes stay current; AI AMA input box (natural-language query → `POST /api/ai/query` → applies filters client-side); AI mode active banner with clear button; standard filter bars muted while AI mode active
   - `pwa/src/views/ReviewQueue.vue` — inline alias form on mobile; desktop two-pane review workspace; toast feedback; review queue fetches bypass the 24-hour GET cache so desktop badge counts and queue contents stay consistent; on load it fires `POST /api/review-queue/suggest` in the background, refreshes when new hints arrive, shows a 🤖 badge for AI-enriched rows, and pre-fills merchant/category from `suggested_merchant` + `ollama_suggestion` while still requiring explicit user confirmation
   - `pwa/src/views/ForeignSpend.vue` — foreign transactions grouped by currency, per-currency subtotals, flag emojis
   - `pwa/src/views/Adjustment.vue` — focused adjustment view (`/adjustment`): quick inline editing of market value, appraisal/statement date, and unrealized P&L for Real Estate and Jamsostek/Retirement holdings only; month picker reuses the same `wealthSnapshotDates` + `collapseMonthDates` pattern as Holdings; post-save `getHoldings` uses `forceFresh: true` to bypass the mobile-only 24 h IndexedDB cache so the updated value is immediately visible; `unrealised_pnl_idr` is preserved from the holding (not recalculated from cost basis) and exposed as an editable field to allow correction of previously stored values
-  - `pwa/src/views/Audit.vue` — tabbed Audit section (`/audit`): **Call Over** tab (default) — side-by-side two-month asset comparison with variance; **PDF Completeness** tab — document completeness audit grid embedded via `AuditCompleteness.vue`; Call Over resolves the two latest months within `dashboardStartMonth`–`dashboardEndMonth`, fetches balances + holdings for both, deduplicates by month-key, and renders a grouped table (Cash & Liquid, Investments, Real Estate, Physical Assets) with per-row ▲/▼ variance, group subtotals, and grand total; assets present in one month but not the other show "—"; all rows sorted by biggest movers first; theme-aware styles with desktop dark-mode overrides
+  - `pwa/src/views/Audit.vue` — tabbed Audit section (`/audit`): **Call Over** tab (default) — side-by-side two-month asset comparison with variance; Cash & Liquid balance cells are clickable and navigate to `/transactions?year=…&month=…&account=…` with filters pre-populated; **PDF Completeness** tab — document completeness audit grid embedded via `AuditCompleteness.vue`; Call Over resolves the two latest months within `dashboardStartMonth`–`dashboardEndMonth`, fetches balances + holdings for both, deduplicates by month-key, and renders a grouped table (Cash & Liquid, Investments, Real Estate, Physical Assets) with per-row ▲/▼ variance, group subtotals, and grand total; assets present in one month but not the other show "—"; all rows sorted by biggest movers first; theme-aware styles with desktop dark-mode overrides
   - `pwa/src/views/AuditCompleteness.vue` — document completeness audit grid (now embedded as a child tab inside Audit.vue): rows=bank entities, columns=last 3 months, cells=PDF filenames or ❌ Missing; "missing" is flagged only when an entity has files in other months but not this one (new entities with no files in any month show "—"); powered by `GET /api/audit/completeness`; Refresh button and `onMounted` both bypass the IndexedDB cache (`forceFresh: true`) so the view always reflects the current filesystem state
   - `pwa/src/views/Settings.vue` — Sync + Import actions, pipeline run/status card, API health status card, category editor (create + edit + rename existing categories with metadata such as icon/group/subcategory/budget/recurring), grouped PDF workspace, hash-retained PDF processing state, recursive subfolder support, persisted dashboard month-range controls, and a manual “Refresh Mobile Data Now” action for the iPhone PWA cache
   - `pwa/src/composables/useLayout.js` — responsive layout detection + persisted manual desktop override for wide-screen use
@@ -245,7 +245,7 @@ The system alerts on:
   - `pwa/src/components/AppHeader.vue` — route-aware mobile header with sync status pill (red dot when offline) and `🙈/👁` privacy toggle button; tap sets `store.hideNumbers` and persists to `localStorage` (key `finance.hideNumbers`, default `true` so amounts are hidden on first open)
   - `pwa/src/components/` + `pwa/src/layouts/` — extracted shell pieces for mobile header/nav, desktop sidebar, desktop transactions table, and desktop review workspace; mobile offline state is indicated by the header status dot turning red instead of showing a blocking banner
   - `pwa/src/composables/useOfflineSync.js` — connectivity detection via periodic heartbeat (`GET /ping`, 30 s interval, 5 s `AbortController` timeout); catches `TypeError` (ERR_CONNECTION_REFUSED) and `AbortError` (ETIMEDOUT); probes immediately on mount and on tab foreground; browser `offline` event triggers immediate offline transition; `online` event triggers a probe rather than blindly trusting the OS signal; on recovery drains IndexedDB sync queue then calls the `onReconnect` callback
-  - `pwa/src/stores/finance.js` — Pinia store: shared owners, categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation, optional `forceFresh` bootstrap/resource loading for desktop and explicit refresh paths, `hideNumbers` ref (default `true`) + `setHideNumbers()` for the global privacy toggle, and **server-backed preferences**: on `bootstrap()` the store fetches `GET /api/preferences` and overrides localStorage values so the dashboard range is consistent across browsers and survives hard refreshes; `setDashboardRange()` debounces a `PUT /api/preferences` call (500 ms) so changes persist server-side while still writing to localStorage for instant local recovery
+  - `pwa/src/stores/finance.js` — Pinia store: shared owners, accounts (distinct account numbers with institution/owner labels), categories, years, selectedYear/Month (initialized to `dashboardEndMonth` so Flows/Wealth/Assets open on the configured range end, not the current calendar month), reviewCount badge, reactive `currentMonthKey` computed property, dashboard month range with upper-bound validation, optional `forceFresh` bootstrap/resource loading for desktop and explicit refresh paths, `hideNumbers` ref (default `true`) + `setHideNumbers()` for the global privacy toggle, and **server-backed preferences**: on `bootstrap()` the store fetches `GET /api/preferences` and overrides localStorage values so the dashboard range is consistent across browsers and survives hard refreshes; `setDashboardRange()` debounces a `PUT /api/preferences` call (500 ms) so changes persist server-side while still writing to localStorage for instant local recovery
   - `pwa/src/api/client.js` — thin `fetch` wrapper for all 25+ API endpoints including category-definition writes (`POST /api/categories`); successful GETs are persisted to IndexedDB, reused for up to 24 hours only on the iPhone/mobile PWA, and offline GETs fall back to cached responses on both mobile and desktop; desktop layouts bypass the long-lived 24-hour TTL and hit the network by default (determined from `pwa_layout_mode` / `useLayout` viewport rules); mutation endpoints queue offline writes; selected calls can pass `forceFresh: true` to bypass cached GET data explicitly; direct non-queued calls are used for latency-sensitive actions such as `enrichReviewQueue()` (`POST /api/review-queue/suggest`) and Settings category edits; `console.warn` when API key is not configured
   - `pwa/src/sw.js` — workbox service worker: static assets (`StaleWhileRevalidate`, 7-day expiry); `/api/wealth/*` GETs use `NetworkFirst` (8 s timeout, 10-min cache) so POST mutations are immediately reflected in subsequent GETs; all other `/api/*` GETs use `StaleWhileRevalidate` (10-min expiry); audit and workspace endpoints (`/api/audit/`, `/api/pdf/local-workspace`) are excluded from SW caching so they always hit the network; mutation endpoints (`/sync`, `/import`, `/alias`, `/api/ai/*`) use `NetworkFirst` with 10 s timeout; `skipWaiting` + `clientsClaim` so new deployments take over all open tabs immediately
   - `pwa/vite.config.js` — @vitejs/plugin-vue + vite-plugin-pwa (`injectManifest`) + `/api` proxy to `:8090`
@@ -259,11 +259,12 @@ The system alerts on:
   - `pwa/src/views/MainDashboard.vue` — root landing page (`/`): premium desktop-first dashboard with total net worth hero, 30-day change, Chart.js asset-allocation doughnut, Chart.js assets-over-time bar chart, Chart.js cash-flow summary line chart, and a compact KPI stack embedded beside the allocation chart for better iPad/desktop proportions; all filtered by a user-selected month range (hard floor: Jan 2026)
   - `pwa/src/views/Wealth.vue` — net worth dashboard: arrow month navigation, hero net-worth card with MoM change, asset-group breakdown bars with sub-category chips, month-over-month movement card, AI explanation panel, Chart.js trend, "Refresh Snapshot" button, FAB to Assets
   - `pwa/src/views/Holdings.vue` — asset manager: group filter tabs (All/Cash/Investments/Real Estate/Physical), snapshot date picker, per-item delete, FAB → bottom-sheet modal with 2-mode entry form (Balance / Holding), "Save Snapshot" button; ↺ inline refresh button in month-nav bar; holdings/balance fetches use `forceFresh: true` so newly added wealth items (for example `Grogol 2`) are visible immediately on desktop instead of being hidden behind stale IndexedDB GET cache
+  - `pwa/src/views/Goal.vue` — Investment Income goal tracker (`/goal`): tracks progress toward Rp 600M/year target using `Investment Income` category only; summary stats (YTD total, monthly average, % of annual goal, on-track indicator); Chart.js monthly bar chart with dashed Rp 50M/month target line; Chart.js cumulative progress line vs prorated goal; month breakdown table with clickable amounts that drill to pre-filtered Transactions view (`category=Investment Income` + `year`/`month`); follows `dashboardStartMonth`–`dashboardEndMonth` range
   - `pwa/src/api/client.js` — extended with 13 new wealth API calls + `del()` helper
-  - `pwa/src/router/index.js` — root dashboard at `/`, restored Flows view at `/flows`, plus `/wealth`, `/holdings`, `/audit` (tabbed: Call Over + PDF Completeness), and `/adjustment` (keepAlive)
-  - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; desktop bootstrap forces fresh shared data while the iPhone/mobile PWA keeps the 24-hour cache policy; mobile bottom nav and desktop sidebar expose Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, and Settings/More
-  - `pwa/src/components/BottomNav.vue` — mobile bottom nav: Dashboard, Flows, Wealth, Assets, Txns, Review, Adjust, More
-  - `pwa/src/components/DesktopSidebar.vue` — desktop sidebar: Dashboard, Flows, Wealth, Assets, Transactions, Review, Foreign Spend, Adjustment, Audit, Settings
+  - `pwa/src/router/index.js` — root dashboard at `/`, restored Flows view at `/flows`, plus `/wealth`, `/holdings`, `/audit` (tabbed: Call Over + PDF Completeness), `/adjustment`, and `/goal` (Investment Income goal tracker, keepAlive)
+  - `pwa/src/App.vue` — shell switcher between mobile and desktop layouts; route-aware title; desktop bootstrap forces fresh shared data while the iPhone/mobile PWA keeps the 24-hour cache policy; mobile bottom nav and desktop sidebar expose Dashboard, Flows, Wealth, Assets, Transactions, Goal, Review, Foreign Spend, Adjustment, Audit, and Settings/More
+  - `pwa/src/components/BottomNav.vue` — mobile bottom nav: Dashboard, Flows, Wealth, Assets, Txns, Goal, Review, Adjust, More
+  - `pwa/src/components/DesktopSidebar.vue` — desktop sidebar: Dashboard, Flows, Wealth, Assets, Transactions, Goal, Review, Foreign Spend, Adjustment, Audit, Settings
 - NAS Read-Only Replica (`docker-compose.nas.yml`, `finance/backup.py`, `finance/api.py`, `pwa/`) — see §41
   - `FINANCE_READ_ONLY` env flag — when `true`, all write endpoints return 403; `GET /api/health` exposes `"read_only": true`
   - `require_writable` dependency guarded on 15+ write routes (aliases, backfill, category edits, import, wealth CRUD, review-queue suggest, nas-sync)
@@ -499,7 +500,7 @@ agentic-ai/
 │           ├── ReviewQueue.vue       # Mobile/desktop review workspace + background AI suggestion enrichment + toast + prefilled confirm form
 │           ├── ForeignSpend.vue      # Grouped by currency, per-currency subtotals
 │           ├── Adjustment.vue        # Quick value + date + P&L edit for Real Estate and Jamsostek holdings
-│           ├── Audit.vue             # Tabbed audit: Call Over (2-month asset comparison w/ variance) + PDF Completeness
+│           ├── Audit.vue             # Tabbed audit: Call Over (2-month asset comparison w/ variance + drill-to-transactions) + PDF Completeness
 │           └── Settings.vue          # Sync, Import, pipeline controls, health status, dashboard range selector, grouped PDF workspace
 ├── config/
 │   └── settings.toml             # All runtime configuration (Stage 1 + Stage 2 sections)
@@ -2474,6 +2475,22 @@ The following categories are excluded from income and expense totals across all 
 
 These exclusions apply to: Flows view income/expense bars, Transactions view totals, the `income_only` filter, and the income/expense KPI cards.
 
+### RDN-linked brokerage auto-ignore
+
+Three brokerage accounts are linked to bank RDN (Rekening Dana Nasabah) accounts and would cause double-counting if imported as active transactions:
+
+| Brokerage | Broker Account | Underlying Bank RDN | Auto-ignore Merchant |
+|---|---|---|---|
+| IPOT (Indo Premier) | `R10001044423` | Permata `9912259088` | `IPOT RDN` |
+| BNI Sekuritas | `23ON83941` | Permata `9916181458` | `BNIS RDN` |
+| Stockbit Sekuritas | `0501074` | BCA `04952478749` | `Stockbit RDN` |
+
+Two mechanisms enforce this:
+
+1. **Transaction auto-ignore** (`finance/importer.py` `_auto_ignore_merchant()`): During import, transactions matching these institution/stmt_type combinations are auto-classified as `category="Ignored"` with the corresponding RDN merchant label. They remain visible in the Audit View (Ignored list) but are excluded from income/expense/net-worth calculations.
+
+2. **Balance exclusion** (`bridge/pdf_handler.py`): The auto-upsert pipeline skips `account_balances` rows for these brokerage accounts, preventing their cash balances from inflating the Assets → Cash & Liquid total. The underlying bank RDN accounts carry the correct balances.
+
 ---
 
 ## 29. Stage 2 SQLite Authoritative Store
@@ -2522,9 +2539,10 @@ Because the upstream Sheets workbook is no longer maintained, re-running this sc
 
 - `GET  /api/health`
 - `GET  /api/owners`
+- `GET  /api/accounts` — distinct account numbers with `institution` and `owner` for display labels; sorted by `owner, institution, account`
 - `GET  /api/categories`
 - `POST /api/categories`
-- `GET  /api/transactions` — optional query params: `income_only=true` (returns `amount >= 0` rows excluding transfer/adjustment/ignored/opening-balance categories), `category_group`, `category`, `owner`, `institution`, `search`, `limit`, `offset`, `date_from`, `date_to`
+- `GET  /api/transactions` — optional query params: `income_only=true` (returns `amount >= 0` rows excluding transfer/adjustment/ignored/opening-balance categories), `category_group`, `category`, `owner`, `account` (exact match on account number/name), `uncategorised_only`, `q` (search raw_description and merchant), `limit`, `offset`
 - `GET  /api/transactions/foreign`
 - `GET  /api/summary/years`
 - `GET  /api/summary/year/{year}`
@@ -2884,10 +2902,23 @@ The save correctly updates the "appraised YYYY-MM-DD" date displayed in the Asse
 - `forceFresh: true` → skips the 24 h IndexedDB cache in `client.js`
 - SW `NetworkFirst` on `/api/wealth/*` → ensures the fresh GET after save hits the network, not the SW cache
 
+### `Goal.vue` (`/goal`)
+
+Investment Income goal tracker. Tracks progress toward a **Rp 600,000,000/year** target using the `Investment Income` category only.
+
+- **Summary stats row**: Annual Goal · YTD Investment Income · Monthly Average · % of Annual Goal achieved · on-track / behind indicator (compares YTD total against prorated monthly target × months elapsed)
+- **Monthly bar chart**: per-month `Investment Income` bars (green) with a dashed orange monthly target line (Rp 50M) rendered via Chart.js; bars darker green when target is met
+- **Cumulative progress line chart**: cumulative actual (green fill) vs prorated goal curve (dashed orange); individual data points coloured green (on track) or red (behind)
+- **Month Breakdown table**: per-month row showing Investment Income amount, monthly target, and variance; **amount cell is clickable** — tapping navigates to `/transactions?year=…&month=…&category=Investment+Income` so the user can inspect the underlying transactions
+- Follows `store.dashboardStartMonth`–`store.dashboardEndMonth` range; reloads whenever the range changes
+- All API calls use `forceFresh: true` to bypass the IndexedDB cache so the view always reflects current data
+
+**Constants**: `GOAL_ANNUAL = 600_000_000`, `GOAL_MONTHLY = 50_000_000`, `TARGET_CATEGORY = 'Investment Income'`
+
 ### `Audit.vue` (`/audit`)
 
 Tabbed audit view:
-- **Call Over** tab (default): side-by-side two-month asset comparison with ▲/▼ variance per row, group subtotals, grand total; assets present in only one month show "—"; sorted by biggest movers
+- **Call Over** tab (default): side-by-side two-month asset comparison with ▲/▼ variance per row, group subtotals, grand total; assets present in only one month show "—"; sorted by biggest movers; **Cash & Liquid balance values are clickable** — tapping navigates to `/transactions?year=…&month=…&account=…` which pre-populates the filter panel on the Transactions view so the user can inspect the transactions behind that account balance for the selected month
 - **PDF Completeness** tab: embeds `AuditCompleteness.vue`
 
 ### `AuditCompleteness.vue`
@@ -3380,7 +3411,8 @@ This is a **satellite data source**, not a new Stage inside agentic-ai. It produ
 | LAN only | No Tailscale, no Cloudflare Tunnel, no HTTPS — in-house Wi-Fi only |
 | Port 8088 | Distinct from finance-api-nas (8090), homepage (3002/3003) |
 | Single user | Only the assistant logs expenses |
-| No cash pool UI | Cash pool schema exists in backend but hidden from PWA v1 |
+| Assistant UI stays simple | The Android-facing Household PWA remains focused on expense entry/history |
+| Desktop admin controls live in finance PWA | Category CRUD, transaction recategorisation, and cash-pool adjustment are exposed from the Mac Mini finance Settings view via direct proxy calls to the household API |
 | Manual reconciliation | Mac Mini triggers import via CLI, not scheduled or iMessage |
 | Build on Mac Mini | PWA built locally, rsync'd to NAS before Docker build |
 | NAS-local backup | Household DB backed up on NAS only, not in agentic-ai pipeline |
@@ -3397,8 +3429,8 @@ This is a **satellite data source**, not a new Stage inside agentic-ai. It produ
 │   ├── seed.py                          # Category + default user seeder
 │   └── routers/
 │       ├── transactions.py              # CRUD + soft-delete
-│       ├── categories.py                # Active category list
-│       ├── cash_pools.py                # Cash pool API (hidden from UI)
+│       ├── categories.py                # Category CRUD + active list
+│       ├── cash_pools.py                # Cash pool API + remaining-balance adjustments
 │       └── export.py                    # Export unreconciled + reconcile
 ├── pwa/                                 # Vue 3 + Vite + Tailwind PWA
 │   └── src/
@@ -3449,8 +3481,8 @@ Key tables:
 | Table | Role |
 |---|---|
 | `household_transactions` | Expenses with `client_txn_id` dedup, soft-delete, reconcile status |
-| `household_categories` | 15 categories with English `code` + Indonesian `label_id` |
-| `cash_pools` | ATM withdrawal tracking (backend only, hidden from PWA UI) |
+| `household_categories` | Categories with English `code`, Indonesian `label_id`, sort order, and soft-active flag |
+| `cash_pools` | ATM withdrawal tracking with editable remaining balance |
 | `app_users` | Single user: `kaksum` / bcrypt-hashed password |
 
 ### Authentication
@@ -3496,8 +3528,12 @@ API key is a 64-character hex token. Constant-time comparison using `hmac.compar
 | `PUT` | `/api/household/transactions/{id}` | Session | Update |
 | `DELETE` | `/api/household/transactions/{id}` | Session | Soft-delete |
 | `GET` | `/api/household/categories` | Session | Active categories |
+| `POST` | `/api/household/categories` | Session | Create category |
+| `PUT` | `/api/household/categories/{code}` | Session | Rename or edit category |
+| `DELETE` | `/api/household/categories/{code}` | Session | Soft-disable category |
 | `GET` | `/api/household/cash-pools` | Session | List pools |
 | `POST` | `/api/household/cash-pools` | Session | Create pool |
+| `PUT` | `/api/household/cash-pools/{id}` | Session | Adjust remaining balance / notes / status |
 | `GET` | `/api/household/export/unreconciled` | API key | Pending transactions JSON |
 | `POST` | `/api/household/reconcile` | API key | Mark matched rows |
 
@@ -3528,14 +3564,23 @@ This script:
 3. Rebuilds and restarts the Docker container
 4. Verifies the health endpoint
 
-### agentic-ai integration (Phase 5 — pending)
+### agentic-ai integration
 
-Planned but not yet implemented:
+Implemented:
+
+- `[household]` section in `config/settings.toml`
+- finance-api proxy endpoints from the Mac Mini to the NAS household API
+- Desktop finance PWA Settings card for direct household operations:
+  - view household categories
+  - add / edit / remove household categories
+  - recategorise recent household transactions
+  - adjust cash-pool balances and notes
+
+Still pending:
 
 - `finance/household_import.py` module on Mac Mini
 - Pull unreconciled expenses, match against Helen BCA ATM withdrawals
 - Post reconciliation marks back to household DB
-- `[household]` section in `config/settings.toml`
 - `HOUSEHOLD_API_KEY` stored in macOS Keychain
 
 ### Security

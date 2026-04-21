@@ -456,6 +456,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { collapseMonthDates, monthKey } from '../utils/wealthDates.js'
 
 const route = useRoute()
 const store = useFinanceStore()
@@ -568,22 +569,6 @@ function fmtDateChip(d) {
   const [y, m] = d.split('-')
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
   return `${MONTHS[parseInt(m, 10) - 1]} ${y}`
-}
-
-function monthKey(d) {
-  return (d || '').slice(0, 7)
-}
-
-function collapseMonthDates(dateList) {
-  const seen = new Set()
-  const out = []
-  for (const d of dateList || []) {
-    const key = monthKey(d)
-    if (!key || seen.has(key)) continue
-    out.push(d)
-    seen.add(key)
-  }
-  return out
 }
 
 function formatAccountType(t) {
@@ -876,7 +861,11 @@ function showToast(msg) {
 onMounted(async () => {
   // Load available months from union endpoint
   try {
-    snapshotDates.value = collapseMonthDates(await api.wealthSnapshotDates())
+    const [rawDates, history] = await Promise.all([
+      api.wealthSnapshotDates(),
+      api.wealthHistory(24),
+    ])
+    snapshotDates.value = collapseMonthDates(rawDates, history.map(row => row.snapshot_date))
     // Default to the most recent month within dashboard range
     if (snapshotDates.value.length) {
       const endMonth = store.dashboardEndMonth || ''  // YYYY-MM

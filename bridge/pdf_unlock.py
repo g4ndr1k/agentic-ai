@@ -77,13 +77,10 @@ def is_encrypted(pdf_path: str) -> bool:
         import pikepdf
         with pikepdf.open(pdf_path) as _:
             return False
-    except Exception as e:
-        return "password" in str(e).lower() or "encrypt" in str(e).lower()
-
-
-def _escape_applescript_string(s: str) -> str:
-    """Escape a string for safe inclusion in an AppleScript double-quoted string."""
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    except (pikepdf.PasswordError, pikepdf.EncryptionError):
+        return True
+    except Exception:
+        return False
 
 
 def _unlock_via_applescript(src_path: str, password: str, dest_path: str) -> str:

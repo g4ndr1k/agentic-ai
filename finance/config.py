@@ -27,6 +27,12 @@ class OllamaFinanceConfig:
     timeout_seconds: int
 
 
+@dataclass
+class HouseholdConfig:
+    base_url: str
+    api_key_file: str
+
+
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 def load_config(settings_file: str | None = None) -> dict:
@@ -64,6 +70,14 @@ def get_ollama_finance_config(cfg: dict) -> OllamaFinanceConfig:
         host=os.environ.get("OLLAMA_FINANCE_HOST") or s.get("host", "http://localhost:11434"),
         model=os.environ.get("OLLAMA_FINANCE_MODEL") or s.get("model", "gemma4:e4b"),
         timeout_seconds=s.get("timeout_seconds", 60),
+    )
+
+
+def get_household_config(cfg: dict) -> HouseholdConfig:
+    s = cfg.get("household", {})
+    return HouseholdConfig(
+        base_url=(os.environ.get("HOUSEHOLD_API_BASE_URL") or s.get("base_url", "http://192.168.1.44:8088")).rstrip("/"),
+        api_key_file=os.environ.get("HOUSEHOLD_API_KEY_FILE") or s.get("api_key_file", os.path.expanduser("~/agentic-ai/household-expense/secrets/household_api.key")),
     )
 
 

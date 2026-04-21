@@ -19,6 +19,7 @@ const { setLayoutMode } = useLayout()
       <RouterLink to="/wealth" class="desktop-sidebar__link">💰 <span>Wealth</span></RouterLink>
       <RouterLink to="/holdings" class="desktop-sidebar__link">🗂️ <span>Assets</span></RouterLink>
       <RouterLink to="/transactions" class="desktop-sidebar__link">🧾 <span>Transactions</span></RouterLink>
+      <RouterLink to="/goal" class="desktop-sidebar__link">🎯 <span>Goal</span></RouterLink>
       <RouterLink to="/review" class="desktop-sidebar__link">
         🔎 <span>Review</span>
         <span v-if="store.reviewCount > 0" class="desktop-sidebar__badge">

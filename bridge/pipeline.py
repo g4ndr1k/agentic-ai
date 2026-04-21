@@ -38,6 +38,7 @@ class PipelineRunner:
         self.registry = Registry(DEFAULT_REGISTRY_DB)
         self._timer: threading.Timer | None = None
         self._running = False
+        self._stop_requested = False
         self._next_scheduled_at: str | None = None
         self._last_run_at: str | None = None
         self._last_result: dict | None = None
@@ -60,6 +61,7 @@ class PipelineRunner:
         self._schedule(delay)
 
     def stop(self):
+        self._stop_requested = True
         if self._timer:
             self._timer.cancel()
             self._timer = None
@@ -114,7 +116,7 @@ class PipelineRunner:
         finally:
             self._running = False
             _lock.release()
-            if self.is_enabled():
+            if self.is_enabled() and not self._stop_requested:
                 self._schedule(int(self.config.get("scan_interval_seconds", 14400)))
 
     def run_cycle(self, trigger: str) -> dict:

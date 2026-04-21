@@ -7,6 +7,12 @@ const saveCategoryDefinition = vi.fn()
 const pipelineStatus = vi.fn()
 const backupStatus = vi.fn()
 const manualBackup = vi.fn()
+const householdSettings = vi.fn()
+const updateHouseholdTransactionCategory = vi.fn()
+const updateHouseholdCashPool = vi.fn()
+const createHouseholdCategory = vi.fn()
+const updateHouseholdCategory = vi.fn()
+const deleteHouseholdCategory = vi.fn()
 
 const store = {
   health: { status: 'ok', transaction_count: 100, needs_review: 2, last_sync: '2026-04-16 09:00:00' },
@@ -38,6 +44,12 @@ vi.mock('../api/client.js', () => ({
     pipelineStatus: (...args) => pipelineStatus(...args),
     backupStatus: (...args) => backupStatus(...args),
     manualBackup: (...args) => manualBackup(...args),
+    householdSettings: (...args) => householdSettings(...args),
+    updateHouseholdTransactionCategory: (...args) => updateHouseholdTransactionCategory(...args),
+    updateHouseholdCashPool: (...args) => updateHouseholdCashPool(...args),
+    createHouseholdCategory: (...args) => createHouseholdCategory(...args),
+    updateHouseholdCategory: (...args) => updateHouseholdCategory(...args),
+    deleteHouseholdCategory: (...args) => deleteHouseholdCategory(...args),
     nasSyncStatus: vi.fn().mockResolvedValue({ configured: false, last_synced_at: null, target: null }),
     refreshReferenceData: vi.fn().mockResolvedValue(undefined),
     sync: vi.fn(),
@@ -65,6 +77,25 @@ describe('Settings category editor', () => {
       manual: { key: 'manual', label: 'Manual', max_sets: 10, count: 3, status: 'ok', latest_at: '2026-04-16T11:30:00', next_due_at: null, latest_file: '/Users/test/agentic-ai/data/backups/manual/finance_manual_20260416_113000.db' },
     })
     manualBackup.mockResolvedValue({ ok: true, path: '/Users/test/agentic-ai/data/backups/manual/finance_manual_20260416_120000.db', created_at: '2026-04-16T12:00:00' })
+    householdSettings.mockResolvedValue({
+      available: true,
+      base_url: 'http://192.168.1.44:8088',
+      categories: [
+        { code: 'groceries', label_id: 'Belanja Harian', sort_order: 10 },
+        { code: 'meals', label_id: 'Makanan & Minuman', sort_order: 20 },
+      ],
+      recent_transactions: [
+        { id: 7, txn_datetime: '2026-04-16T12:00:00', amount: 55000, category_code: 'groceries', description: 'Sayur', note: '', payment_method: 'cash' },
+      ],
+      cash_pools: [
+        { id: 'pool-1', name: 'Kas ART April', funded_amount: 1000000, funded_at: '2026-04-15T00:00:00', remaining_amount: 250000, status: 'active', notes: '' },
+      ],
+    })
+    updateHouseholdTransactionCategory.mockResolvedValue({ id: 7, category_code: 'meals' })
+    updateHouseholdCashPool.mockResolvedValue({ id: 'pool-1', remaining_amount: 300000, status: 'active', notes: '' })
+    createHouseholdCategory.mockResolvedValue({ code: 'fruit', label_id: 'Buah', sort_order: 30, is_active: 1 })
+    updateHouseholdCategory.mockResolvedValue({ code: 'groceries', label_id: 'Belanja Harian Segar', sort_order: 11, is_active: 1 })
+    deleteHouseholdCategory.mockResolvedValue({ ok: true })
 
     Object.defineProperty(window.navigator, 'platform', {
       configurable: true,
@@ -142,5 +173,56 @@ describe('Settings category editor', () => {
     expect(manualBackup).toHaveBeenCalledTimes(1)
     expect(backupStatus).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('finance_manual_20260416_120000.db')
+  })
+
+  it('shows household tools and refreshed about info', async () => {
+    const wrapper = mount(Settings)
+    await flushPromises()
+
+    expect(householdSettings).toHaveBeenCalledWith({ forceFresh: true })
+    expect(wrapper.text()).toContain('Household Expense')
+    expect(wrapper.text()).toContain('Satellite household expense operations')
+    expect(wrapper.text()).toContain('DS920+ LAN app on port 8088')
+  })
+
+  it('updates a household transaction category and cash pool balance', async () => {
+    const wrapper = mount(Settings)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="household-transaction-category-7"]').setValue('meals')
+    await wrapper.find('[data-testid="household-transaction-save-7"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHouseholdTransactionCategory).toHaveBeenCalledWith(7, { category_code: 'meals' })
+
+    await wrapper.find('[data-testid="household-cash-pool-adjustment-pool-1"]').setValue('50000')
+    await wrapper.find('[data-testid="household-cash-pool-save-pool-1"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHouseholdCashPool).toHaveBeenCalledWith('pool-1', { adjustment_amount: 50000, notes: '' })
+  })
+
+  it('creates, updates, and deletes household categories from settings', async () => {
+    const wrapper = mount(Settings)
+    await flushPromises()
+
+    await wrapper.find('[data-testid="household-category-code-input"]').setValue('fruit')
+    await wrapper.find('[data-testid="household-category-label-input"]').setValue('Buah')
+    await wrapper.find('[data-testid="household-category-sort-input"]').setValue('30')
+    await wrapper.find('[data-testid="household-category-create-button"]').trigger('click')
+    await flushPromises()
+
+    expect(createHouseholdCategory).toHaveBeenCalledWith({ code: 'fruit', label_id: 'Buah', sort_order: 30 })
+
+    await wrapper.find('[data-testid="household-category-label-groceries"]').setValue('Belanja Harian Segar')
+    await wrapper.find('[data-testid="household-category-save-groceries"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHouseholdCategory).toHaveBeenCalledWith('groceries', { code: 'groceries', label_id: 'Belanja Harian Segar', sort_order: 10 })
+
+    await wrapper.find('[data-testid="household-category-delete-meals"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteHouseholdCategory).toHaveBeenCalledWith('meals')
   })
 })

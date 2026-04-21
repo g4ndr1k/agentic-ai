@@ -6,6 +6,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 const getBalances = vi.fn()
 const getHoldings = vi.fn()
 const wealthSnapshotDates = vi.fn()
+const wealthHistory = vi.fn()
 const carryForwardHoldings = vi.fn()
 
 const store = {
@@ -17,6 +18,7 @@ vi.mock('../api/client.js', () => ({
     getBalances: (...args) => getBalances(...args),
     getHoldings: (...args) => getHoldings(...args),
     wealthSnapshotDates: (...args) => wealthSnapshotDates(...args),
+    wealthHistory: (...args) => wealthHistory(...args),
     carryForwardHoldings: (...args) => carryForwardHoldings(...args),
     deleteBalance: vi.fn(),
     deleteHolding: vi.fn(),
@@ -42,6 +44,7 @@ describe('Holdings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     wealthSnapshotDates.mockResolvedValue(['2026-04-30'])
+    wealthHistory.mockResolvedValue([])
     getBalances.mockResolvedValue([])
     getHoldings.mockResolvedValue([
       { id: 1, asset_group: 'Real Estate', asset_class: 'real_estate', asset_name: 'Grogol 2', market_value_idr: 100107549, last_appraised_date: '2026-03-02' },
@@ -55,5 +58,19 @@ describe('Holdings', () => {
 
     expect(getBalances).toHaveBeenCalledWith({ snapshot_date: '2026-04-30' }, { forceFresh: true })
     expect(getHoldings).toHaveBeenCalledWith({ snapshot_date: '2026-04-30' }, { forceFresh: true })
+  })
+
+  it('prefers the snapshot date for a month over a later partial raw date', async () => {
+    wealthSnapshotDates.mockResolvedValue(['2026-04-30', '2026-04-06', '2026-03-31'])
+    wealthHistory.mockResolvedValue([
+      { snapshot_date: '2026-04-06' },
+      { snapshot_date: '2026-03-31' },
+    ])
+
+    mount(Holdings)
+    await flushPromises()
+
+    expect(getBalances).toHaveBeenCalledWith({ snapshot_date: '2026-04-06' }, { forceFresh: true })
+    expect(getHoldings).toHaveBeenCalledWith({ snapshot_date: '2026-04-06' }, { forceFresh: true })
   })
 })

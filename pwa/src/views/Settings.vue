@@ -5,6 +5,8 @@
 
     <ReadOnlyBanner />
 
+    <div class="settings-section-label">Preferences & Reference Data</div>
+
     <div class="setting-card">
       <div class="setting-title">📊 Dashboard Range</div>
       <div class="setting-desc">
@@ -180,6 +182,8 @@
         </div>
       </div>
     </div>
+
+    <div class="settings-section-label" v-if="!store.isReadOnly">Desktop Operations</div>
 
     <!-- Import from XLSX -->
     <div v-if="!store.isReadOnly" class="setting-card">
@@ -569,7 +573,207 @@
       </div>
     </div>
 
-    <!-- About -->
+    <div class="settings-section-label">Connected Satellites & Automation</div>
+
+    <div class="setting-card">
+      <div class="setting-title">🏠 Household Expense</div>
+      <div class="setting-desc">
+        Satellite household expense operations for the DS920+ LAN app on port 8088. Update recent transaction categories and adjust live cash pools without opening the assistant-facing PWA.
+      </div>
+      <div v-if="householdState.loading" class="loading" style="padding:10px 0"><div class="spinner"></div> Loading household workspace…</div>
+      <div v-else-if="householdState.error" class="alert alert-error">
+        ❌ {{ householdState.error }}
+      </div>
+      <div v-else-if="!householdState.available" class="alert alert-error">
+        ❌ {{ householdState.unavailableReason || 'Household service unavailable' }}
+      </div>
+      <div v-else class="household-grid">
+        <div class="household-pane household-pane--wide">
+          <div class="household-pane__title">Categories</div>
+          <div class="household-category-create">
+            <div class="range-field">
+              <label class="range-label">Code</label>
+              <input
+                data-testid="household-category-code-input"
+                v-model="householdCategoryForm.code"
+                class="form-input"
+                type="text"
+                placeholder="e.g. fruit"
+              />
+            </div>
+            <div class="range-field">
+              <label class="range-label">Label</label>
+              <input
+                data-testid="household-category-label-input"
+                v-model="householdCategoryForm.label_id"
+                class="form-input"
+                type="text"
+                placeholder="e.g. Buah"
+              />
+            </div>
+            <div class="range-field">
+              <label class="range-label">Sort</label>
+              <input
+                data-testid="household-category-sort-input"
+                v-model="householdCategoryForm.sort_order"
+                class="form-input"
+                type="number"
+                min="0"
+                step="1"
+              />
+            </div>
+            <div class="household-item__controls household-item__controls--compact">
+              <button
+                data-testid="household-category-create-button"
+                class="btn btn-primary btn-sm"
+                :disabled="!householdCategoryForm.code.trim() || !householdCategoryForm.label_id.trim()"
+                @click="createHouseholdCategory"
+              >
+                Add category
+              </button>
+            </div>
+          </div>
+          <div v-if="!householdState.categories.length" class="household-empty">No household categories yet.</div>
+          <div v-for="category in householdState.categories" :key="category.originalCode" class="household-item">
+            <div class="household-category-grid">
+              <div class="range-field">
+                <label class="range-label">Code</label>
+                <input
+                  :data-testid="`household-category-code-${category.originalCode}`"
+                  v-model="category.draftCode"
+                  class="form-input"
+                  type="text"
+                />
+              </div>
+              <div class="range-field">
+                <label class="range-label">Label</label>
+                <input
+                  :data-testid="`household-category-label-${category.originalCode}`"
+                  v-model="category.draftLabel"
+                  class="form-input"
+                  type="text"
+                />
+              </div>
+              <div class="range-field">
+                <label class="range-label">Sort</label>
+                <input
+                  :data-testid="`household-category-sort-${category.originalCode}`"
+                  v-model="category.draftSortOrder"
+                  class="form-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                />
+              </div>
+            </div>
+            <div class="household-item__controls">
+              <span class="household-item__meta">Live in Household PWA immediately after save.</span>
+              <div class="household-action-row">
+                <button
+                  :data-testid="`household-category-save-${category.originalCode}`"
+                  class="btn btn-primary btn-sm"
+                  :disabled="category.saving || !category.draftCode.trim() || !category.draftLabel.trim()"
+                  @click="saveHouseholdCategory(category)"
+                >
+                  {{ category.saving ? 'Saving…' : 'Save' }}
+                </button>
+                <button
+                  :data-testid="`household-category-delete-${category.originalCode}`"
+                  class="btn btn-ghost btn-sm household-delete-btn"
+                  :disabled="category.deleting"
+                  @click="removeHouseholdCategory(category)"
+                >
+                  {{ category.deleting ? 'Removing…' : 'Remove' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="household-pane">
+          <div class="household-pane__title">Recent expenses</div>
+          <div v-if="!householdState.recentTransactions.length" class="household-empty">No recent household expenses found.</div>
+          <div v-for="txn in householdState.recentTransactions" :key="txn.id" class="household-item">
+            <div class="household-item__head">
+              <div>
+                <div class="household-item__title">{{ householdTransactionLabel(txn) }}</div>
+                <div class="household-item__meta">{{ formatHouseholdDate(txn.txn_datetime) }} · {{ formatHouseholdAmount(txn.amount) }}</div>
+              </div>
+              <span class="household-chip">#{{ txn.id }}</span>
+            </div>
+            <div class="household-item__controls">
+              <select
+                :data-testid="`household-transaction-category-${txn.id}`"
+                v-model="txn.draftCategory"
+                class="range-select"
+              >
+                <option v-for="category in householdState.categories" :key="category.code" :value="category.code">
+                  {{ category.label_id }}
+                </option>
+              </select>
+              <button
+                :data-testid="`household-transaction-save-${txn.id}`"
+                class="btn btn-primary btn-sm"
+                :disabled="txn.saving || !txn.draftCategory || txn.draftCategory === txn.category_code"
+                @click="saveHouseholdTransactionCategory(txn)"
+              >
+                {{ txn.saving ? 'Saving…' : 'Save' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="household-pane">
+          <div class="household-pane__title">Cash pools</div>
+          <div v-if="!householdState.cashPools.length" class="household-empty">No household cash pools yet.</div>
+          <div v-for="pool in householdState.cashPools" :key="pool.id" class="household-item household-item--pool">
+            <div class="household-item__head">
+              <div>
+                <div class="household-item__title">{{ pool.name }}</div>
+                <div class="household-item__meta">Remaining {{ formatHouseholdAmount(pool.remaining_amount) }} · Funded {{ formatHouseholdDate(pool.funded_at) }}</div>
+              </div>
+              <span class="household-chip">{{ pool.status }}</span>
+            </div>
+            <div class="household-pool-grid">
+              <div class="range-field">
+                <label class="range-label">Adjust by (IDR)</label>
+                <input
+                  :data-testid="`household-cash-pool-adjustment-${pool.id}`"
+                  v-model="pool.adjustmentInput"
+                  class="form-input"
+                  type="number"
+                  step="1000"
+                  placeholder="e.g. 50000 or -25000"
+                />
+              </div>
+              <div class="range-field">
+                <label class="range-label">Notes</label>
+                <input
+                  v-model="pool.notesInput"
+                  class="form-input"
+                  type="text"
+                  placeholder="Optional adjustment note"
+                />
+              </div>
+            </div>
+            <div class="household-item__controls">
+              <button
+                :data-testid="`household-cash-pool-save-${pool.id}`"
+                class="btn btn-primary btn-sm"
+                :disabled="pool.saving || !pool.adjustmentInput"
+                @click="saveHouseholdCashPool(pool)"
+              >
+                {{ pool.saving ? 'Saving…' : 'Apply adjustment' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="householdState.success" class="alert alert-success" style="margin-top:10px">
+        ✅ {{ householdState.success }}
+      </div>
+    </div>
+
     <div class="setting-card">
       <div class="setting-title">🤖 AI Refinement</div>
       <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
@@ -591,14 +795,20 @@
 
     <div class="setting-card">
       <div class="setting-title">ℹ️ About</div>
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.7">
-        <div><strong>Finance Dashboard</strong> — Stage 2-B</div>
-        <div>Vue 3 PWA · FastAPI backend · SQLite authoritative store</div>
-        <div v-if="store.isReadOnly" style="margin-top:4px;color:#2563eb;font-weight:600">
+      <div class="about-stack">
+        <div><strong>Finance Dashboard</strong> — Stage 3 wealth cockpit + operations console</div>
+        <div>Vue 3 desktop/mobile PWA · FastAPI backend · SQLite authoritative store · local Ollama refinement</div>
+        <div>Desktop Settings now also manages the Household Expense satellite on the DS920+ LAN app (port 8088).</div>
+        <div v-if="store.isReadOnly" class="about-pill about-pill--readonly">
           👁 Read-only replica (NAS)
         </div>
-        <div style="margin-top:6px">
-          API: <code style="font-size:11px">localhost:8090</code>
+        <div class="about-meta-row">
+          <span class="about-meta-label">Finance API</span>
+          <code style="font-size:11px">localhost:8090</code>
+        </div>
+        <div class="about-meta-row">
+          <span class="about-meta-label">Household satellite</span>
+          <code style="font-size:11px">{{ householdState.baseUrl || '192.168.1.44:8088' }}</code>
         </div>
       </div>
     </div>
@@ -623,6 +833,18 @@ const refreshCacheState = ref({ loading: false, error: null, doneAt: '' })
 const pipelineState = ref({ loading: false, status: null, error: null })
 const categoryEditorState = ref({ loading: false, error: null, success: '' })
 const showPdfWorkspace = ref(false)
+const householdState = ref({
+  loading: false,
+  error: null,
+  unavailableReason: '',
+  available: false,
+  baseUrl: '',
+  categories: [],
+  recentTransactions: [],
+  cashPools: [],
+  success: '',
+})
+const householdCategoryForm = ref({ code: '', label_id: '', sort_order: 99 })
 
 function makeEmptyCategoryForm() {
   return {
@@ -639,6 +861,57 @@ function makeEmptyCategoryForm() {
 
 const categorySelection = ref('__new__')
 const categoryForm = ref(makeEmptyCategoryForm())
+const householdAmountFormatter = new Intl.NumberFormat('id-ID')
+
+function formatHouseholdAmount(amount) {
+  return `Rp ${householdAmountFormatter.format(Number(amount || 0))}`
+}
+
+function formatHouseholdDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function householdTransactionLabel(txn) {
+  return txn.description || txn.merchant || txn.category_code || `Expense #${txn.id}`
+}
+
+function normalizeHouseholdState(payload) {
+  householdState.value = {
+    loading: false,
+    error: null,
+    unavailableReason: payload.error || '',
+    available: payload.available === true,
+    baseUrl: payload.base_url || '',
+    categories: (payload.categories || []).map(category => ({
+      ...category,
+      originalCode: category.code,
+      draftCode: category.code,
+      draftLabel: category.label_id,
+      draftSortOrder: category.sort_order,
+      saving: false,
+      deleting: false,
+    })),
+    recentTransactions: (payload.recent_transactions || []).map(txn => ({
+      ...txn,
+      draftCategory: txn.category_code,
+      saving: false,
+    })),
+    cashPools: (payload.cash_pools || []).map(pool => ({
+      ...pool,
+      adjustmentInput: '',
+      notesInput: pool.notes || '',
+      saving: false,
+    })),
+    success: '',
+  }
+}
 
 // ── Mac desktop detection ────────────────────────────────────────────────────
 // navigator.platform is "MacIntel" on macOS (and iPadOS ≥13 — exclude via maxTouchPoints).
@@ -1260,16 +1533,284 @@ async function doNasSync() {
   }
 }
 
+async function loadHouseholdSettings() {
+  householdState.value = {
+    ...householdState.value,
+    loading: true,
+    error: null,
+    unavailableReason: '',
+    success: '',
+  }
+  try {
+    const payload = await api.householdSettings({ forceFresh: true })
+    normalizeHouseholdState(payload)
+  } catch (e) {
+    householdState.value = {
+      ...householdState.value,
+      loading: false,
+      error: e.message,
+      success: '',
+    }
+  }
+}
+
+async function saveHouseholdTransactionCategory(txn) {
+  txn.saving = true
+  householdState.value.success = ''
+  try {
+    const updated = await api.updateHouseholdTransactionCategory(txn.id, { category_code: txn.draftCategory })
+    txn.category_code = updated.category_code || txn.draftCategory
+    txn.draftCategory = txn.category_code
+    householdState.value.success = `Updated household expense #${txn.id}`
+  } catch (e) {
+    householdState.value.error = e.message
+  } finally {
+    txn.saving = false
+  }
+}
+
+async function createHouseholdCategory() {
+  householdState.value.error = null
+  householdState.value.success = ''
+  try {
+    await api.createHouseholdCategory({
+      code: householdCategoryForm.value.code.trim(),
+      label_id: householdCategoryForm.value.label_id.trim(),
+      sort_order: Number(householdCategoryForm.value.sort_order || 99),
+    })
+    householdCategoryForm.value = { code: '', label_id: '', sort_order: 99 }
+    await loadHouseholdSettings()
+    householdState.value.success = 'Created household category'
+  } catch (e) {
+    householdState.value.error = e.message
+  }
+}
+
+async function saveHouseholdCategory(category) {
+  category.saving = true
+  householdState.value.error = null
+  householdState.value.success = ''
+  try {
+    await api.updateHouseholdCategory(category.originalCode, {
+      code: category.draftCode.trim(),
+      label_id: category.draftLabel.trim(),
+      sort_order: Number(category.draftSortOrder || 99),
+    })
+    await loadHouseholdSettings()
+    householdState.value.success = `Updated household category ${category.originalCode}`
+  } catch (e) {
+    householdState.value.error = e.message
+  } finally {
+    category.saving = false
+  }
+}
+
+async function removeHouseholdCategory(category) {
+  category.deleting = true
+  householdState.value.error = null
+  householdState.value.success = ''
+  try {
+    await api.deleteHouseholdCategory(category.originalCode)
+    await loadHouseholdSettings()
+    householdState.value.success = `Removed household category ${category.originalCode}`
+  } catch (e) {
+    householdState.value.error = e.message
+  } finally {
+    category.deleting = false
+  }
+}
+
+async function saveHouseholdCashPool(pool) {
+  pool.saving = true
+  householdState.value.success = ''
+  try {
+    const updated = await api.updateHouseholdCashPool(pool.id, {
+      adjustment_amount: Number(pool.adjustmentInput || 0),
+      notes: pool.notesInput || '',
+    })
+    pool.remaining_amount = updated.remaining_amount
+    pool.status = updated.status || pool.status
+    pool.notes = updated.notes || ''
+    pool.notesInput = pool.notes
+    pool.adjustmentInput = ''
+    householdState.value.success = `Adjusted ${pool.name}`
+  } catch (e) {
+    householdState.value.error = e.message
+  } finally {
+    pool.saving = false
+  }
+}
+
 onMounted(async () => {
   await store.loadHealth({ forceFresh: true })
   await store.loadCategories({ forceFresh: true })
   await loadBackupStatus()
   await loadPipelineStatus()
   await loadNasSyncStatus()
+  await loadHouseholdSettings()
 })
 </script>
 
 <style scoped>
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-grid > * {
+  min-width: 0;
+}
+
+.settings-section-label {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.household-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.household-pane {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--card-bg) 82%, transparent);
+}
+
+.household-pane--wide {
+  grid-column: 1 / -1;
+}
+
+.household-pane__title {
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.household-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--card-bg);
+}
+
+.household-item + .household-item {
+  margin-top: 10px;
+}
+
+.household-item__head,
+.household-item__controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.household-item__controls {
+  margin-top: 10px;
+  align-items: center;
+}
+
+.household-item__controls--compact {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+.household-item__title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.household-item__meta,
+.household-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.household-category-create,
+.household-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.household-category-create {
+  margin-bottom: 12px;
+}
+
+.household-action-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.household-delete-btn {
+  color: #ef4444;
+}
+
+.household-chip,
+.about-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+.household-pool-grid,
+.about-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.about-stack {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.about-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.about-meta-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.about-pill--readonly {
+  width: fit-content;
+}
+
+@media (max-width: 720px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .household-item__controls,
+  .about-meta-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .category-editor-toolbar {
   display: flex;
   gap: 8px;

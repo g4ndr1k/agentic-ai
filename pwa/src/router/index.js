@@ -12,6 +12,7 @@ const Wealth = () => import('../views/Wealth.vue')
 const Holdings = () => import('../views/Holdings.vue')
 const Audit = () => import('../views/Audit.vue')
 const Adjustment = () => import('../views/Adjustment.vue')
+const Goal = () => import('../views/Goal.vue')
 
 export default createRouter({
   history: createWebHistory(),
@@ -21,6 +22,7 @@ export default createRouter({
     { path: '/wealth', name: 'wealth', component: Wealth, meta: { title: 'Wealth', keepAlive: true } },
     { path: '/holdings', name: 'holdings', component: Holdings, meta: { title: 'Assets', keepAlive: true } },
     { path: '/transactions', name: 'transactions', component: Transactions, meta: { title: 'Txns', keepAlive: true } },
+    { path: '/goal', name: 'goal', component: Goal, meta: { title: 'Goal', keepAlive: true } },
     { path: '/review', name: 'review', component: ReviewQueue, meta: { title: 'Review', keepAlive: true } },
     { path: '/foreign', name: 'foreign', component: ForeignSpend, meta: { title: 'Foreign Spend' } },
     { path: '/adjustment', name: 'adjustment', component: Adjustment, meta: { title: 'Adjustment', keepAlive: true } },

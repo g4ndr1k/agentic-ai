@@ -213,7 +213,10 @@ def sync_to_nas(db_path: str, force: bool = False, backup_dir: str | None = None
         last = state.get("last_nas_sync")
         if last:
             try:
-                delta = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
+                last_dt = datetime.fromisoformat(last)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                delta = (datetime.now(timezone.utc) - last_dt).total_seconds()
                 if delta < 86400:
                     return {
                         "ok": True,
@@ -230,7 +233,12 @@ def sync_to_nas(db_path: str, force: bool = False, backup_dir: str | None = None
     log.info("NAS sync: %s → %s", source, NAS_SYNC_TARGET)
 
     ssh_key = os.environ.get("NAS_SYNC_KEY_PATH", "/run/secrets/nas_sync_key")
-    ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no", "-p", "68"]
+    ssh_base = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={Path.home() / '.ssh' / 'known_hosts'}",
+        "-p", "68",
+    ]
     if Path(ssh_key).exists():
         ssh_base += ["-i", ssh_key]
     elif os.environ.get("NAS_SYNC_KEY_PATH"):
@@ -336,7 +344,8 @@ def _save_sync_state(state: dict) -> None:
 
 
 def _resolve_backup_dir(backup_dir: str | None) -> Path:
-    return Path(backup_dir or DEFAULT_BACKUP_DIR).expanduser()
+    env_override = os.environ.get("FINANCE_BACKUP_DIR", "").strip()
+    return Path(backup_dir or env_override or DEFAULT_BACKUP_DIR).expanduser()
 
 
 def _prune_backups(tier_dir: Path, max_backups: int) -> None:

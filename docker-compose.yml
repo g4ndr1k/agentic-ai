@@ -14,12 +14,15 @@ services:
       FINANCE_API_KEY:          ${FINANCE_API_KEY}
       OLLAMA_FINANCE_HOST:      http://host.docker.internal:11434
       BRIDGE_TOKEN_FILE:        /run/secrets/bridge.token
+      FINANCE_BACKUP_DIR:       /app/data/backups
+      HOUSEHOLD_API_KEY_FILE:   /run/secrets/household_api.key
       NAS_SYNC_TARGET:          ${NAS_SYNC_TARGET:-}
     volumes:
       - ./config/settings.toml:/app/config/settings.toml:ro
       - ./data:/app/data
       - ./output/xls:/app/output/xls:ro
       - ./secrets/bridge.token:/run/secrets/bridge.token:ro
+      - ./household-expense/secrets/household_api.key:/run/secrets/household_api.key:ro
       - ./secrets/nas_sync_key:/run/secrets/nas_sync_key:ro
     ports:
       - "8090:8090"

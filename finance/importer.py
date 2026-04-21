@@ -35,7 +35,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import openpyxl
@@ -140,6 +140,18 @@ _EXPECTED_HEADERS = [
 # CC billing cycles can span two calendar months, so a 2026 statement may
 # contain December 2025 charges — we exclude those pre-cutoff rows here.
 _MIN_TX_DATE = "2026-01-01"
+
+
+def _auto_ignore_merchant(institution: str, stmt_type: str) -> str | None:
+    """Return a merchant label to auto-ignore, or None if the transaction should be categorized normally."""
+    inst = institution.lower()
+    if inst == "ipot" and stmt_type == "statement":
+        return "IPOT RDN"
+    if inst == "bni sekuritas":
+        return "BNIS RDN"
+    if inst == "stockbit sekuritas":
+        return "Stockbit RDN"
+    return None
 
 
 # ── Core import logic ─────────────────────────────────────────────────────────
@@ -247,12 +259,12 @@ def direct_import(
             continue
 
         txn, stmt_type = parse_result
-        is_rdn = txn.institution.lower() == "permata" and stmt_type == "rdn"
+        auto_merchant = _auto_ignore_merchant(txn.institution, stmt_type)
 
         if txn.hash in existing_hashes:
             if overwrite:
-                if is_rdn:
-                    txn.merchant = "Permata RDN"
+                if auto_merchant:
+                    txn.merchant = auto_merchant
                     txn.category = "Ignored"
                     by_layer[1] += 1
                 else:
@@ -268,8 +280,8 @@ def direct_import(
                 skipped += 1
             continue
 
-        if is_rdn:
-            txn.merchant = "Permata RDN"
+        if auto_merchant:
+            txn.merchant = auto_merchant
             txn.category = "Ignored"
             by_layer[1] += 1
         else:
@@ -313,7 +325,7 @@ def direct_import(
         return stats
 
     # ── 5. Write to SQLite ────────────────────────────────────────────────────
-    now = datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     added = 0
 
     conn = open_db(db_path)
@@ -428,10 +440,7 @@ def sync_grogol_2_from_transactions(db_path: str) -> int:
         ).fetchall()
 
         candidate_dates = {baseline_snapshot}
-        _ALLOWED_TABLES = {"account_balances", "holdings", "liabilities", "net_worth_snapshots"}
         for table in ("account_balances", "holdings", "liabilities", "net_worth_snapshots"):
-            if table not in _ALLOWED_TABLES:
-                raise ValueError(f"Refusing table name: {table}")
             candidate_dates.update(
                 row[0]
                 for row in conn.execute(f"SELECT DISTINCT snapshot_date FROM {table}").fetchall()

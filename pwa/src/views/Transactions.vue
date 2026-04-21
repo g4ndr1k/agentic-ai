@@ -2,40 +2,68 @@
   <div>
     <div class="section-hd">📋 Transactions</div>
 
-    <div class="filter-bar" :class="{ 'filters-muted': aiFilters }">
-      <select v-model="filters.year" @change="onFilterChange">
-        <option value="">All Years</option>
-        <option v-for="y in store.years" :key="y" :value="y">{{ y }}</option>
-      </select>
-      <select v-model="filters.month" @change="onFilterChange" :disabled="!filters.year">
-        <option value="">All Months</option>
-        <option v-for="m in 12" :key="m" :value="m">{{ monthName(m) }}</option>
-      </select>
-    </div>
-    <div class="filter-bar" :class="{ 'filters-muted': aiFilters }">
-      <select v-model="filters.owner" @change="onFilterChange">
-        <option value="">All Owners</option>
-        <option v-for="o in store.owners" :key="o" :value="o">{{ o }}</option>
-      </select>
-      <select v-model="filters.categoryGroup" @change="onFilterChange">
-        <option value="">All Category Groups</option>
-        <option value="__income__">💰 Income</option>
-        <option v-for="group in categoryGroupNames" :key="group" :value="group">{{ group }}</option>
-      </select>
-    </div>
-    <div class="filter-bar" :class="{ 'filters-muted': aiFilters }">
-      <select v-model="filters.category" @change="onFilterChange">
-        <option value="">All Categories</option>
-        <option value="__uncategorised__">Uncategorised only</option>
-        <option v-for="c in sortedCategoryNames" :key="c" :value="c">{{ c }}</option>
-      </select>
-    </div>
-    <div class="filter-bar" :class="{ 'filters-muted': aiFilters }">
-      <input
-        v-model="filters.q"
-        placeholder="🔍 Search description or merchant…"
-        @input="debouncedSearch"
-      />
+    <!-- Filter panel -->
+    <div class="filter-panel" :class="{ 'filters-muted': aiFilters }">
+      <div class="fp-row">
+        <div class="fp-field">
+          <label class="fp-label">Year</label>
+          <select v-model="filters.year" @change="onFilterChange">
+            <option value="">All</option>
+            <option v-for="y in store.years" :key="y" :value="y">{{ y }}</option>
+          </select>
+        </div>
+        <div class="fp-field">
+          <label class="fp-label">Month</label>
+          <select v-model="filters.month" @change="onFilterChange" :disabled="!filters.year">
+            <option value="">All</option>
+            <option v-for="m in 12" :key="m" :value="m">{{ monthName(m) }}</option>
+          </select>
+        </div>
+        <div class="fp-field">
+          <label class="fp-label">Owner</label>
+          <select v-model="filters.owner" @change="onFilterChange">
+            <option value="">All</option>
+            <option v-for="o in store.owners" :key="o" :value="o">{{ o }}</option>
+          </select>
+        </div>
+        <div class="fp-field">
+          <label class="fp-label">Account</label>
+          <select v-model="filters.account" @change="onFilterChange">
+            <option value="">All</option>
+            <option v-for="a in store.accounts" :key="a.account" :value="a.account">{{ a.label }}</option>
+          </select>
+        </div>
+        <div class="fp-field">
+          <label class="fp-label">Group</label>
+          <select v-model="filters.categoryGroup" @change="onFilterChange">
+            <option value="">All</option>
+            <option value="__income__">💰 Income</option>
+            <option v-for="group in categoryGroupNames" :key="group" :value="group">{{ group }}</option>
+          </select>
+        </div>
+        <div class="fp-field">
+          <label class="fp-label">Category</label>
+          <select v-model="filters.category" @change="onFilterChange">
+            <option value="">All</option>
+            <option value="__uncategorised__">Uncategorised</option>
+            <option v-for="c in sortedCategoryNames" :key="c" :value="c">{{ c }}</option>
+          </select>
+        </div>
+      </div>
+      <div class="fp-row fp-row-bottom">
+        <div class="fp-field fp-field-search">
+          <input
+            v-model="filters.q"
+            placeholder="🔍 Search description or merchant…"
+            @input="debouncedSearch"
+          />
+        </div>
+        <button
+          v-if="hasActiveFilters"
+          class="btn btn-ghost btn-sm fp-reset"
+          @click="resetFilters"
+        >↺ Reset</button>
+      </div>
     </div>
 
     <!-- AI AMA box -->
@@ -260,7 +288,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
+import { useRoute } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
@@ -268,6 +297,7 @@ import { useLayout } from '../composables/useLayout.js'
 import TransactionTable from '../components/TransactionTable.vue'
 
 
+const route = useRoute()
 const store = useFinanceStore()
 const { isDesktop } = useLayout()
 
@@ -285,6 +315,7 @@ const filters = ref({
   year: '',
   month: '',
   owner: '',
+  account: '',
   categoryGroup: '',
   category: '',
   q: '',
@@ -303,6 +334,10 @@ const aiLabel         = ref('')
 const aiExcludeSystem = ref(true)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)))
+const hasActiveFilters = computed(() => {
+  const f = filters.value
+  return f.year || f.month || f.owner || f.account || f.categoryGroup || f.category || f.q
+})
 const sortedCategoryNames = computed(() => [...store.categoryNames].sort((a, b) => a.localeCompare(b)))
 const categoryGroupNames = computed(() => {
   const groups = new Set(
@@ -331,6 +366,20 @@ function debouncedSearch() {
 }
 
 function onFilterChange() {
+  page.value = 0
+  load()
+}
+
+function resetFilters() {
+  filters.value = {
+    year: '',
+    month: '',
+    owner: '',
+    account: '',
+    categoryGroup: '',
+    category: '',
+    q: '',
+  }
   page.value = 0
   load()
 }
@@ -401,6 +450,7 @@ async function load() {
       if (filters.value.year)     params.year     = filters.value.year
       if (filters.value.month)    params.month    = filters.value.month
       if (filters.value.owner)    params.owner    = filters.value.owner
+      if (filters.value.account)  params.account  = filters.value.account
       if (filters.value.categoryGroup === '__income__') params.income_only = true
       else if (filters.value.categoryGroup) params.category_group = filters.value.categoryGroup
       if (uncategorisedOnly)      params.uncategorised_only = true
@@ -473,10 +523,115 @@ function clearAi() {
   load()
 }
 
-onMounted(load)
+function syncFiltersFromQuery() {
+  const q = route.query
+  if (!Object.keys(q).length) return false
+  if (q.year)          filters.value.year          = String(q.year)
+  if (q.month)         filters.value.month         = String(q.month)
+  if (q.owner)         filters.value.owner         = String(q.owner)
+  if (q.account)       filters.value.account       = String(q.account)
+  if (q.categoryGroup) filters.value.categoryGroup = String(q.categoryGroup)
+  if (q.category)      filters.value.category      = String(q.category)
+  if (q.q)             filters.value.q             = String(q.q)
+  return true
+}
+
+onMounted(() => {
+  syncFiltersFromQuery()
+  load()
+})
+
+onActivated(() => {
+  if (syncFiltersFromQuery()) load()
+})
 </script>
 
 <style scoped>
+/* ── Filter panel ─────────────────────────────────────────────────────────── */
+.filter-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px 10px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+}
+
+.fp-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+
+.fp-row-bottom {
+  grid-template-columns: 1fr auto;
+  margin-top: 10px;
+  align-items: end;
+}
+
+.fp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fp-field-search {
+  flex: 1;
+}
+
+.fp-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  padding-left: 2px;
+  white-space: nowrap;
+}
+
+.fp-field select,
+.fp-field input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.fp-field select:focus,
+.fp-field input:focus {
+  border-color: var(--primary);
+}
+
+.fp-reset {
+  height: 36px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  .fp-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .fp-row-bottom {
+    grid-template-columns: 1fr auto;
+  }
+  .fp-field select,
+  .fp-field input {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
+
+/* ── Category editor ─────────────────────────────────────────────────────── */
 .cat-editor {
   margin-top: 10px;
   padding: 10px 12px;

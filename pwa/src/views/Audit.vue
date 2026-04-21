@@ -1,10 +1,13 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useFinanceStore } from '../stores/finance.js'
 import { api } from '../api/client.js'
 import { useFmt } from '../composables/useFmt.js'
 import AuditCompleteness from './AuditCompleteness.vue'
+import { collapseMonthDates, monthKey } from '../utils/wealthDates.js'
 
+const router = useRouter()
 const store = useFinanceStore()
 
 // ── Tab state ──────────────────────────────────────────────────────────────
@@ -69,8 +72,6 @@ function fmtMonth(d) {
   return `${MONTHS[parseInt(m, 10) - 1]} ${y}`
 }
 
-function monthKey(d) { return (d || '').slice(0, 7) }
-
 function formatAccountType(t) {
   return { savings: 'Savings', checking: 'Checking', money_market: 'Money Market', physical_cash: 'Physical Cash' }[t] || t
 }
@@ -86,24 +87,17 @@ function formatAssetClass(t) {
 // ── Resolve two latest months from dashboard range ─────────────────────────
 async function resolveMonths() {
   try {
-    const dates = await api.wealthSnapshotDates()
+    const [dates, history] = await Promise.all([
+      api.wealthSnapshotDates(),
+      api.wealthHistory(24),
+    ])
     if (!dates || !dates.length) return false
 
     const start = store.dashboardStartMonth
     const end = store.dashboardEndMonth
-    // Deduplicate to one date per month, keeping the latest date per month
-    const byMonth = new Map()
-    for (const d of dates) {
-      const mk = monthKey(d)
-      if (mk >= start && mk <= end) {
-        if (!byMonth.has(mk) || d > byMonth.get(mk)) {
-          byMonth.set(mk, d)
-        }
-      }
-    }
-    const months = [...byMonth.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, d]) => d)
+    const months = collapseMonthDates(dates, history.map(row => row.snapshot_date))
+      .filter(d => monthKey(d) >= start && monthKey(d) <= end)
+      .sort((a, b) => a.localeCompare(b))
 
     if (months.length < 2) return false
 
@@ -165,6 +159,8 @@ function normalizeBalances(list) {
       valueA: 0,
       valueB: 0,
       group: 'Cash & Liquid',
+      account: b.account || '',
+      owner: b.owner || '',
     }
   }
   return map
@@ -207,6 +203,8 @@ const comparisonRows = computed(() => {
         valueA: 0,
         valueB: 0,
         group: 'Cash & Liquid',
+        account: b.account || '',
+        owner: b.owner || '',
       })
     }
     allKeys.get(k).valueB = b.balance_idr || 0
@@ -272,6 +270,20 @@ const totalB = computed(() => {
     + holdingsB.value.reduce((s, h) => s + (h.market_value_idr || 0), 0)
 })
 const totalDelta = computed(() => totalB.value - totalA.value)
+
+// ── Navigate to filtered transactions ─────────────────────────────────────
+function goToTransactions(row, snapshotDate) {
+  if (!row.account || !snapshotDate) return
+  const [year, month] = snapshotDate.split('-')
+  router.push({
+    path: '/transactions',
+    query: {
+      year,
+      month,
+      account: row.account,
+    },
+  })
+}
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => { loadCallOver() })
@@ -441,12 +453,22 @@ watch(activeTab, (tab) => {
                 <span v-if="row.sub" class="co-asset-sub">{{ row.sub }}</span>
               </div>
               <div class="co-col-val">
-                <span :class="row.valueA === 0 && row.valueB !== 0 ? 'co-muted' : ''">
+                <button
+                  v-if="row.account && row.valueA !== 0"
+                  class="co-link"
+                  @click="goToTransactions(row, monthA)"
+                >{{ fmt(row.valueA) }}</button>
+                <span v-else :class="row.valueA === 0 && row.valueB !== 0 ? 'co-muted' : ''">
                   {{ row.valueA === 0 && row.valueB !== 0 ? '—' : fmt(row.valueA) }}
                 </span>
               </div>
               <div class="co-col-val">
-                <span :class="row.valueB === 0 && row.valueA !== 0 ? 'co-muted' : ''">
+                <button
+                  v-if="row.account && row.valueB !== 0"
+                  class="co-link"
+                  @click="goToTransactions(row, monthB)"
+                >{{ fmt(row.valueB) }}</button>
+                <span v-else :class="row.valueB === 0 && row.valueA !== 0 ? 'co-muted' : ''">
                   {{ row.valueB === 0 && row.valueA !== 0 ? '—' : fmt(row.valueB) }}
                 </span>
               </div>
@@ -652,6 +674,25 @@ watch(activeTab, (tab) => {
 .co-neg { color: #dc2626; }
 .co-flat { color: var(--text-muted); }
 .co-muted { color: var(--text-muted); opacity: 0.5; }
+
+/* ── Clickable value links ──────────────────────────────────────────────── */
+.co-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  transition: color 0.15s, text-decoration-style 0.15s;
+}
+.co-link:hover {
+  color: var(--primary);
+  text-decoration-style: solid;
+}
 
 /* ── Subtotals ───────────────────────────────────────────────────────────── */
 .co-subtotal {

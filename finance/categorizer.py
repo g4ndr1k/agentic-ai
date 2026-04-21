@@ -524,7 +524,7 @@ def match_internal_transfers(transactions: list) -> int:
     h_owner, h_account = HELEN_BCA_HOUSEHOLD_ACCOUNT
     _ATM_HINTS = ("TARIKAN ATM", "TARIKAN TUNAI", "CASH WITHDRAWAL", "CW-ATM")
     for txn in transactions:
-        if id(txn) in seen:
+        if _txn_key(txn) in seen:
             continue
         if (txn.owner == h_owner and txn.account == h_account
                 and txn.amount < 0
@@ -534,7 +534,7 @@ def match_internal_transfers(transactions: list) -> int:
                 txn.category = "Household"
                 txn.merchant = "Cash (Household)"
                 matched += 1
-                seen.add(id(txn))
+                seen.add(_txn_key(txn))
 
     if matched:
         log.info("Cross-account matching: %d transactions re-categorised", matched)
