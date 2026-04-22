@@ -6,7 +6,7 @@
         <span class="back-arrow">‹</span>
       </button>
       <div class="drill-title-block">
-        <div class="drill-title">{{ groupIcon }} {{ group }}</div>
+        <div class="drill-title"><span class="grp-icon" v-html="groupIcon"></span> {{ group }}</div>
         <div class="drill-subtitle">{{ monthLabel }}</div>
       </div>
     </div>
@@ -31,7 +31,7 @@
 
     <!-- Empty state -->
     <div v-if="!cats.length" class="empty-state">
-      <div class="e-icon">📭</div>
+      <div class="e-icon empty-icon" v-html="FOLDER_SVG"></div>
       <div class="e-msg">No spending</div>
       <div class="e-sub">No {{ group }} expenses in {{ monthLabel }}</div>
     </div>
@@ -65,7 +65,7 @@
           :key="'bar-' + cat.category"
           class="cat-bar-row"
         >
-          <div class="cb-label">{{ cat.icon }} {{ cat.category }}</div>
+          <div class="cb-label">{{ cat.category }}</div>
           <div class="cb-track">
             <div class="cb-fill" :style="{ width: cat.pct + '%' }"></div>
           </div>
@@ -81,6 +81,7 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { GROUP_SVGS, FOLDER_SVG } from '../utils/icons.js'
 
 const router = useRouter()
 const route  = useRoute()
@@ -112,23 +113,13 @@ const byCategoryRaw = (() => {
 const MONTHS_LONG = ['January','February','March','April','May','June',
                      'July','August','September','October','November','December']
 
-const GROUP_ICONS = {
-  'Housing & Bills':      '🏠',
-  'Food & Dining':        '🍽️',
-  'Transportation':       '🚗',
-  'Lifestyle & Personal': '🛍️',
-  'Health & Family':      '❤️',
-  'Travel':               '✈️',
-  'Financial & Legal':    '⚖️',
-  'System / Tracking':    '🔧',
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const { fmt } = useFmt()
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 const monthLabel = computed(() => `${MONTHS_LONG[month - 1]} ${year}`)
-const groupIcon  = computed(() => GROUP_ICONS[group] || '📁')
+const groupIcon  = computed(() => GROUP_SVGS[group] || GROUP_SVGS['System / Tracking'])
 
 const EXCLUDED = new Set(['Transfer', 'Adjustment'])
 
@@ -146,7 +137,7 @@ const cats = computed(() => {
   return rows
     .map(c => ({
       category: c.category,
-      icon:     store.categoryMap[c.category]?.icon || '📁',
+      icon:     store.categoryMap[c.category]?.icon || '',
       amount:   Math.abs(c.amount),
       txCount:  c.count ?? 0,
       pct:      gTotal > 0 ? Math.round((Math.abs(c.amount) / gTotal) * 100) : 0,
@@ -203,6 +194,10 @@ function drillToCategory(cat) {
   font-size: 18px; font-weight: 800; letter-spacing: -0.4px;
   color: var(--text); display: flex; align-items: center; gap: 6px;
 }
+.grp-icon { width: 18px; height: 18px; color: var(--primary-deep); display: inline-flex; align-items: center; flex-shrink: 0; }
+.grp-icon :deep(svg) { width: 18px; height: 18px; }
+.empty-icon { width: 26px; height: 26px; margin: 0 auto 10px; color: var(--primary-deep); display: inline-flex; align-items: center; justify-content: center; }
+.empty-icon :deep(svg) { width: 26px; height: 26px; }
 .drill-subtitle { font-size: 11px; color: var(--text-muted); font-weight: 600; margin-top: 1px; }
 
 /* ── Summary bar ─────────────────────────────────────────────────────────── */
@@ -234,7 +229,7 @@ function drillToCategory(cat) {
 .cat-drill-row:active { background: var(--primary-dim); }
 
 .cdr-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.cdr-icon { font-size: 24px; flex-shrink: 0; width: 34px; text-align: center; }
+.cdr-icon { font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; opacity: 0.7; }
 .cdr-info { min-width: 0; }
 .cdr-name { font-size: 14px; font-weight: 700; color: var(--text); }
 .cdr-sub  { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
@@ -261,10 +256,10 @@ function drillToCategory(cat) {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .cb-track {
-  flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;
+  flex: 1; height: 3px; background: rgba(136,189,242,0.12); border-radius: 2px; overflow: hidden;
 }
 .cb-fill {
-  height: 100%; background: var(--primary); border-radius: 3px;
+  height: 100%; background: var(--primary-deep); opacity: 0.75; border-radius: 2px;
   transition: width 0.5s ease;
 }
 .cb-pct { font-size: 10px; font-weight: 700; color: var(--neutral); width: 30px; text-align: right; flex-shrink: 0; }

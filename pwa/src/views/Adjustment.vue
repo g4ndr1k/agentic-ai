@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useFinanceStore } from '../stores/finance.js'
 import { api } from '../api/client.js'
 import { useFmt } from '../composables/useFmt.js'
+import { EYE_SVG, SECTION_SVGS } from '../utils/icons.js'
 
 const store = useFinanceStore()
 
@@ -217,19 +218,19 @@ onMounted(async () => {
     <div v-if="loading" class="loading"><div class="spinner"></div></div>
 
     <!-- Error -->
-    <div v-else-if="store.isReadOnly" class="alert" style="margin:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8">
-      👁 Read-only — adjustments are not available in NAS replica mode.
+    <div v-else-if="store.isReadOnly" class="alert ro-alert" style="margin:12px 16px">
+      <span class="adj-inline-icon" v-html="EYE_SVG"></span> Read-only — adjustments are not available in NAS replica mode.
     </div>
 
     <div v-else-if="loadError" class="alert alert-error" style="margin:12px 16px">
-      ❌ {{ loadError }}
+      {{ loadError }}
       <button class="btn btn-sm btn-ghost" @click="loadItems" style="margin-left:auto">Retry</button>
     </div>
 
     <template v-else>
       <!-- Real Estate section -->
       <div class="section-header">
-        <span>🏠 Real Estate</span>
+        <span class="adj-section-title"><span class="adj-inline-icon" v-html="SECTION_SVGS.property"></span>Real Estate</span>
         <span class="section-header-total">{{ fmt(realEstate.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
       </div>
 
@@ -289,7 +290,7 @@ onMounted(async () => {
 
       <!-- Jamsostek / Retirement section -->
       <div class="section-header" style="margin-top:8px">
-        <span>🏦 Jamsostek / Retirement</span>
+        <span class="adj-section-title"><span class="adj-inline-icon" v-html="SECTION_SVGS.retirement"></span>Jamsostek / Retirement</span>
         <span class="section-header-total">{{ fmt(jamsostek.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
       </div>
 
@@ -354,6 +355,32 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.ro-alert {
+  background: rgba(136,189,242,0.08);
+  border: 1px solid rgba(136,189,242,0.18);
+  color: var(--primary-deep);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.adj-inline-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+  flex-shrink: 0;
+}
+.adj-inline-icon :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+.adj-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 /* ── Month nav centre ─────────────────────────────────────────────────────── */
 .month-nav-center {
   display: flex;

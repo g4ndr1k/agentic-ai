@@ -1,14 +1,41 @@
 <template>
   <div>
-    <div class="section-hd">⚙️ Settings</div>
+    <div class="section-hd"><span class="settings-head-icon" v-html="NAV_SVGS.Settings"></span> Settings</div>
     <div class="settings-grid">
 
     <ReadOnlyBanner />
 
+    <div class="settings-section-label">More Views</div>
+
+    <div class="setting-card">
+      <div class="setting-title"><span class="setting-title-icon" v-html="NAV_SVGS.Settings"></span>Quick Navigation</div>
+      <div class="setting-desc">
+        Open views that live under More on mobile PWA.
+      </div>
+      <div class="more-nav-grid">
+        <RouterLink to="/foreign" class="more-nav-card">
+          <span class="more-nav-card__icon" v-html="NAV_SVGS['Foreign Spend']"></span>
+          <span class="more-nav-card__body">
+            <span class="more-nav-card__title">Foreign Spend</span>
+            <span class="more-nav-card__desc">Foreign currency transactions and FX totals.</span>
+          </span>
+          <span class="more-nav-card__chevron">›</span>
+        </RouterLink>
+        <RouterLink to="/audit" class="more-nav-card">
+          <span class="more-nav-card__icon" v-html="NAV_SVGS.Audit"></span>
+          <span class="more-nav-card__body">
+            <span class="more-nav-card__title">Audit</span>
+            <span class="more-nav-card__desc">Call-over comparison and PDF completeness audit.</span>
+          </span>
+          <span class="more-nav-card__chevron">›</span>
+        </RouterLink>
+      </div>
+    </div>
+
     <div class="settings-section-label">Preferences & Reference Data</div>
 
     <div class="setting-card">
-      <div class="setting-title">📊 Dashboard Range</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="NAV_SVGS.Dashboard"></span> Dashboard Range</div>
       <div class="setting-desc">
         Choose which months appear on the main dashboard. Months before Jan 2026 are always hidden.
       </div>
@@ -52,7 +79,7 @@
     </div>
 
     <div class="setting-card">
-      <div class="setting-title">🏷️ Categories</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="DOCUMENT_SVG"></span> Categories</div>
       <div class="setting-desc">
         Add a new category or edit an existing one. Renaming a category also updates existing transactions, overrides, and aliases.
       </div>
@@ -69,7 +96,7 @@
           >
             <option value="__new__">＋ New category</option>
             <option v-for="category in editableCategories" :key="category.category" :value="category.category">
-              {{ category.icon || '🏷️' }} {{ category.category }}
+              {{ category.category }}
             </option>
           </select>
           <button class="btn btn-ghost btn-sm" type="button" @click="resetCategoryEditor">New</button>
@@ -83,7 +110,7 @@
         </div>
         <div class="setting-row">
           <label class="range-label">Icon</label>
-          <input data-testid="category-icon-input" v-model="categoryForm.icon" class="form-input" type="text" placeholder="🍽️" />
+          <input data-testid="category-icon-input" v-model="categoryForm.icon" class="form-input" type="text" placeholder="Optional text/icon" />
         </div>
         <div class="setting-row">
           <label class="range-label">Sort Order</label>
@@ -116,26 +143,26 @@
           @click="saveCategoryEditor"
         >
           <span v-if="categoryEditorState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Saving…</span>
-          <span v-else>💾 Save Category</span>
+          <span v-else><span class="inline-icon" v-html="SAVE_SVG"></span> Save Category</span>
         </button>
       </div>
 
       <div v-if="categoryEditorState.error" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ categoryEditorState.error }}
+        {{ categoryEditorState.error }}
       </div>
       <div v-else-if="categoryEditorState.success" class="alert alert-success" style="margin-top:10px">
-        ✅ {{ categoryEditorState.success }}
+        {{ categoryEditorState.success }}
       </div>
     </div>
 
     <!-- Health status -->
     <div class="setting-card">
-      <div class="setting-title">📡 API Status</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="INFO_SVG"></span> API Status</div>
       <div class="setting-desc">Live status from the FastAPI backend.</div>
       <div v-if="!store.health" class="loading" style="padding:10px 0"><div class="spinner"></div> Checking…</div>
       <div v-else>
         <div :class="['alert', store.health.status === 'ok' ? 'alert-success' : 'alert-error']" style="margin-bottom:12px">
-          {{ store.health.status === 'ok' ? '✅ Connected' : '❌ Offline' }}
+          {{ store.health.status === 'ok' ? 'Connected' : 'Offline' }}
         </div>
         <div class="status-grid">
           <div class="status-item">
@@ -154,13 +181,13 @@
           </div>
         </div>
         <button class="btn btn-ghost btn-sm" style="margin-top:12px" @click="store.loadHealth({ forceFresh: true })">
-          🔄 Refresh status
+          <span class="inline-icon" v-html="REFRESH_SVG"></span> Refresh status
         </button>
       </div>
     </div>
 
     <div class="setting-card">
-      <div class="setting-title">📱 Mobile Data Cache</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="DATABASE_SVG"></span> Mobile Data Cache</div>
       <div class="setting-desc">
         iPhone PWA reads cached API data for up to 24 hours. Use this to pull fresh data immediately instead of waiting for the daily refresh window.
       </div>
@@ -170,10 +197,10 @@
         @click="refreshMobileCache"
       >
         <span v-if="refreshCacheState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Refreshing cache…</span>
-        <span v-else>🔄 Refresh Mobile Data Now</span>
+        <span v-else><span class="inline-icon" v-html="REFRESH_SVG"></span> Refresh Mobile Data Now</span>
       </button>
       <div v-if="refreshCacheState.error" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ refreshCacheState.error }}
+        {{ refreshCacheState.error }}
       </div>
       <div v-else-if="refreshCacheState.doneAt" class="result-box">
         <div class="result-row">
@@ -187,7 +214,7 @@
 
     <!-- Import from XLSX -->
     <div v-if="!store.isReadOnly" class="setting-card">
-      <div class="setting-title">📥 Import from XLSX</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="DOCUMENT_SVG"></span> Import from XLSX</div>
       <div class="setting-desc">
         Read
         <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">ALL_TRANSACTIONS.xlsx</code>
@@ -215,12 +242,12 @@
         @click="doImport"
       >
         <span v-if="importState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Importing…</span>
-        <span v-else>📥 {{ importOpts.dry_run ? 'Dry Run' : 'Import' }}</span>
+        <span v-else><span class="inline-icon" v-html="DOCUMENT_SVG"></span> {{ importOpts.dry_run ? 'Dry Run' : 'Import' }}</span>
       </button>
 
       <!-- Import result -->
       <div v-if="importState.error" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ importState.error }}
+        {{ importState.error }}
       </div>
       <div v-else-if="importState.result" class="result-box">
         <div class="result-row">
@@ -237,7 +264,7 @@
     </div>
 
     <div v-if="!store.isReadOnly" class="setting-card">
-      <div class="setting-title">🧩 PDF Pipeline</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="DOCUMENT_SVG"></span> PDF Pipeline</div>
       <div class="setting-desc">
         Run the end-to-end pipeline from <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">data/pdf_inbox</code>
         through import and sync. Desktop only, and controlled by the bridge pipeline setting.
@@ -253,7 +280,7 @@
             <span class="spinner" style="width:14px;height:14px;border-width:2px"></span>
             Running pipeline…
           </span>
-          <span v-else>🔄 Run Pipeline</span>
+          <span v-else><span class="inline-icon" v-html="REFRESH_SVG"></span> Run Pipeline</span>
         </button>
 
         <div class="result-box" v-if="pipelineState.status">
@@ -279,13 +306,13 @@
       </div>
 
       <div v-if="pipelineState.error" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ pipelineState.error }}
+        {{ pipelineState.error }}
       </div>
     </div>
 
     <!-- ── Process Local PDFs ──────────────────────────────────────────────── -->
     <div v-if="!store.isReadOnly" class="setting-card">
-      <div class="setting-title">📄 Process Local PDFs</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="FOLDER_SVG"></span> Process Local PDFs</div>
       <div class="setting-desc">
         Scan <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">data/pdf_inbox</code>
         and <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">data/pdf_unlocked</code>
@@ -343,18 +370,18 @@
           </div>
 
           <div v-if="pdf.fatalError" class="alert alert-error" style="margin-top:10px">
-            ❌ {{ pdf.fatalError }}
+            {{ pdf.fatalError }}
           </div>
           <div v-else-if="pdfWorkspace.error" class="alert alert-error" style="margin-top:10px">
-            ❌ {{ pdfWorkspace.error }}
+            {{ pdfWorkspace.error }}
           </div>
 
           <div v-if="pdf.phase === 'processing' && pdf.total > 0" style="margin-top:12px">
             <div class="pdf-summary-bar">
-              <span class="pdf-badge pdf-badge-ok">✅ {{ pdfCounts.ok }}</span>
-              <span v-if="pdfCounts.skipped > 0" class="pdf-badge pdf-badge-skip">⏭ {{ pdfCounts.skipped }} skipped</span>
-              <span v-if="pdfCounts.error > 0" class="pdf-badge pdf-badge-err">❌ {{ pdfCounts.error }} failed</span>
-              <span class="pdf-badge pdf-badge-pend">⏳ {{ pdf.processed }} / {{ pdf.total }}</span>
+              <span class="pdf-badge pdf-badge-ok"><span class="inline-icon" v-html="CHECK_SVG"></span>{{ pdfCounts.ok }}</span>
+              <span v-if="pdfCounts.skipped > 0" class="pdf-badge pdf-badge-skip">{{ pdfCounts.skipped }} skipped</span>
+              <span v-if="pdfCounts.error > 0" class="pdf-badge pdf-badge-err"><span class="inline-icon" v-html="X_SVG"></span>{{ pdfCounts.error }} failed</span>
+              <span class="pdf-badge pdf-badge-pend">{{ pdf.processed }} / {{ pdf.total }}</span>
             </div>
             <div class="pdf-progress-bar-wrap">
               <div
@@ -509,46 +536,62 @@
       </div>
     </div>
 
-    <div v-if="!store.isReadOnly" class="setting-card">
-      <div class="setting-title">💾 Backup</div>
-      <div class="setting-desc">
-        Tiered SQLite backups live in <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">{{ backupState.status?.backup_root || '~/agentic-ai/data/backups' }}</code>.
-        Auto backups keep 24 hourly, 31 daily, 5 weekly, and 12 monthly sets. Manual backups keep 10 sets.
-      </div>
+    <div v-if="!store.isReadOnly" class="setting-card setting-card--collapsible">
       <button
-        data-testid="manual-backup-button"
-        class="btn btn-primary btn-block"
-        :disabled="backupState.loading"
-        @click="doManualBackup"
+        class="setting-card__toggle"
+        type="button"
+        :aria-expanded="String(!backupCollapsed)"
+        @click="backupCollapsed = !backupCollapsed"
       >
-        <span v-if="backupState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Creating backup…</span>
-        <span v-else>💾 Create Manual Backup</span>
+        <div class="setting-card__toggle-title">
+          <span class="setting-title-icon" v-html="SAVE_SVG"></span>
+          <span>Backup</span>
+        </div>
+        <span class="setting-card__toggle-chevron" :class="{ 'is-open': !backupCollapsed }">⌄</span>
       </button>
-      <div v-if="backupState.error" class="alert alert-error" style="margin-top:10px">
-        ❌ {{ backupState.error }}
+      <div v-if="backupCollapsed" class="setting-card__collapsed-note">
+        Collapsed by default. Open to create backups or review retention tiers.
       </div>
-      <div v-else-if="backupState.result" class="alert alert-success" style="margin-top:10px">
-        ✅ Saved {{ baseName(backupState.result.path) }}
-      </div>
-      <div v-if="backupTiers.length" class="backup-tier-list">
-        <div v-for="tier in backupTiers" :key="tier.key" class="backup-tier-card">
-          <div class="backup-tier-row">
-            <div>
-              <div class="backup-tier-title">{{ tier.label }}</div>
-              <div class="backup-tier-sub">{{ tier.count }} / {{ tier.max_sets }} kept</div>
+      <div v-else class="setting-card__body">
+        <div class="setting-desc">
+          Tiered SQLite backups live in <code style="font-size:11px;background:var(--bg);padding:2px 5px;border-radius:3px">{{ backupState.status?.backup_root || '~/agentic-ai/data/backups' }}</code>.
+          Auto backups keep 24 hourly, 31 daily, 5 weekly, and 12 monthly sets. Manual backups keep 10 sets.
+        </div>
+        <button
+          data-testid="manual-backup-button"
+          class="btn btn-primary btn-block"
+          :disabled="backupState.loading"
+          @click="doManualBackup"
+        >
+          <span v-if="backupState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Creating backup…</span>
+          <span v-else><span class="inline-icon" v-html="SAVE_SVG"></span> Create Manual Backup</span>
+        </button>
+        <div v-if="backupState.error" class="alert alert-error" style="margin-top:10px">
+          {{ backupState.error }}
+        </div>
+        <div v-else-if="backupState.result" class="alert alert-success" style="margin-top:10px">
+          Saved {{ baseName(backupState.result.path) }}
+        </div>
+        <div v-if="backupTiers.length" class="backup-tier-list">
+          <div v-for="tier in backupTiers" :key="tier.key" class="backup-tier-card">
+            <div class="backup-tier-row">
+              <div>
+                <div class="backup-tier-title">{{ tier.label }}</div>
+                <div class="backup-tier-sub">{{ tier.count }} / {{ tier.max_sets }} kept</div>
+              </div>
+              <span :class="['backup-tier-pill', `backup-tier-pill--${tier.status}`]">{{ backupStatusLabel(tier.status) }}</span>
             </div>
-            <span :class="['backup-tier-pill', `backup-tier-pill--${tier.status}`]">{{ backupStatusLabel(tier.status) }}</span>
+            <div class="backup-tier-meta">Latest: {{ fmtRelativeTime(tier.latest_at) }}</div>
+            <div v-if="tier.next_due_at" class="backup-tier-meta">Next due: {{ fmtRelativeTime(tier.next_due_at) }}</div>
+            <div v-if="tier.latest_file" class="backup-tier-file">{{ baseName(tier.latest_file) }}</div>
           </div>
-          <div class="backup-tier-meta">Latest: {{ fmtRelativeTime(tier.latest_at) }}</div>
-          <div v-if="tier.next_due_at" class="backup-tier-meta">Next due: {{ fmtRelativeTime(tier.next_due_at) }}</div>
-          <div v-if="tier.latest_file" class="backup-tier-file">{{ baseName(tier.latest_file) }}</div>
         </div>
       </div>
     </div>
 
     <!-- NAS Sync (only when writable and NAS is configured) -->
     <div v-if="!store.isReadOnly && nasSyncStatus.configured" class="setting-card">
-      <div class="setting-title">🖥️ NAS Sync</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="REFRESH_SVG"></span> NAS Sync</div>
       <div class="setting-desc">
         Push the latest available backup to the NAS replica so the always-on copy stays current.
       </div>
@@ -561,221 +604,234 @@
         @click="doNasSync"
       >
         <span v-if="nasSyncState.loading"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Syncing…</span>
-        <span v-else>🖥️ Sync to NAS Now</span>
+        <span v-else><span class="inline-icon" v-html="REFRESH_SVG"></span> Sync to NAS Now</span>
       </button>
       <div v-if="nasSyncState.result" style="margin-top:10px;font-size:12px">
         <div v-if="nasSyncState.result.ok" class="alert alert-success" style="padding:6px 8px">
           ✓ Synced at {{ fmtNasSync(nasSyncState.result.synced_at) }}
         </div>
         <div v-else class="alert alert-error" style="padding:6px 8px">
-          ❌ {{ nasSyncState.result.error || 'Sync failed' }}
+          {{ nasSyncState.result.error || 'Sync failed' }}
         </div>
       </div>
     </div>
 
     <div class="settings-section-label">Connected Satellites & Automation</div>
 
-    <div class="setting-card">
-      <div class="setting-title">🏠 Household Expense</div>
-      <div class="setting-desc">
-        Satellite household expense operations for the DS920+ LAN app on port 8088. Update recent transaction categories and adjust live cash pools without opening the assistant-facing PWA.
+    <div v-if="!store.isReadOnly" class="setting-card setting-card--collapsible">
+      <button
+        class="setting-card__toggle"
+        type="button"
+        :aria-expanded="String(!householdCollapsed)"
+        @click="householdCollapsed = !householdCollapsed"
+      >
+        <div class="setting-card__toggle-title">
+          <span class="setting-title-icon" v-html="NAV_SVGS.Assets"></span>
+          <span>Household Expense</span>
+        </div>
+        <span class="setting-card__toggle-chevron" :class="{ 'is-open': !householdCollapsed }">⌄</span>
+      </button>
+      <div v-if="householdCollapsed" class="setting-card__collapsed-note">
+        Collapsed by default. Open to manage household categories, recent expenses, and cash pools.
       </div>
-      <div v-if="householdState.loading" class="loading" style="padding:10px 0"><div class="spinner"></div> Loading household workspace…</div>
-      <div v-else-if="householdState.error" class="alert alert-error">
-        ❌ {{ householdState.error }}
-      </div>
-      <div v-else-if="!householdState.available" class="alert alert-error">
-        ❌ {{ householdState.unavailableReason || 'Household service unavailable' }}
-      </div>
-      <div v-else class="household-grid">
-        <div class="household-pane household-pane--wide">
-          <div class="household-pane__title">Categories</div>
-          <div class="household-category-create">
-            <div class="range-field">
-              <label class="range-label">Code</label>
-              <input
-                data-testid="household-category-code-input"
-                v-model="householdCategoryForm.code"
-                class="form-input"
-                type="text"
-                placeholder="e.g. fruit"
-              />
-            </div>
-            <div class="range-field">
-              <label class="range-label">Label</label>
-              <input
-                data-testid="household-category-label-input"
-                v-model="householdCategoryForm.label_id"
-                class="form-input"
-                type="text"
-                placeholder="e.g. Buah"
-              />
-            </div>
-            <div class="range-field">
-              <label class="range-label">Sort</label>
-              <input
-                data-testid="household-category-sort-input"
-                v-model="householdCategoryForm.sort_order"
-                class="form-input"
-                type="number"
-                min="0"
-                step="1"
-              />
-            </div>
-            <div class="household-item__controls household-item__controls--compact">
-              <button
-                data-testid="household-category-create-button"
-                class="btn btn-primary btn-sm"
-                :disabled="!householdCategoryForm.code.trim() || !householdCategoryForm.label_id.trim()"
-                @click="createHouseholdCategory"
-              >
-                Add category
-              </button>
-            </div>
-          </div>
-          <div v-if="!householdState.categories.length" class="household-empty">No household categories yet.</div>
-          <div v-for="category in householdState.categories" :key="category.originalCode" class="household-item">
-            <div class="household-category-grid">
+      <div v-else class="setting-card__body">
+        <div class="setting-desc">
+          Satellite household expense operations for the DS920+ LAN app on port 8088. Update recent transaction categories and adjust live cash pools without opening the assistant-facing PWA.
+        </div>
+        <div v-if="householdState.loading" class="loading" style="padding:10px 0"><div class="spinner"></div> Loading household workspace…</div>
+        <div v-else-if="householdState.error" class="alert alert-error">
+          {{ householdState.error }}
+        </div>
+        <div v-else-if="!householdState.available" class="alert alert-error">
+          {{ householdState.unavailableReason || 'Household service unavailable' }}
+        </div>
+        <div v-else class="household-grid">
+          <div class="household-pane household-pane--wide">
+            <div class="household-pane__title">Categories</div>
+            <div class="household-category-create">
               <div class="range-field">
                 <label class="range-label">Code</label>
                 <input
-                  :data-testid="`household-category-code-${category.originalCode}`"
-                  v-model="category.draftCode"
+                  data-testid="household-category-code-input"
+                  v-model="householdCategoryForm.code"
                   class="form-input"
                   type="text"
+                  placeholder="e.g. fruit"
                 />
               </div>
               <div class="range-field">
                 <label class="range-label">Label</label>
                 <input
-                  :data-testid="`household-category-label-${category.originalCode}`"
-                  v-model="category.draftLabel"
+                  data-testid="household-category-label-input"
+                  v-model="householdCategoryForm.label_id"
                   class="form-input"
                   type="text"
+                  placeholder="e.g. Buah"
                 />
               </div>
               <div class="range-field">
                 <label class="range-label">Sort</label>
                 <input
-                  :data-testid="`household-category-sort-${category.originalCode}`"
-                  v-model="category.draftSortOrder"
+                  data-testid="household-category-sort-input"
+                  v-model="householdCategoryForm.sort_order"
                   class="form-input"
                   type="number"
                   min="0"
                   step="1"
                 />
               </div>
-            </div>
-            <div class="household-item__controls">
-              <span class="household-item__meta">Live in Household PWA immediately after save.</span>
-              <div class="household-action-row">
+              <div class="household-item__controls household-item__controls--compact">
                 <button
-                  :data-testid="`household-category-save-${category.originalCode}`"
+                  data-testid="household-category-create-button"
                   class="btn btn-primary btn-sm"
-                  :disabled="category.saving || !category.draftCode.trim() || !category.draftLabel.trim()"
-                  @click="saveHouseholdCategory(category)"
+                  :disabled="!householdCategoryForm.code.trim() || !householdCategoryForm.label_id.trim()"
+                  @click="createHouseholdCategory"
                 >
-                  {{ category.saving ? 'Saving…' : 'Save' }}
+                  Add category
                 </button>
+              </div>
+            </div>
+            <div v-if="!householdState.categories.length" class="household-empty">No household categories yet.</div>
+            <div v-for="category in householdState.categories" :key="category.originalCode" class="household-item">
+              <div class="household-category-grid">
+                <div class="range-field">
+                  <label class="range-label">Code</label>
+                  <input
+                    :data-testid="`household-category-code-${category.originalCode}`"
+                    v-model="category.draftCode"
+                    class="form-input"
+                    type="text"
+                  />
+                </div>
+                <div class="range-field">
+                  <label class="range-label">Label</label>
+                  <input
+                    :data-testid="`household-category-label-${category.originalCode}`"
+                    v-model="category.draftLabel"
+                    class="form-input"
+                    type="text"
+                  />
+                </div>
+                <div class="range-field">
+                  <label class="range-label">Sort</label>
+                  <input
+                    :data-testid="`household-category-sort-${category.originalCode}`"
+                    v-model="category.draftSortOrder"
+                    class="form-input"
+                    type="number"
+                    min="0"
+                    step="1"
+                  />
+                </div>
+              </div>
+              <div class="household-item__controls">
+                <span class="household-item__meta">Live in Household PWA immediately after save.</span>
+                <div class="household-action-row">
+                  <button
+                    :data-testid="`household-category-save-${category.originalCode}`"
+                    class="btn btn-primary btn-sm"
+                    :disabled="category.saving || !category.draftCode.trim() || !category.draftLabel.trim()"
+                    @click="saveHouseholdCategory(category)"
+                  >
+                    {{ category.saving ? 'Saving…' : 'Save' }}
+                  </button>
+                  <button
+                    :data-testid="`household-category-delete-${category.originalCode}`"
+                    class="btn btn-ghost btn-sm household-delete-btn"
+                    :disabled="category.deleting"
+                    @click="removeHouseholdCategory(category)"
+                  >
+                    {{ category.deleting ? 'Removing…' : 'Remove' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="household-pane">
+            <div class="household-pane__title">Recent expenses</div>
+            <div v-if="!householdState.recentTransactions.length" class="household-empty">No recent household expenses found.</div>
+            <div v-for="txn in householdState.recentTransactions" :key="txn.id" class="household-item">
+              <div class="household-item__head">
+                <div>
+                  <div class="household-item__title">{{ householdTransactionLabel(txn) }}</div>
+                  <div class="household-item__meta">{{ formatHouseholdDate(txn.txn_datetime) }} · {{ formatHouseholdAmount(txn.amount) }}</div>
+                </div>
+                <span class="household-chip">#{{ txn.id }}</span>
+              </div>
+              <div class="household-item__controls">
+                <select
+                  :data-testid="`household-transaction-category-${txn.id}`"
+                  v-model="txn.draftCategory"
+                  class="range-select"
+                >
+                  <option v-for="category in householdState.categories" :key="category.code" :value="category.code">
+                    {{ category.label_id }}
+                  </option>
+                </select>
                 <button
-                  :data-testid="`household-category-delete-${category.originalCode}`"
-                  class="btn btn-ghost btn-sm household-delete-btn"
-                  :disabled="category.deleting"
-                  @click="removeHouseholdCategory(category)"
+                  :data-testid="`household-transaction-save-${txn.id}`"
+                  class="btn btn-primary btn-sm"
+                  :disabled="txn.saving || !txn.draftCategory || txn.draftCategory === txn.category_code"
+                  @click="saveHouseholdTransactionCategory(txn)"
                 >
-                  {{ category.deleting ? 'Removing…' : 'Remove' }}
+                  {{ txn.saving ? 'Saving…' : 'Save' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="household-pane">
+            <div class="household-pane__title">Cash pools</div>
+            <div v-if="!householdState.cashPools.length" class="household-empty">No household cash pools yet.</div>
+            <div v-for="pool in householdState.cashPools" :key="pool.id" class="household-item household-item--pool">
+              <div class="household-item__head">
+                <div>
+                  <div class="household-item__title">{{ pool.name }}</div>
+                  <div class="household-item__meta">Code: {{ pool.code || '—' }}</div>
+                </div>
+                <span class="household-chip">#{{ pool.id }}</span>
+              </div>
+              <div class="household-item__controls household-item__controls--stacked">
+                <div class="range-field">
+                  <label class="range-label">Amount</label>
+                  <input
+                    :data-testid="`household-cashpool-amount-${pool.id}`"
+                    v-model="pool.adjustmentInput"
+                    class="form-input"
+                    type="number"
+                    step="1000"
+                    placeholder="e.g. 50000"
+                  />
+                </div>
+                <div class="range-field">
+                  <label class="range-label">Notes</label>
+                  <input
+                    :data-testid="`household-cashpool-notes-${pool.id}`"
+                    v-model="pool.notesInput"
+                    class="form-input"
+                    type="text"
+                    placeholder="Optional notes"
+                  />
+                </div>
+                <button
+                  :data-testid="`household-cashpool-save-${pool.id}`"
+                  class="btn btn-primary btn-sm"
+                  :disabled="pool.saving || !pool.adjustmentInput"
+                  @click="saveHouseholdCashPool(pool)"
+                >
+                  {{ pool.saving ? 'Saving…' : 'Apply adjustment' }}
                 </button>
               </div>
             </div>
           </div>
         </div>
-
-        <div class="household-pane">
-          <div class="household-pane__title">Recent expenses</div>
-          <div v-if="!householdState.recentTransactions.length" class="household-empty">No recent household expenses found.</div>
-          <div v-for="txn in householdState.recentTransactions" :key="txn.id" class="household-item">
-            <div class="household-item__head">
-              <div>
-                <div class="household-item__title">{{ householdTransactionLabel(txn) }}</div>
-                <div class="household-item__meta">{{ formatHouseholdDate(txn.txn_datetime) }} · {{ formatHouseholdAmount(txn.amount) }}</div>
-              </div>
-              <span class="household-chip">#{{ txn.id }}</span>
-            </div>
-            <div class="household-item__controls">
-              <select
-                :data-testid="`household-transaction-category-${txn.id}`"
-                v-model="txn.draftCategory"
-                class="range-select"
-              >
-                <option v-for="category in householdState.categories" :key="category.code" :value="category.code">
-                  {{ category.label_id }}
-                </option>
-              </select>
-              <button
-                :data-testid="`household-transaction-save-${txn.id}`"
-                class="btn btn-primary btn-sm"
-                :disabled="txn.saving || !txn.draftCategory || txn.draftCategory === txn.category_code"
-                @click="saveHouseholdTransactionCategory(txn)"
-              >
-                {{ txn.saving ? 'Saving…' : 'Save' }}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="household-pane">
-          <div class="household-pane__title">Cash pools</div>
-          <div v-if="!householdState.cashPools.length" class="household-empty">No household cash pools yet.</div>
-          <div v-for="pool in householdState.cashPools" :key="pool.id" class="household-item household-item--pool">
-            <div class="household-item__head">
-              <div>
-                <div class="household-item__title">{{ pool.name }}</div>
-                <div class="household-item__meta">Remaining {{ formatHouseholdAmount(pool.remaining_amount) }} · Funded {{ formatHouseholdDate(pool.funded_at) }}</div>
-              </div>
-              <span class="household-chip">{{ pool.status }}</span>
-            </div>
-            <div class="household-pool-grid">
-              <div class="range-field">
-                <label class="range-label">Adjust by (IDR)</label>
-                <input
-                  :data-testid="`household-cash-pool-adjustment-${pool.id}`"
-                  v-model="pool.adjustmentInput"
-                  class="form-input"
-                  type="number"
-                  step="1000"
-                  placeholder="e.g. 50000 or -25000"
-                />
-              </div>
-              <div class="range-field">
-                <label class="range-label">Notes</label>
-                <input
-                  v-model="pool.notesInput"
-                  class="form-input"
-                  type="text"
-                  placeholder="Optional adjustment note"
-                />
-              </div>
-            </div>
-            <div class="household-item__controls">
-              <button
-                :data-testid="`household-cash-pool-save-${pool.id}`"
-                class="btn btn-primary btn-sm"
-                :disabled="pool.saving || !pool.adjustmentInput"
-                @click="saveHouseholdCashPool(pool)"
-              >
-                {{ pool.saving ? 'Saving…' : 'Apply adjustment' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div v-if="householdState.success" class="alert alert-success" style="margin-top:10px">
-        ✅ {{ householdState.success }}
       </div>
     </div>
 
+
     <div class="setting-card">
-      <div class="setting-title">🤖 AI Refinement</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="ROBOT_SVG"></span> AI Refinement</div>
       <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">
         When enabled, Flows and Wealth automatically call the local AI (Ollama) to enrich trend explanations, and Review Queue auto-generates category suggestions.
       </div>
@@ -794,13 +850,13 @@
     </div>
 
     <div class="setting-card">
-      <div class="setting-title">ℹ️ About</div>
+      <div class="setting-title"><span class="setting-title-icon" v-html="INFO_SVG"></span> About</div>
       <div class="about-stack">
         <div><strong>Finance Dashboard</strong> — Stage 3 wealth cockpit + operations console</div>
         <div>Vue 3 desktop/mobile PWA · FastAPI backend · SQLite authoritative store · local Ollama refinement</div>
         <div>Desktop Settings now also manages the Household Expense satellite on the DS920+ LAN app (port 8088).</div>
         <div v-if="store.isReadOnly" class="about-pill about-pill--readonly">
-          👁 Read-only replica (NAS)
+          <span class="inline-icon" v-html="EYE_SVG"></span> Read-only replica (NAS)
         </div>
         <div class="about-meta-row">
           <span class="about-meta-label">Finance API</span>
@@ -821,11 +877,13 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import ReadOnlyBanner from '../components/ReadOnlyBanner.vue'
+import { NAV_SVGS, EYE_SVG, REFRESH_SVG, SAVE_SVG, CHECK_SVG, X_SVG, ROBOT_SVG, DOCUMENT_SVG, FOLDER_SVG, DATABASE_SVG, INFO_SVG } from '../utils/icons.js'
 
 const store = useFinanceStore()
 
 const importState    = ref({ loading: false, result: null, error: null })
 const backupState    = ref({ loading: false, error: null, status: null, result: null })
+const backupCollapsed = ref(true)
 const nasSyncState   = ref({ loading: false, result: null })
 const nasSyncStatus  = ref({ configured: false, last_synced_at: null, target: null })
 const importOpts  = ref({ dry_run: false, overwrite: false })
@@ -833,6 +891,7 @@ const refreshCacheState = ref({ loading: false, error: null, doneAt: '' })
 const pipelineState = ref({ loading: false, status: null, error: null })
 const categoryEditorState = ref({ loading: false, error: null, success: '' })
 const showPdfWorkspace = ref(false)
+const householdCollapsed = ref(true)
 const householdState = ref({
   loading: false,
   error: null,
@@ -1652,6 +1711,45 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.settings-head-icon,
+.setting-title-icon,
+.inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+  flex-shrink: 0;
+}
+.settings-head-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.setting-title-icon {
+  width: 15px;
+  height: 15px;
+  margin-right: 8px;
+}
+.inline-icon {
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.settings-head-icon :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
+.setting-title-icon :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+.inline-icon :deep(svg) {
+  width: 13px;
+  height: 13px;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -1661,6 +1759,75 @@ onMounted(async () => {
 
 .settings-grid > * {
   min-width: 0;
+}
+
+.more-nav-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.more-nav-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card-bg) 88%, transparent);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.more-nav-card:active {
+  transform: translateY(1px);
+}
+
+.more-nav-card:hover {
+  border-color: var(--primary);
+  background: var(--primary-dim);
+}
+
+.more-nav-card__icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+  flex-shrink: 0;
+}
+
+.more-nav-card__icon :deep(svg) {
+  width: 18px;
+  height: 18px;
+}
+
+.more-nav-card__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.more-nav-card__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.more-nav-card__desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.more-nav-card__chevron {
+  font-size: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .settings-section-label {

@@ -3,13 +3,13 @@
 # Run this after any backend (finance/*.py) or frontend (pwa/) changes
 # that need to be reflected on the NAS (iPhone/Tailscale access).
 #
-# Prerequisites: nas_sync_key in secrets/, ssh on port 68 to 192.168.1.44
+# Prerequisites: nas_sync_key in secrets/, ssh on port 2 to 192.168.1.44
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NAS_HOST="192.168.1.44"
-NAS_PORT=68
+NAS_PORT=22
 NAS_USER="g4ndr1k"
 NAS_KEY="$REPO_ROOT/secrets/nas_sync_key"
 DOCKER_NAS="/var/packages/ContainerManager/target/usr/bin/docker"

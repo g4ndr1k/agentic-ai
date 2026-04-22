@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="section-hd">📋 Transactions</div>
+    <div class="section-hd">Transactions</div>
 
     <!-- Filter panel -->
     <div class="filter-panel" :class="{ 'filters-muted': aiFilters }">
@@ -37,7 +37,7 @@
           <label class="fp-label">Group</label>
           <select v-model="filters.categoryGroup" @change="onFilterChange">
             <option value="">All</option>
-            <option value="__income__">💰 Income</option>
+            <option value="__income__">Income</option>
             <option v-for="group in categoryGroupNames" :key="group" :value="group">{{ group }}</option>
           </select>
         </div>
@@ -54,7 +54,7 @@
         <div class="fp-field fp-field-search">
           <input
             v-model="filters.q"
-            placeholder="🔍 Search description or merchant…"
+            placeholder="Search description or merchant…"
             @input="debouncedSearch"
           />
         </div>
@@ -69,7 +69,7 @@
     <!-- AI AMA box -->
     <div class="filter-bar ai-ama-bar">
       <div class="ai-ama-wrap" :class="{ loading: aiLoading }">
-        <span class="ai-ama-label">✨ AI</span>
+        <span class="ai-ama-label"><span class="sparkle-icon" v-html="SPARKLE_SVG"></span> AI</span>
         <input
           v-model="aiQuery"
           class="ai-ama-input"
@@ -91,7 +91,7 @@
 
     <!-- AI mode active banner -->
     <div v-if="aiFilters" class="ai-active-banner">
-      <span class="ai-active-icon">✨</span>
+      <span class="ai-active-icon sparkle-icon" v-html="SPARKLE_SVG"></span>
       <span class="ai-active-query">"{{ aiLabel }}"</span>
       <button class="btn btn-ghost btn-sm ai-clear-btn" @click="clearAi">✕ Clear</button>
     </div>
@@ -102,7 +102,7 @@
     <div v-if="loading" class="loading"><div class="spinner"></div> Loading…</div>
 
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
@@ -117,7 +117,7 @@
       </div>
 
       <div v-if="!transactions.length" class="empty-state">
-        <div class="e-icon">📭</div>
+        <div class="e-icon empty-icon" v-html="FOLDER_SVG"></div>
         <div class="e-msg">No transactions found</div>
         <div class="e-sub">Try adjusting your filters</div>
       </div>
@@ -137,8 +137,8 @@
               <div class="tx-main">
                 <div class="tx-merchant">{{ tx.merchant || tx.raw_description }}</div>
                 <div class="tx-cat">
-                  <span v-if="tx.category">{{ catIcon(tx.category) }} {{ tx.category }}</span>
-                  <span v-else style="color:var(--warning)">⚠ Uncategorised</span>
+                  <span v-if="tx.category">{{ tx.category }}</span>
+                  <span v-else style="color:var(--warning)">Uncategorised</span>
                   · {{ tx.owner }}
                 </div>
               </div>
@@ -183,7 +183,7 @@
                   <select v-model="editCategory" class="cat-select" @click.stop>
                     <option value="" disabled>Select category…</option>
                     <option v-for="c in store.categoryNames" :key="c" :value="c">
-                      {{ catIcon(c) }} {{ c }}
+                      {{ c }}
                     </option>
                   </select>
                   <button
@@ -256,7 +256,7 @@
                 <select v-model="editCategory" class="cat-select" @click.stop>
                   <option value="" disabled>Select category…</option>
                   <option v-for="c in store.categoryNames" :key="c" :value="c">
-                    {{ catIcon(c) }} {{ c }}
+                    {{ c }}
                   </option>
                 </select>
                 <button
@@ -295,6 +295,7 @@ import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
 import { useLayout } from '../composables/useLayout.js'
 import TransactionTable from '../components/TransactionTable.vue'
+import { SPARKLE_SVG, FOLDER_SVG } from '../utils/icons.js'
 
 
 const route = useRoute()
@@ -356,7 +357,6 @@ const selectedTx = computed(() =>
 const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
 function monthName(m) { return MONTHS_LONG[m - 1] }
-function catIcon(name) { return store.categoryMap[name]?.icon || '📁' }
 const { fmt } = useFmt()
 
 let searchTimer = null
@@ -728,7 +728,14 @@ onActivated(() => {
   color: var(--primary);
   white-space: nowrap;
   letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
+.sparkle-icon { width: 13px; height: 13px; display: inline-flex; align-items: center; }
+.sparkle-icon :deep(svg) { width: 13px; height: 13px; }
+.empty-icon { width: 26px; height: 26px; margin: 0 auto 10px; color: var(--primary-deep); display: inline-flex; align-items: center; justify-content: center; }
+.empty-icon :deep(svg) { width: 26px; height: 26px; }
 
 .ai-ama-input {
   flex: 1;
@@ -754,7 +761,7 @@ onActivated(() => {
   border-radius: 0 8px 8px 0;
   font-size: 13px;
 }
-.ai-active-icon { font-size: 14px; flex-shrink: 0; }
+.ai-active-icon { flex-shrink: 0; }
 .ai-active-query { flex: 1; font-style: italic; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-clear-btn { margin-left: auto; flex-shrink: 0; }
 

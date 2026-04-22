@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useFinanceStore } from '../stores/finance.js'
+import { EYE_SVG } from '../utils/icons.js'
 
 const store = useFinanceStore()
 
@@ -26,7 +27,7 @@ const lastSync = computed(() => {
 <template>
   <div v-if="store.isReadOnly" class="setting-card ro-card">
     <div class="ro-card__header">
-      <span class="ro-card__icon">👁</span>
+      <span class="ro-card__icon" v-html="EYE_SVG"></span>
       <span class="ro-card__label">Read-Only Mode</span>
       <span class="ro-card__badge">NAS Replica</span>
     </div>
@@ -66,7 +67,17 @@ const lastSync = computed(() => {
 }
 
 .ro-card__icon {
-  font-size: 18px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+}
+
+.ro-card__icon :deep(svg) {
+  width: 18px;
+  height: 18px;
 }
 
 .ro-card__label {

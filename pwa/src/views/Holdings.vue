@@ -8,7 +8,7 @@
           :key="t.key"
           :class="['group-tab', activeTab === t.key && 'active']"
           @click="activeTab = t.key"
-        >{{ t.icon }} {{ t.label }}</button>
+        >{{ t.label }}</button>
       </div>
     </div>
 
@@ -48,7 +48,7 @@
 
     <!-- Error -->
     <div v-else-if="loadError" class="alert alert-error" style="margin:12px 16px">
-      ❌ {{ loadError }}
+      {{ loadError }}
       <button class="btn btn-sm btn-ghost" @click="loadItems" style="margin-left:auto">Retry</button>
     </div>
 
@@ -57,7 +57,7 @@
       <!-- Cash & Liquid -->
       <template v-if="activeTab === 'all' || activeTab === 'cash'">
         <button class="section-header section-header-btn" @click="toggleSection('cash')">
-          <span>🏦 Cash &amp; Liquid</span>
+          <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.cash"></span> Cash &amp; Liquid</span>
           <span class="section-header-right">
             <span class="section-total">{{ fmt(totals.liquid) }}</span>
             <span class="section-chevron">{{ isSectionOpen('cash') ? '▾' : '▸' }}</span>
@@ -89,7 +89,7 @@
       <!-- Investments -->
       <template v-if="activeTab === 'all' || activeTab === 'investments'">
         <button class="section-header section-header-btn" @click="toggleSection('investments')">
-          <span>📈 Investments</span>
+          <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.investments"></span> Investments</span>
           <span class="section-header-right">
             <span class="section-total">{{ fmt(totals.investments) }}</span>
             <span class="section-chevron">{{ isSectionOpen('investments') ? '▾' : '▸' }}</span>
@@ -100,7 +100,7 @@
 
           <template v-if="filteredBonds.length">
             <div class="sub-header">
-              <span>🏛 Government Bonds</span>
+              <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.bonds"></span> Government Bonds</span>
               <span class="sub-total">{{ fmt(filteredBonds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
             </div>
             <div
@@ -141,7 +141,7 @@
 
           <template v-if="filteredStocks.length">
             <div class="sub-header">
-              <span>📊 Stocks</span>
+              <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.stocks"></span> Stocks</span>
               <span class="sub-total">{{ fmt(filteredStocks.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
             </div>
             <div
@@ -177,7 +177,7 @@
 
           <template v-if="filteredMutualFunds.length">
             <div class="sub-header">
-              <span>💹 Mutual Funds</span>
+              <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.funds"></span> Mutual Funds</span>
               <span class="sub-total">{{ fmt(filteredMutualFunds.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
             </div>
             <div
@@ -213,7 +213,7 @@
 
           <template v-if="filteredOtherInvestments.length">
             <div v-if="filteredBonds.length || filteredStocks.length || filteredMutualFunds.length" class="sub-header">
-              <span>🏦 Other Investments</span>
+              <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.cash"></span> Other Investments</span>
               <span class="sub-total">{{ fmt(filteredOtherInvestments.reduce((s,h) => s + (h.market_value_idr||0), 0)) }}</span>
             </div>
             <div
@@ -245,7 +245,7 @@
       <!-- Real Estate -->
       <template v-if="activeTab === 'all' || activeTab === 'realestate'">
         <button class="section-header section-header-btn" @click="toggleSection('realestate')">
-          <span>🏠 Real Estate</span>
+          <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.property"></span> Real Estate</span>
           <span class="section-header-right">
             <span class="section-total">{{ fmt(totals.realestate) }}</span>
             <span class="section-chevron">{{ isSectionOpen('realestate') ? '▾' : '▸' }}</span>
@@ -278,7 +278,7 @@
       <!-- Physical Assets -->
       <template v-if="activeTab === 'all' || activeTab === 'physical'">
         <button class="section-header section-header-btn" @click="toggleSection('physical')">
-          <span>🟡 Physical Assets</span>
+          <span class="section-hd-inner"><span class="section-icon" v-html="SECTION_SVGS.retirement"></span> Physical Assets</span>
           <span class="section-header-right">
             <span class="section-total">{{ fmt(totals.physical) }}</span>
             <span class="section-chevron">{{ isSectionOpen('physical') ? '▾' : '▸' }}</span>
@@ -336,8 +336,8 @@
 
         <!-- Form type selector (hidden when editing an existing item) -->
         <div v-if="!editingId" class="form-type-tabs">
-          <button :class="['form-type-tab', formMode === 'balance'   && 'active']" @click="formMode = 'balance'">💰 Balance</button>
-          <button :class="['form-type-tab', formMode === 'holding'   && 'active']" @click="formMode = 'holding'">📈 Holding</button>
+          <button :class="['form-type-tab', formMode === 'balance'   && 'active']" @click="formMode = 'balance'">Balance</button>
+          <button :class="['form-type-tab', formMode === 'holding'   && 'active']" @click="formMode = 'holding'">Holding</button>
         </div>
 
         <!-- Balance form -->
@@ -456,6 +456,7 @@ import { useRoute } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { SECTION_SVGS } from '../utils/icons.js'
 import { collapseMonthDates, monthKey } from '../utils/wealthDates.js'
 
 const route = useRoute()
@@ -465,11 +466,11 @@ const CARRY_FORWARD_CLASSES = new Set(['retirement', 'real_estate', 'vehicle', '
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 const TABS = [
-  { key: 'all',         label: 'All',          icon: '🗂️' },
-  { key: 'cash',        label: 'Cash',         icon: '🏦' },
-  { key: 'investments', label: 'Investments',  icon: '📈' },
-  { key: 'realestate',  label: 'Real Estate',  icon: '🏠' },
-  { key: 'physical',    label: 'Physical',     icon: '🟡' },
+  { key: 'all',         label: 'All'         },
+  { key: 'cash',        label: 'Cash'        },
+  { key: 'investments', label: 'Investments' },
+  { key: 'realestate',  label: 'Real Estate' },
+  { key: 'physical',    label: 'Physical'    },
 ]
 
 const GROUP_TO_TAB = {
@@ -841,8 +842,8 @@ async function generateSnapshot() {
   try {
     const res = await api.createSnapshot({ snapshot_date: snapshotDate.value })
     snapMsg.value = res.queued
-      ? `⏳ Snapshot queued for ${fmtDateChip(snapshotDate.value)} — will sync when back online`
-      : `✓ Snapshot saved for ${fmtDateChip(snapshotDate.value)}`
+      ? `Snapshot queued for ${fmtDateChip(snapshotDate.value)} — will sync when back online`
+      : `Snapshot saved for ${fmtDateChip(snapshotDate.value)}`
     snapMsgOk.value = true
   } catch (e) {
     snapMsg.value   = 'Error: ' + e.message
@@ -927,7 +928,7 @@ onMounted(async () => {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(15,118,110,0.05), rgba(255,255,255,0.92));
+  background: var(--card);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1026,7 +1027,10 @@ onMounted(async () => {
   font-size: 14px;
   color: var(--text-muted);
 }
-.section-header-liab { color: #dc2626; }
+.section-header-liab { color: var(--expense); }
+.section-hd-inner { display: inline-flex; align-items: center; gap: 6px; }
+.section-icon { width: 14px; height: 14px; color: var(--primary-deep); display: inline-flex; align-items: center; flex-shrink: 0; }
+.section-icon :deep(svg) { width: 14px; height: 14px; }
 .section-total { font-size: 14px; font-weight: 700; color: var(--text); }
 
 /* ── Asset list items ────────────────────────────────────────────────────────  */
@@ -1067,10 +1071,10 @@ onMounted(async () => {
   padding: 1px 6px; border-radius: 4px;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.price-badge.premium  { background: #dcfce7; color: #16a34a; }
-.price-badge.discount { background: #fee2e2; color: #dc2626; }
-.price-badge.stock-price { background: #eff6ff; color: #2563eb; }
-.price-badge.nav-badge   { background: #f0fdf4; color: #15803d; }
+.price-badge.premium  { background: rgba(74,222,128,0.12); color: #4ade80; }
+.price-badge.discount { background: rgba(248,113,113,0.12); color: #f87171; }
+.price-badge.stock-price { background: var(--primary-dim); color: var(--primary); }
+.price-badge.nav-badge   { background: rgba(74,222,128,0.08); color: var(--text-muted); }
 .asset-del {
   flex-shrink: 0;
   width: 28px; height: 28px;

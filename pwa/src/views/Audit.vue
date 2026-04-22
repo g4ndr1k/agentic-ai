@@ -6,6 +6,7 @@ import { api } from '../api/client.js'
 import { useFmt } from '../composables/useFmt.js'
 import AuditCompleteness from './AuditCompleteness.vue'
 import { collapseMonthDates, monthKey } from '../utils/wealthDates.js'
+import { NAV_SVGS, DOCUMENT_SVG, X_SVG, SECTION_SVGS } from '../utils/icons.js'
 
 const router = useRouter()
 const store = useFinanceStore()
@@ -143,10 +144,10 @@ async function loadCallOver() {
 // Asset groups and their ordering
 const GROUP_ORDER = ['Cash & Liquid', 'Investments', 'Real Estate', 'Physical Assets']
 const GROUP_ICONS = {
-  'Cash & Liquid': '🏦',
-  'Investments': '📈',
-  'Real Estate': '🏠',
-  'Physical Assets': '🟡',
+  'Cash & Liquid': SECTION_SVGS.cash,
+  'Investments': SECTION_SVGS.investments,
+  'Real Estate': SECTION_SVGS.property,
+  'Physical Assets': SECTION_SVGS.funds,
 }
 
 function normalizeBalances(list) {
@@ -306,15 +307,15 @@ watch(activeTab, (tab) => {
       <button
         :class="['audit-tab', activeTab === 'call-over' && 'active']"
         @click="activeTab = 'call-over'"
-      >📊 Call Over</button>
+      ><span class="audit-tab-icon" v-html="NAV_SVGS.Audit"></span> Call Over</button>
       <button
         :class="['audit-tab', activeTab === 'pdf' && 'active']"
         @click="activeTab = 'pdf'"
-      >📋 PDF</button>
+      ><span class="audit-tab-icon" v-html="DOCUMENT_SVG"></span> PDF</button>
       <button
         :class="['audit-tab', activeTab === 'ignored' && 'active']"
         @click="activeTab = 'ignored'"
-      >🚫 Ignored</button>
+      ><span class="audit-tab-icon" v-html="X_SVG"></span> Ignored</button>
     </div>
 
     <!-- PDF Completeness tab -->
@@ -324,7 +325,7 @@ watch(activeTab, (tab) => {
     <template v-if="activeTab === 'ignored'">
       <div class="ign-header">
         <div class="ign-header-row">
-          <h1 class="co-title">🚫 Ignored Transactions</h1>
+          <h1 class="co-title"><span class="co-title-icon" v-html="X_SVG"></span> Ignored Transactions</h1>
           <button class="btn btn-ghost btn-sm" :disabled="ignoredLoading" @click="loadIgnored()">
             {{ ignoredLoading ? 'Loading…' : 'Refresh' }}
           </button>
@@ -339,7 +340,7 @@ watch(activeTab, (tab) => {
       </div>
 
       <div v-else-if="ignoredError" class="alert alert-error" style="margin:0 16px">
-        ⚠️ {{ ignoredError }}
+        {{ ignoredError }}
         <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="loadIgnored()">Retry</button>
       </div>
 
@@ -391,7 +392,7 @@ watch(activeTab, (tab) => {
       <!-- Header -->
       <div class="co-header">
         <div class="co-header-row">
-          <h1 class="co-title">📊 Call Over</h1>
+          <h1 class="co-title"><span class="co-title-icon" v-html="NAV_SVGS.Audit"></span> Call Over</h1>
           <button class="btn btn-ghost btn-sm" :disabled="loading" @click="loadCallOver">
             {{ loading ? 'Loading…' : 'Refresh' }}
           </button>
@@ -408,7 +409,7 @@ watch(activeTab, (tab) => {
 
       <!-- Error -->
       <div v-else-if="error" class="alert alert-error" style="margin:0 16px">
-        ⚠️ {{ error }}
+        {{ error }}
         <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="loadCallOver">Retry</button>
       </div>
 
@@ -435,7 +436,7 @@ watch(activeTab, (tab) => {
         <div v-for="group in GROUP_ORDER" :key="group">
           <template v-if="comparisonRows[group]?.length">
             <div class="co-group-header">
-              <span>{{ GROUP_ICONS[group] }} {{ group }}</span>
+              <span class="co-group-label"><span class="co-group-icon" v-html="GROUP_ICONS[group]"></span>{{ group }}</span>
             </div>
 
             <!-- Table header -->
@@ -538,6 +539,21 @@ watch(activeTab, (tab) => {
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.audit-tab-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.audit-tab-icon :deep(svg) {
+  width: 14px;
+  height: 14px;
 }
 .audit-tab:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
 .audit-tab:last-child  { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
@@ -563,6 +579,24 @@ watch(activeTab, (tab) => {
   font-weight: 800;
   letter-spacing: -0.03em;
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.co-title-icon,
+.co-group-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--primary-deep);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.co-title-icon :deep(svg),
+.co-group-icon :deep(svg) {
+  width: 16px;
+  height: 16px;
 }
 .co-subtitle {
   font-size: 12px;
@@ -615,6 +649,11 @@ watch(activeTab, (tab) => {
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
+}
+.co-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ── Table ───────────────────────────────────────────────────────────────── */

@@ -28,14 +28,14 @@
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
     <template v-else-if="summary">
       <!-- Needs review alert -->
       <div v-if="summary.needs_review > 0" class="alert alert-warning">
-        ⚠️ <strong>{{ summary.needs_review }}</strong> transaction{{ summary.needs_review !== 1 ? 's' : '' }} need review.
+        <strong>{{ summary.needs_review }}</strong> transaction{{ summary.needs_review !== 1 ? 's' : '' }} need review.
         <RouterLink to="/review" style="margin-left:auto; font-weight:700; text-decoration:none">Review →</RouterLink>
       </div>
 
@@ -80,30 +80,20 @@
             >
               <div class="cat-header">
                 <span class="cat-name">
-                  <span>{{ grp.icon }}</span>
+                  <span class="grp-icon" v-html="GROUP_SVGS[grp.group] || GROUP_SVGS['System / Tracking']"></span>
                   {{ grp.group }}
                 </span>
-                <span style="display:flex;align-items:center;gap:4px">
+                <span style="display:flex;align-items:center;gap:6px">
                   <span class="cat-amount">{{ fmt(grp.total) }}</span>
                   <span class="cat-pct">{{ grp.pct }}%</span>
                   <span class="cat-drill-chevron">›</span>
                 </span>
               </div>
               <div class="cat-bar-bg">
-                <div
-                  class="cat-bar-fill"
-                  :style="{ width: grp.pct + '%' }"
-                ></div>
+                <div class="cat-bar-fill" :style="{ width: grp.pct + '%' }"></div>
               </div>
-              <div class="grp-cats">
-                <span
-                  v-for="c in grp.topCats"
-                  :key="c"
-                  class="grp-cat-chip"
-                >{{ catIcon(c) }} {{ c }}</span>
-                <span v-if="grp.moreCats > 0" class="grp-cat-chip grp-cat-more">
-                  +{{ grp.moreCats }} more
-                </span>
+              <div class="grp-subcats">
+                {{ grp.topCats.join(' · ') }}{{ grp.moreCats > 0 ? ` · +${grp.moreCats} more` : '' }}
               </div>
             </div>
           </div>
@@ -124,7 +114,7 @@
                 class="btn btn-ghost btn-sm"
                 style="font-size:11px;padding:2px 8px"
                 @click="refineFlowWithAi"
-              >✨ Refine with AI</button>
+              ><span class="sparkle-icon" v-html="SPARKLE_SVG"></span> Refine with AI</button>
             </div>
             <div class="trend-explanation-summary">{{ maskAmounts(trendExplanation.summary) }}</div>
             <div v-if="trendExplanation.drivers?.length" class="trend-driver-list">
@@ -224,6 +214,7 @@ import { api } from '../api/client.js'
 import { useLayout } from '../composables/useLayout.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { GROUP_SVGS, SPARKLE_SVG } from '../utils/icons.js'
 
 const flowExplanationAiCache = new Map()
 
@@ -299,17 +290,6 @@ const displayNet     = computed(() => ownerRow.value ? ownerRow.value.net     : 
 
 const EXCLUDED_FROM_SPENDING = new Set(['Transfer', 'Adjustment'])
 
-// Icons for each group (mirrors GroupDrilldown.vue)
-const GROUP_ICONS = {
-  'Housing & Bills':      '🏠',
-  'Food & Dining':        '🍽️',
-  'Transportation':       '🚗',
-  'Lifestyle & Personal': '🛍️',
-  'Health & Family':      '❤️',
-  'Travel':               '✈️',
-  'Financial & Legal':    '⚖️',
-  'System / Tracking':    '🔧',
-}
 
 // Roll up by_category into groups, exclude system cats, sort by total desc
 const spendingGroups = computed(() => {
@@ -332,7 +312,6 @@ const spendingGroups = computed(() => {
     .sort((a, b) => b.total - a.total)
     .map(g => ({
       group:    g.group,
-      icon:     GROUP_ICONS[g.group] || '📁',
       total:    g.total,
       pct:      totalExpense > 0 ? Math.round((g.total / totalExpense) * 100) : 0,
       topCats:  g.cats.slice(0, 3),
@@ -386,7 +365,7 @@ function fmtCompact(n) {
 }
 
 function catIcon(name) {
-  return store.categoryMap[name]?.icon || '📁'
+  return store.categoryMap[name]?.icon || ''
 }
 
 function maskAmounts(text) {
@@ -630,42 +609,51 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
 /* Make category rows tappable */
 .cat-row-tappable {
   cursor: pointer;
-  border-radius: 8px;
-  padding: 6px 8px;
-  margin: 0 -8px 3px;
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-bottom: 1px solid rgba(136,189,242,0.06);
   transition: background 0.12s;
   -webkit-tap-highlight-color: transparent;
 }
+.cat-row-tappable:last-child { border-bottom: none; }
 .cat-row-tappable:hover  { background: var(--primary-dim); }
-.cat-row-tappable:active { background: rgba(15,118,110,0.14); }
+.cat-row-tappable:active { background: var(--primary-dim); }
 
 .cat-drill-chevron {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-muted);
-  margin-left: 2px;
-  font-weight: 400;
+  font-weight: 300;
+  opacity: 0.6;
 }
 
-/* Category chips below each group bar */
-.grp-cats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 5px;
+.grp-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--primary-deep);
+  display: inline-flex;
+  align-items: center;
 }
-.grp-cat-chip {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--neutral);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 7px;
-  white-space: nowrap;
+.grp-icon :deep(svg) { width: 16px; height: 16px; }
+.sparkle-icon {
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+  vertical-align: middle;
 }
-.grp-cat-more {
+.sparkle-icon :deep(svg) { width: 13px; height: 13px; }
+
+/* Dot-separated subcategory text */
+.grp-subcats {
+  font-size: 11px;
   color: var(--text-muted);
-  font-style: italic;
+  margin-top: 5px;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
 }
 
 .trend-explanation-loading {
@@ -682,7 +670,7 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(15,118,110,0.04), rgba(255,255,255,0.9));
+  background: var(--card);
 }
 
 .trend-explanation-topline {
@@ -845,26 +833,25 @@ onUnmounted(() => { if (trendChart) trendChart.destroy() })
 
 @media (min-width: 1024px) {
   .trend-explanation {
-    border-color: rgba(148, 163, 184, 0.18);
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.86));
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    border-color: var(--border);
+    background: var(--card);
   }
 
   .trend-explanation-headline {
-    color: #f8fafc;
+    color: var(--text);
   }
 
   .trend-explanation-summary,
   .trend-driver-item,
   .trend-qa-answer,
   .trend-qa-bullet {
-    color: #dbe7f5;
+    color: var(--text);
   }
 
   .trend-explanation-status,
   .trend-ai-label,
   .trend-qa-refs {
-    color: #9fb3c8;
+    color: var(--text-muted);
   }
 
   .trend-driver-item::before,

@@ -11,7 +11,7 @@
 
     <template v-else>
       <div v-if="!currentSnapshot" class="card dashboard-empty">
-        <div class="dashboard-empty__icon">💰</div>
+        <div class="dashboard-empty__icon" v-html="COIN_SVG"></div>
         <div class="dashboard-empty__title">No dashboard data in this range</div>
         <div class="e-sub">Adjust the dashboard range in Settings or generate snapshots for the selected months.</div>
         <RouterLink to="/holdings" class="btn btn-primary dashboard-empty__cta">Go to Assets →</RouterLink>
@@ -51,32 +51,33 @@
                 <div class="dash-card__title">Asset Allocation</div>
                 <div class="dash-card__sub">Current distribution from latest snapshot</div>
               </div>
+              <RouterLink to="/holdings" class="dash-card__link">Open assets →</RouterLink>
             </div>
             <div v-if="allocationSeries.length > 0" class="alloc-body">
               <div class="alloc-kpis">
                 <div class="dash-kpi">
-                  <div class="dash-kpi__icon">🏦</div>
+                  <div class="dash-kpi__icon" v-html="KPI_SVGS.assets"></div>
                   <div>
                     <div class="dash-kpi__label">Total Assets</div>
                     <div class="dash-kpi__value">{{ fmt(currentSnapshot.total_assets_idr) }}</div>
                   </div>
                 </div>
                 <div class="dash-kpi">
-                  <div class="dash-kpi__icon">🔴</div>
+                  <div class="dash-kpi__icon" v-html="KPI_SVGS.liability"></div>
                   <div>
                     <div class="dash-kpi__label">Liabilities</div>
                     <div class="dash-kpi__value">{{ fmt(currentSnapshot.total_liabilities_idr) }}</div>
                   </div>
                 </div>
                 <div class="dash-kpi">
-                  <div class="dash-kpi__icon">📈</div>
+                  <div class="dash-kpi__icon" v-html="KPI_SVGS.income"></div>
                   <div>
                     <div class="dash-kpi__label">Income YTD</div>
                     <div class="dash-kpi__value">{{ fmt(incomeYtd) }}</div>
                   </div>
                 </div>
                 <div class="dash-kpi">
-                  <div class="dash-kpi__icon">📉</div>
+                  <div class="dash-kpi__icon" v-html="KPI_SVGS.spending"></div>
                   <div>
                     <div class="dash-kpi__label">Spending YTD</div>
                     <div class="dash-kpi__value">{{ fmt(spendingYtd) }}</div>
@@ -137,6 +138,38 @@
             <div class="e-sub">No transactions were found for the recent period.</div>
           </div>
         </section>
+
+        <!-- ── Investment Goal summary ─────────────────────────────────── -->
+        <section class="dash-card dash-card--goal">
+          <div class="dash-card__header">
+            <div>
+              <div class="dash-card__title">Investment Goal</div>
+              <div class="dash-card__sub">Annual target: {{ fmt(GOAL_ANNUAL) }}</div>
+            </div>
+            <RouterLink to="/goal" class="dash-card__link">Full detail →</RouterLink>
+          </div>
+          <div v-if="goalLoading" class="loading" style="padding:16px 0"><div class="spinner"></div></div>
+          <div v-else class="summary-grid" style="margin-bottom:0">
+            <div class="summary-card">
+              <div class="s-label">YTD Income</div>
+              <div class="s-value" :class="goalYtd >= goalProrated ? 'text-income' : 'text-expense'">{{ fmt(goalYtd) }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="s-label">Monthly Avg</div>
+              <div class="s-value text-neutral">{{ fmt(goalMonthlyAvg) }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="s-label">% of Goal</div>
+              <div class="s-value" :class="goalPct >= 100 ? 'text-income' : 'text-expense'">{{ goalPct }}%</div>
+            </div>
+            <div class="summary-card">
+              <div class="s-label">Status</div>
+              <div class="s-value" :class="goalOnTrack ? 'text-income' : 'text-expense'" style="font-size:14px">
+                {{ goalOnTrack ? 'On track' : 'Behind' }}
+              </div>
+            </div>
+          </div>
+        </section>
       </template>
     </template>
   </div>
@@ -149,9 +182,13 @@ import { RouterLink } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { KPI_SVGS, COIN_SVG } from '../utils/icons.js'
 
 const HISTORY_LIMIT = 24
 const DASHBOARD_MIN_MONTH = '2026-01'
+const GOAL_ANNUAL = 600_000_000
+const GOAL_MONTHLY = GOAL_ANNUAL / 12
+const GOAL_CATEGORY = 'Investment Income'
 
 const store = useFinanceStore()
 
@@ -166,6 +203,14 @@ const cashFlowRef = ref(null)
 let allocationChart = null
 let wealthChart = null
 let cashFlowChart = null
+
+const goalLoading = ref(false)
+const goalMonthData = ref([])
+const goalYtd = computed(() => goalMonthData.value.reduce((s, r) => s + r, 0))
+const goalMonthlyAvg = computed(() => goalMonthData.value.length ? goalYtd.value / goalMonthData.value.length : 0)
+const goalPct = computed(() => GOAL_ANNUAL > 0 ? Math.round((goalYtd.value / GOAL_ANNUAL) * 100) : 0)
+const goalProrated = computed(() => GOAL_MONTHLY * goalMonthData.value.length)
+const goalOnTrack = computed(() => goalYtd.value >= goalProrated.value)
 
 const { fmt } = useFmt()
 
@@ -470,8 +515,8 @@ async function renderWealthChart() {
   if (!ctx) return
 
   const barGradient = ctx.createLinearGradient(0, 0, 0, canvas.height || 320)
-  barGradient.addColorStop(0, '#14b8a6')
-  barGradient.addColorStop(1, 'rgba(13, 148, 136, 0.7)')
+  barGradient.addColorStop(0, '#88BDF2')
+  barGradient.addColorStop(1, 'rgba(106,137,167,0.7)')
 
   wealthChart = new Chart(ctx, {
     type: 'bar',
@@ -511,7 +556,7 @@ async function renderWealthChart() {
         x: {
           grid: { display: false },
           ticks: {
-            color: '#64748b',
+            color: '#6A89A7',
             font: { size: 11, weight: '600' },
           },
           border: { display: false },
@@ -519,7 +564,7 @@ async function renderWealthChart() {
         y: {
           beginAtZero: true,
           ticks: {
-            color: '#64748b',
+            color: '#6A89A7',
             callback(value) {
               return fmtCompact(Number(value))
             },
@@ -717,8 +762,31 @@ async function load() {
   }
 }
 
-onMounted(load)
-watch(() => [store.dashboardStartMonth, store.dashboardEndMonth], load)
+async function loadGoal() {
+  const start = store.dashboardStartMonth
+  const end = store.dashboardEndMonth
+  if (!start || !end) return
+  goalLoading.value = true
+  try {
+    const months = monthRange(start, end)
+    const results = await Promise.all(
+      months.map((key) => {
+        const [year, month] = key.split('-').map(Number)
+        return api.transactions({ category: GOAL_CATEGORY, year, month, limit: 1000 })
+          .then(res => (res?.transactions || [])
+            .filter(tx => (tx.amount ?? 0) >= 0)
+            .reduce((s, tx) => s + (tx.amount ?? 0), 0))
+          .catch(() => 0)
+      })
+    )
+    goalMonthData.value = results
+  } finally {
+    goalLoading.value = false
+  }
+}
+
+onMounted(() => { load(); loadGoal() })
+watch(() => [store.dashboardStartMonth, store.dashboardEndMonth], () => { load(); loadGoal() })
 onUnmounted(() => {
   destroyAllocationChart()
   destroyWealthChart()
@@ -739,7 +807,8 @@ onUnmounted(() => {
   padding: 28px 20px;
   text-align: center;
 }
-.dashboard-empty__icon { font-size: 40px; margin-bottom: 10px; }
+.dashboard-empty__icon { width: 40px; height: 40px; margin: 0 auto 10px; color: var(--primary-deep); display: flex; align-items: center; justify-content: center; }
+.dashboard-empty__icon :deep(svg) { width: 40px; height: 40px; }
 .dashboard-empty__title { font-size: 20px; font-weight: 800; margin-bottom: 8px; color: var(--text); }
 .dashboard-empty__cta { margin-top: 18px; display: inline-flex; }
 
@@ -754,10 +823,10 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 70% 80% at 20% 40%, rgba(20, 184, 166, 0.22), transparent),
-    radial-gradient(ellipse 50% 70% at 80% 30%, rgba(59, 130, 246, 0.18), transparent),
-    radial-gradient(ellipse 40% 50% at 60% 90%, rgba(139, 92, 246, 0.12), transparent),
-    linear-gradient(135deg, #0a1628 0%, #0e2a3f 40%, #0f766e 100%);
+    radial-gradient(ellipse 70% 80% at 20% 40%, rgba(136,189,242,0.18), transparent),
+    radial-gradient(ellipse 50% 70% at 80% 30%, rgba(189,221,252,0.10), transparent),
+    radial-gradient(ellipse 40% 50% at 60% 90%, rgba(106,137,167,0.12), transparent),
+    linear-gradient(135deg, #1e2d38 0%, #2a3b48 40%, #384959 100%);
   z-index: 0;
 }
 .dash-hero__inner {
@@ -848,15 +917,16 @@ onUnmounted(() => {
   background: rgba(255,255,255,0.07);
 }
 .dash-kpi__icon {
-  font-size: 26px;
   width: 44px;
   height: 44px;
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: rgba(255,255,255,0.06);
+  background: rgba(136,189,242,0.08);
   flex-shrink: 0;
+  color: var(--primary-deep);
 }
+.dash-kpi__icon :deep(svg) { width: 20px; height: 20px; }
 .dash-kpi__label {
   font-size: 11px;
   font-weight: 700;
@@ -889,9 +959,9 @@ onUnmounted(() => {
 .alloc-kpis .dash-kpi__icon {
   width: 30px;
   height: 30px;
-  font-size: 18px;
   border-radius: 10px;
 }
+.alloc-kpis .dash-kpi__icon :deep(svg) { width: 16px; height: 16px; }
 .alloc-kpis .dash-kpi__label {
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -931,18 +1001,18 @@ onUnmounted(() => {
 }
 .dash-card__link {
   flex-shrink: 0;
-  color: #14b8a6;
+  color: var(--primary);
   text-decoration: none;
   font-size: 12px;
   font-weight: 700;
   padding: 6px 14px;
   border-radius: 10px;
-  background: rgba(20, 184, 166, 0.10);
-  border: 1px solid rgba(20, 184, 166, 0.18);
+  background: var(--primary-dim);
+  border: 1px solid rgba(136,189,242,0.22);
   transition: background 0.2s;
 }
 .dash-card__link:hover {
-  background: rgba(20, 184, 166, 0.18);
+  background: rgba(136,189,242,0.20);
 }
 
 /* ── 2-column row (Allocation + Wealth) ────────────────────────────────── */
@@ -1166,8 +1236,8 @@ onUnmounted(() => {
   .alloc-legend__pct,
   .dash-card__sub,
   .chart-axis-label {
-    color: #57534e;
-    fill: #57534e;
+    color: #6A89A7;
+    fill: #6A89A7;
   }
 
   .dash-kpi__value,
@@ -1176,7 +1246,7 @@ onUnmounted(() => {
   .alloc-legend__label,
   .alloc-legend__val,
   .dashboard-empty__title {
-    color: #1c1917;
+    color: #e8f4ff;
   }
 }
 

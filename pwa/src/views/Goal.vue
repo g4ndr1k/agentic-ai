@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="page-header">
-      <div class="page-title">🎯 Investment Income Goal</div>
+      <div class="page-title">Investment Income Goal</div>
       <div class="page-subtitle">{{ rangeLabel }}</div>
     </div>
 
@@ -10,7 +10,7 @@
     </div>
 
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
@@ -36,7 +36,7 @@
           <div class="s-value" :class="pctOfGoal >= 100 ? 'text-income' : 'text-expense'">
             {{ pctOfGoal }}%
           </div>
-          <div class="s-sub">{{ onTrack ? '✓ On track' : '⚠ Behind' }}</div>
+          <div class="s-sub">{{ onTrack ? 'On track' : 'Behind' }}</div>
         </div>
       </div>
 

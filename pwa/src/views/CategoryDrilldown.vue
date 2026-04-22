@@ -8,7 +8,7 @@
       <div class="drill-title-block">
         <!-- Breadcrumb when coming from a group -->
         <div v-if="fromGroup" class="drill-breadcrumb" @click="goBack">
-          {{ groupIcon }} {{ fromGroup }} ›
+          <span class="group-icon" v-html="groupIcon"></span> {{ fromGroup }} ›
         </div>
         <div class="drill-title">
           <span v-if="catMeta">{{ catMeta.icon }}</span>
@@ -25,7 +25,7 @@
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
@@ -50,7 +50,7 @@
 
       <!-- Empty state -->
       <div v-if="!transactions.length" class="empty-state">
-        <div class="e-icon">📭</div>
+        <div class="e-icon empty-icon" v-html="FOLDER_SVG"></div>
         <div class="e-msg">No transactions found</div>
         <div class="e-sub">No {{ category }} spending in {{ monthLabel }}</div>
       </div>
@@ -108,7 +108,7 @@
 
             <!-- Edit form -->
             <div class="edit-form">
-              <div class="edit-form-hd">✏️ Edit Transaction</div>
+              <div class="edit-form-hd"><span class="action-icon" v-html="PEN_SVG"></span>Edit Transaction</div>
 
               <!-- Merchant name -->
               <div class="form-row">
@@ -173,10 +173,10 @@
 
               <!-- Success / Error feedback -->
               <div v-if="saveSuccess" class="alert alert-success" style="margin:6px 0;font-size:12px">
-                ✅ {{ saveSuccess }}
+                {{ saveSuccess }}
               </div>
               <div v-if="saveError" class="alert alert-error" style="margin:6px 0;font-size:12px">
-                ❌ {{ saveError }}
+                {{ saveError }}
               </div>
 
               <!-- Actions -->
@@ -189,7 +189,7 @@
                   <span v-if="saving">
                     <span class="spinner" style="width:12px;height:12px;border-width:2px"></span>
                   </span>
-                  <span v-else>💾 Save &amp; Update Alias</span>
+                  <span v-else><span class="action-icon" v-html="SAVE_SVG"></span>Save &amp; Update Alias</span>
                 </button>
                 <button class="btn btn-ghost" @click.stop="expandedHash = null">
                   Cancel
@@ -209,6 +209,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
+import { GROUP_SVGS, FOLDER_SVG, PEN_SVG, SAVE_SVG } from '../utils/icons.js'
 
 const router = useRouter()
 const route  = useRoute()
@@ -221,17 +222,7 @@ const month     = Number(route.query.month) || new Date().getMonth() + 1
 const owner     = route.query.owner || ''
 const fromGroup = route.query.fromGroup ? decodeURIComponent(route.query.fromGroup) : ''
 
-const GROUP_ICONS = {
-  'Housing & Bills':      '🏠',
-  'Food & Dining':        '🍽️',
-  'Transportation':       '🚗',
-  'Lifestyle & Personal': '🛍️',
-  'Health & Family':      '❤️',
-  'Travel':               '✈️',
-  'Financial & Legal':    '⚖️',
-  'System / Tracking':    '🔧',
-}
-const groupIcon = computed(() => GROUP_ICONS[fromGroup] || '📁')
+const groupIcon = computed(() => GROUP_SVGS[fromGroup] || GROUP_SVGS['System / Tracking'])
 
 // ── State ───────────────────────────────────────────────────────────────────
 const transactions = ref([])
@@ -268,7 +259,7 @@ const totalAmount = computed(() =>
 const { fmt } = useFmt()
 
 function catIcon(name) {
-  return store.categoryMap[name]?.icon || '📁'
+  return store.categoryMap[name]?.icon || ''
 }
 
 function titleCase(str) {
@@ -448,9 +439,37 @@ onMounted(load)
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
 }
 .drill-breadcrumb:active { opacity: 0.7; }
+.group-icon,
+.action-icon,
+.empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.group-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--primary-deep);
+}
+.group-icon :deep(svg) { width: 14px; height: 14px; }
+.action-icon {
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  color: var(--primary-deep);
+  vertical-align: middle;
+}
+.action-icon :deep(svg) { width: 13px; height: 13px; }
+.empty-icon {
+  width: 26px;
+  height: 26px;
+  margin: 0 auto 10px;
+  color: var(--primary-deep);
+}
+.empty-icon :deep(svg) { width: 26px; height: 26px; }
 
 .drill-title {
   font-size: 18px;
@@ -626,6 +645,8 @@ onMounted(load)
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 12px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .form-row {

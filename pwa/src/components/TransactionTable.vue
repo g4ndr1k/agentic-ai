@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useFmt } from '../composables/useFmt.js'
+import { FOLDER_SVG } from '../utils/icons.js'
 
 const props = defineProps({
   transactions: { type: Array, required: true },
@@ -76,7 +77,7 @@ const { fmt } = useFmt()
         </tr>
         <tr v-else-if="!sorted.length">
           <td :colspan="columns.length" class="dt-empty">
-            <div style="font-size:28px;margin-bottom:8px">📭</div>
+            <div class="dt-empty-icon" v-html="FOLDER_SVG"></div>
             No transactions found
           </td>
         </tr>
@@ -202,8 +203,21 @@ const { fmt } = useFmt()
 
 .dt-empty {
   text-align: center;
-  padding: 40px 20px;
   color: var(--text-muted);
+  padding: 24px 12px;
   font-size: 13px;
+}
+.dt-empty-icon {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+}
+.dt-empty-icon :deep(svg) {
+  width: 28px;
+  height: 28px;
 }
 </style>

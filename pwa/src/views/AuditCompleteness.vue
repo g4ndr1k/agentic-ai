@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useFinanceStore } from '../stores/finance.js'
 import { api } from '../api/client.js'
+import { DOCUMENT_SVG, FOLDER_SVG, CHECK_SVG, X_SVG } from '../utils/icons.js'
 
 const store = useFinanceStore()
 const loading = ref(false)
@@ -69,7 +70,7 @@ onMounted(() => { load() })
     <!-- Header -->
     <div class="audit-header">
       <div class="audit-title-row">
-        <h1 class="audit-title">📋 Completeness Audit</h1>
+        <h1 class="audit-title"><span class="audit-title-icon" v-html="DOCUMENT_SVG"></span> Completeness Audit</h1>
         <button class="btn btn-ghost btn-sm" :disabled="loading" @click="load(true)">
           {{ loading ? 'Loading…' : 'Refresh' }}
         </button>
@@ -85,14 +86,14 @@ onMounted(() => { load() })
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
     <!-- Empty -->
     <div v-else-if="data && data.entities.length === 0" class="card" style="margin-top:16px">
       <div class="empty-state" style="padding:32px 16px;text-align:center">
-        <div style="font-size:40px;margin-bottom:12px">📂</div>
+        <div class="audit-empty-icon" v-html="FOLDER_SVG"></div>
         <div style="font-weight:600;margin-bottom:6px">No PDF files found</div>
         <div class="e-sub">No recognized bank statement PDFs in pdf_inbox or pdf_unlocked.</div>
       </div>
@@ -102,8 +103,8 @@ onMounted(() => { load() })
     <template v-else-if="data">
       <!-- Summary bar -->
       <div class="audit-summary">
-        <span class="audit-badge audit-badge-ok">✅ {{ stats.ok }} found</span>
-        <span v-if="stats.missing > 0" class="audit-badge audit-badge-missing">❌ {{ stats.missing }} missing</span>
+        <span class="audit-badge audit-badge-ok"><span class="audit-badge-icon" v-html="CHECK_SVG"></span>{{ stats.ok }} found</span>
+        <span v-if="stats.missing > 0" class="audit-badge audit-badge-missing"><span class="audit-badge-icon" v-html="X_SVG"></span>{{ stats.missing }} missing</span>
         <span class="audit-badge audit-badge-total">{{ stats.total }} total</span>
       </div>
 
@@ -131,13 +132,13 @@ onMounted(() => { load() })
               >
                 <template v-if="entity.months[month]">
                   <div class="audit-cell-present">
-                    <span class="audit-check">✅</span>
+                    <span class="audit-check" v-html="CHECK_SVG"></span>
                     <span class="audit-info">{{ entity.months[month].map(f => f.info).join(', ') }}</span>
                   </div>
                   <div class="audit-file-count">{{ entity.months[month].length }} file{{ entity.months[month].length > 1 ? 's' : '' }}</div>
                 </template>
                 <template v-else-if="cellStatus(entity, month, mIdx) === 'missing'">
-                  <div class="audit-cell-missing">❌ Missing</div>
+                  <div class="audit-cell-missing"><span class="audit-check audit-check--missing" v-html="X_SVG"></span> Missing</div>
                 </template>
                 <template v-else>
                   <div class="audit-cell-na">—</div>
@@ -172,6 +173,50 @@ onMounted(() => { load() })
   font-weight: 800;
   letter-spacing: -0.03em;
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.audit-title-icon,
+.audit-badge-icon,
+.audit-check,
+.audit-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-deep);
+}
+.audit-title-icon,
+.audit-empty-icon {
+  width: 18px;
+  height: 18px;
+}
+.audit-title-icon :deep(svg),
+.audit-empty-icon :deep(svg) {
+  width: 18px;
+  height: 18px;
+}
+.audit-badge-icon,
+.audit-check {
+  width: 14px;
+  height: 14px;
+}
+.audit-badge-icon :deep(svg),
+.audit-check :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+.audit-check--missing {
+  color: #dc2626;
+}
+.audit-empty-icon {
+  margin: 0 auto 12px;
+  width: 40px;
+  height: 40px;
+}
+.audit-empty-icon :deep(svg) {
+  width: 40px;
+  height: 40px;
 }
 
 .audit-subtitle {
@@ -294,6 +339,9 @@ onMounted(() => { load() })
   font-size: 12px;
   font-weight: 700;
   color: #dc2626;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .audit-cell-na {

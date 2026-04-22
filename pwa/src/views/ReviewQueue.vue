@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="section-hd">
-      🔍 Review Queue
+      Review Queue
       <span v-if="items.length" style="margin-left:auto;font-size:12px;font-weight:600;color:var(--text-muted)">
         {{ items.length }} remaining
       </span>
@@ -11,7 +11,7 @@
         style="font-size:11px;padding:2px 8px;margin-left:8px"
         :disabled="enriching"
         @click="enrichReviewQueue"
-      >{{ enriching ? '🤖 Getting suggestions…' : '✨ Get AI suggestions' }}</button>
+      ><span class="sparkle-icon" v-html="SPARKLE_SVG"></span>{{ enriching ? 'Getting suggestions…' : 'Get AI suggestions' }}</button>
     </div>
 
     <!-- Loading -->
@@ -19,13 +19,13 @@
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
     <!-- Empty state -->
     <div v-else-if="!items.length" class="empty-state">
-      <div class="e-icon">✅</div>
+      <div class="e-icon e-icon--ok" v-html="CHECK_SVG"></div>
       <div class="e-msg">All caught up!</div>
       <div class="e-sub">No transactions need review right now.</div>
     </div>
@@ -33,7 +33,7 @@
     <!-- Queue items -->
     <div v-else>
       <div class="alert alert-info" style="font-size:12px">
-        💡 Select a transaction to assign a merchant name and category.
+        Select a transaction to assign a merchant name and category.
         If you turn on "Apply to similar", all uncategorised rows with the same
         raw description will be updated at once.
       </div>
@@ -53,13 +53,13 @@
             <template v-if="countSimilar(selectedItem) > 1">
               · <strong>{{ countSimilar(selectedItem) }} similar</strong>
             </template>
-            <span v-if="selectedItem.ollama_suggestion" style="color:var(--accent);font-size:11px;margin-left:4px">🤖</span>
+            <span v-if="selectedItem.ollama_suggestion" class="ai-badge"><span class="ai-badge__icon" v-html="ROBOT_SVG"></span>AI</span>
           </div>
           <div class="alias-form">
-            <div v-if="store.isReadOnly" class="ro-notice">👁 Read-only — open on Mac to categorise transactions.</div>
+            <div v-if="store.isReadOnly" class="ro-notice"><span class="ro-notice__icon" v-html="EYE_SVG"></span>Read-only — open on Mac to categorise transactions.</div>
             <template v-else>
             <div v-if="selectedItem.ollama_suggestion" style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
-              🤖 AI suggested: {{ selectedItem.suggested_merchant }} · {{ selectedItem.ollama_suggestion }}
+              <span class="ai-badge ai-badge--inline"><span class="ai-badge__icon" v-html="ROBOT_SVG"></span>AI suggested</span> {{ selectedItem.suggested_merchant }} · {{ selectedItem.ollama_suggestion }}
             </div>
             <div class="form-row">
               <label class="form-label">Merchant name</label>
@@ -106,16 +106,16 @@
                 @click="save(selectedItem)"
               >
                 <span v-if="saving"><span class="spinner" style="width:12px;height:12px;border-width:2px"></span></span>
-                <span v-else>💾 Save</span>
+                <span v-else><span class="action-icon" v-html="SAVE_SVG"></span>Save</span>
               </button>
-              <button class="btn btn-ghost" :disabled="saving" @click="ignoreItem(selectedItem)">🚫 Ignore</button>
+              <button class="btn btn-ghost" :disabled="saving" @click="ignoreItem(selectedItem)"><span class="action-icon" v-html="X_SVG"></span>Ignore</button>
               <button class="btn btn-ghost" @click="expandedHash = null">Cancel</button>
             </div>
             </template>
           </div>
         </div>
         <div v-else class="empty-state" style="padding:40px 0">
-          <div class="e-icon">👆</div>
+          <div class="e-icon" v-html="POINTER_SVG"></div>
           <div class="e-msg">Select a transaction</div>
           <div class="e-sub">Click an item on the left to review it</div>
         </div>
@@ -131,7 +131,7 @@
                 <template v-if="countSimilar(item) > 1">
                   · <strong>{{ countSimilar(item) }} similar</strong>
                 </template>
-                <span v-if="item.ollama_suggestion" style="color:var(--accent);font-size:11px;margin-left:4px">🤖</span>
+                <span v-if="item.ollama_suggestion" class="ai-badge"><span class="ai-badge__icon" v-html="ROBOT_SVG"></span>AI</span>
               </div>
             </div>
             <div class="review-amount" :class="item.amount >= 0 ? 'text-income' : 'text-expense'">{{ fmt(item.amount) }}</div>
@@ -139,10 +139,10 @@
 
           <div v-if="expandedHash === item.hash" class="review-body">
             <div class="alias-form">
-              <div v-if="store.isReadOnly" class="ro-notice">👁 Read-only — open on Mac to categorise transactions.</div>
+              <div v-if="store.isReadOnly" class="ro-notice"><span class="ro-notice__icon" v-html="EYE_SVG"></span>Read-only — open on Mac to categorise transactions.</div>
               <template v-else>
               <div v-if="item.ollama_suggestion" style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
-                🤖 AI suggested: {{ item.suggested_merchant }} · {{ item.ollama_suggestion }}
+                <span class="ai-badge ai-badge--inline"><span class="ai-badge__icon" v-html="ROBOT_SVG"></span>AI suggested</span> {{ item.suggested_merchant }} · {{ item.ollama_suggestion }}
               </div>
               <div class="form-row">
                 <label class="form-label">Merchant name</label>
@@ -189,9 +189,9 @@
                   @click="save(item)"
                 >
                   <span v-if="saving"><span class="spinner" style="width:12px;height:12px;border-width:2px"></span></span>
-                  <span v-else>💾 Save</span>
+                  <span v-else><span class="action-icon" v-html="SAVE_SVG"></span>Save</span>
                 </button>
-                <button class="btn btn-ghost" :disabled="saving" @click="ignoreItem(item)">🚫 Ignore</button>
+                <button class="btn btn-ghost" :disabled="saving" @click="ignoreItem(item)"><span class="action-icon" v-html="X_SVG"></span>Ignore</button>
                 <button class="btn btn-ghost" @click="expandedHash = null">Cancel</button>
               </div>
               </template>
@@ -223,6 +223,7 @@ import { useFinanceStore } from '../stores/finance.js'
 import { useFmt } from '../composables/useFmt.js'
 import { useLayout } from '../composables/useLayout.js'
 import ReviewWorkspace from '../components/ReviewWorkspace.vue'
+import { SPARKLE_SVG, EYE_SVG, ROBOT_SVG, SAVE_SVG, X_SVG, CHECK_SVG, POINTER_SVG } from '../utils/icons.js'
 
 const store = useFinanceStore()
 const { isDesktop } = useLayout()
@@ -311,9 +312,9 @@ async function save(item) {
     store.decrementReviewCount(removed)
 
     const n = result.updated_count ?? removed
-    showToast(`✅ Saved! Updated ${n} row${n !== 1 ? 's' : ''}`)
+    showToast(`Saved · updated ${n} row${n !== 1 ? 's' : ''}`)
   } catch (e) {
-    showToast(`❌ Error: ${e.message}`)
+    showToast(`Error: ${e.message}`)
   } finally {
     saving.value = false
   }
@@ -335,9 +336,9 @@ async function ignoreItem(item) {
     items.value = items.value.filter(x => x.raw_description !== item.raw_description)
     expandedHash.value = null
     store.decrementReviewCount(removed)
-    showToast(`🚫 Ignored ${removed} row${removed !== 1 ? 's' : ''}`)
+    showToast(`Ignored ${removed} row${removed !== 1 ? 's' : ''}`)
   } catch (e) {
-    showToast(`❌ Error: ${e.message}`)
+    showToast(`Error: ${e.message}`)
   } finally {
     saving.value = false
   }
@@ -372,11 +373,11 @@ async function enrichReviewQueue() {
   try {
     const result = await api.enrichReviewQueue()
     if ((result.suggested ?? 0) + (result.applied ?? 0) > 0) {
-      showToast('🤖 AI suggestions ready — refreshing…')
+      showToast('AI suggestions ready — refreshing…')
       const d = await api.reviewQueue(LIMIT, { forceFresh: true })
       items.value = d.pending ?? d
     } else {
-      showToast('🤖 No new AI suggestions')
+      showToast('No new AI suggestions')
     }
   } catch {}
   finally { enriching.value = false }
@@ -389,7 +390,7 @@ async function loadMore() {
     items.value = data.pending ?? data
     hasMore.value = false
   } catch (e) {
-    showToast(`❌ ${e.message}`)
+    showToast(`Error: ${e.message}`)
   } finally {
     loadingMore.value = false
   }
@@ -401,13 +402,65 @@ onMounted(load)
 <style scoped>
 .toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(10px); }
+.sparkle-icon,
+.ro-notice__icon,
+.action-icon,
+.ai-badge__icon,
+.e-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.sparkle-icon {
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  color: var(--primary-deep);
+  vertical-align: middle;
+}
+.sparkle-icon :deep(svg) { width: 13px; height: 13px; }
+.action-icon,
+.ai-badge__icon,
+.ro-notice__icon {
+  width: 13px;
+  height: 13px;
+}
+.action-icon { margin-right: 6px; color: var(--primary-deep); vertical-align: middle; }
+.action-icon :deep(svg),
+.ai-badge__icon :deep(svg),
+.ro-notice__icon :deep(svg) { width: 13px; height: 13px; }
+.e-icon { width: 24px; height: 24px; margin: 0 auto 10px; color: var(--primary-deep); }
+.e-icon :deep(svg) { width: 24px; height: 24px; }
+.e-icon--ok { color: var(--income); }
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(136,189,242,0.12);
+}
+.ai-badge--inline {
+  margin-left: 0;
+  margin-right: 6px;
+}
 .ro-notice {
   padding: 10px 12px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: rgba(136,189,242,0.08);
+  border: 1px solid rgba(136,189,242,0.18);
   border-radius: 8px;
-  color: #1d4ed8;
+  color: var(--primary-deep);
   font-size: 13px;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 </style>

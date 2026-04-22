@@ -12,7 +12,7 @@
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
@@ -21,7 +21,7 @@
       <div class="card" style="margin-top:16px">
         <!-- Data exists but no snapshot for this date yet -->
         <div v-if="selectedDate && dates.length" class="empty-state" style="padding:32px 16px;text-align:center">
-          <div style="font-size:40px;margin-bottom:12px">📸</div>
+          <div class="empty-icon" v-html="CAMERA_SVG"></div>
           <div style="font-weight:600;margin-bottom:6px">No snapshot for {{ fmtDateChip(selectedDate) }}</div>
           <div class="e-sub" style="margin-bottom:16px">
             Balances or holdings exist for this month. Generate a snapshot to view your wealth summary.
@@ -32,7 +32,7 @@
         </div>
         <!-- No data at all -->
         <div v-else class="empty-state" style="padding:32px 16px;text-align:center">
-          <div style="font-size:40px;margin-bottom:12px">💰</div>
+          <div class="empty-icon" v-html="COIN_SVG"></div>
           <div style="font-weight:600;margin-bottom:6px">No wealth data yet</div>
           <div class="e-sub" style="margin-bottom:16px">
             Add balances and holdings in the Assets tab, then generate a snapshot.
@@ -83,7 +83,7 @@
           class="mom-row"
           :class="row.label === 'Net Worth' ? 'mom-row-total' : ''"
         >
-          <span class="mom-row-icon">{{ row.icon }}</span>
+          <span class="mom-row-icon" v-html="row.icon"></span>
           <span class="mom-row-label">{{ row.label }}</span>
           <span class="mom-row-values">
             <span class="mom-row-prev">{{ fmtM(row.prev) }}</span>
@@ -114,7 +114,7 @@
           role="button"
         >
           <div class="wealth-row-header">
-            <span class="wealth-icon">{{ grp.icon }}</span>
+            <span class="wealth-icon" v-html="grp.icon"></span>
             <span class="wealth-label">{{ grp.label }}</span>
             <span class="wealth-value">{{ fmt(grp.total) }}</span>
             <span class="wealth-pct">{{ grp.pct }}%</span>
@@ -136,7 +136,7 @@
           class="wealth-row wealth-row-liab"
         >
           <div class="wealth-row-header">
-            <span class="wealth-icon">🔴</span>
+            <span class="wealth-icon" v-html="SECTION_SVGS.liability"></span>
             <span class="wealth-label">Liabilities</span>
             <span class="wealth-value text-expense">{{ fmt(snap.total_liabilities_idr) }}</span>
           </div>
@@ -166,7 +166,7 @@
               class="btn btn-ghost btn-sm"
               style="font-size:11px;padding:2px 8px"
               @click="refineWealthWithAi"
-            >✨ Refine with AI</button>
+            ><span class="sparkle-icon" v-html="SPARKLE_SVG"></span> Refine with AI</button>
           </div>
           <div class="trend-explanation-summary">{{ maskAmounts(explanation.summary) }}</div>
           <div v-if="explanation.drivers?.length" class="trend-driver-list">
@@ -252,6 +252,7 @@ import Chart from 'chart.js/auto'
 import { api } from '../api/client.js'
 import { useLayout } from '../composables/useLayout.js'
 import { useFmt } from '../composables/useFmt.js'
+import { CAMERA_SVG, COIN_SVG, SECTION_SVGS, SPARKLE_SVG } from '../utils/icons.js'
 
 const wealthExplanationAiCache = new Map()
 
@@ -392,42 +393,42 @@ const momRows = computed(() => {
 
   const rows = [
     {
-      icon: '🏦',
+      icon: SECTION_SVGS.cash,
       label: 'Cash & Liquid',
       prev: (p.savings_idr||0) + (p.checking_idr||0) + (p.money_market_idr||0) + (p.physical_cash_idr||0),
       curr: s.savings_idr + s.checking_idr + s.money_market_idr + s.physical_cash_idr,
       isLiability: false,
     },
     {
-      icon: '📈',
+      icon: SECTION_SVGS.investments,
       label: 'Investments',
       prev: (p.bonds_idr||0) + (p.stocks_idr||0) + (p.mutual_funds_idr||0) + (p.retirement_idr||0) + (p.crypto_idr||0),
       curr: s.bonds_idr + s.stocks_idr + s.mutual_funds_idr + s.retirement_idr + s.crypto_idr,
       isLiability: false,
     },
     {
-      icon: '🏠',
+      icon: SECTION_SVGS.property,
       label: 'Real Estate',
       prev: p.real_estate_idr || 0,
       curr: s.real_estate_idr,
       isLiability: false,
     },
     {
-      icon: '🟡',
+      icon: SECTION_SVGS.funds,
       label: 'Physical Assets',
       prev: (p.vehicles_idr||0) + (p.gold_idr||0) + (p.other_assets_idr||0),
       curr: s.vehicles_idr + s.gold_idr + s.other_assets_idr,
       isLiability: false,
     },
     {
-      icon: '🔴',
+      icon: SECTION_SVGS.liability,
       label: 'Liabilities',
       prev: p.total_liabilities_idr || 0,
       curr: s.total_liabilities_idr,
       isLiability: true,
     },
     {
-      icon: '💎',
+      icon: COIN_SVG,
       label: 'Net Worth',
       prev: p.net_worth_idr || 0,
       curr: s.net_worth_idr,
@@ -452,7 +453,7 @@ const assetGroups = computed(() => {
 
   return [
     {
-      label: 'Cash & Liquid', icon: '🏦',
+      label: 'Cash & Liquid', icon: SECTION_SVGS.cash,
       total: s.savings_idr + s.checking_idr + s.money_market_idr + s.physical_cash_idr,
       subs: [
         s.savings_idr       > 0 && { label: 'Savings',       total: s.savings_idr },
@@ -462,7 +463,7 @@ const assetGroups = computed(() => {
       ].filter(Boolean),
     },
     {
-      label: 'Investments', icon: '📈',
+      label: 'Investments', icon: SECTION_SVGS.investments,
       total: s.bonds_idr + s.stocks_idr + s.mutual_funds_idr + s.retirement_idr + s.crypto_idr,
       subs: [
         s.bonds_idr        > 0 && { label: 'Bonds',        total: s.bonds_idr },
@@ -473,12 +474,12 @@ const assetGroups = computed(() => {
       ].filter(Boolean),
     },
     {
-      label: 'Real Estate', icon: '🏠',
+      label: 'Real Estate', icon: SECTION_SVGS.property,
       total: s.real_estate_idr,
       subs: [],
     },
     {
-      label: 'Physical Assets', icon: '🟡',
+      label: 'Physical Assets', icon: SECTION_SVGS.funds,
       total: s.vehicles_idr + s.gold_idr + s.other_assets_idr,
       subs: [
         s.vehicles_idr     > 0 && { label: 'Vehicles', total: s.vehicles_idr },
@@ -789,7 +790,7 @@ onUnmounted(destroyChart)
 /* ── Hero net worth card ─────────────────────────────────────────────────────  */
 .nw-hero {
   margin: 12px 16px 0;
-  background: linear-gradient(135deg, #0a5e58 0%, #0f766e 60%, #14b8a6 100%);
+  background: linear-gradient(135deg, #1e2d38 0%, #2a3b48 50%, rgba(136,189,242,0.30) 100%);
   border-radius: var(--radius-lg);
   padding: 20px 20px 18px;
   color: #fff;
@@ -838,15 +839,16 @@ onUnmounted(destroyChart)
 }
 .mom-row:last-child     { border-bottom: none; }
 .mom-row-total          { padding-top: 11px; border-top: 1.5px solid var(--border); border-bottom: none; }
-.mom-row-icon           { font-size: 15px; flex-shrink: 0; }
+.mom-row-icon           { width: 16px; height: 16px; color: var(--primary-deep); flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.mom-row-icon :deep(svg) { width: 16px; height: 16px; }
 .mom-row-label          { flex: 1; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mom-row-values         { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .mom-row-prev           { font-size: 12px; color: var(--neutral); }
 .mom-row-arrow          { font-size: 11px; color: var(--text-muted); }
 .mom-row-curr           { font-size: 13px; font-weight: 700; color: var(--text); min-width: 50px; text-align: right; }
 .mom-row-delta          { min-width: 70px; text-align: right; font-size: 12px; font-weight: 700; flex-shrink: 0; }
-.mom-row-delta.pos      { color: #16a34a; }
-.mom-row-delta.neg      { color: #dc2626; }
+.mom-row-delta.pos      { color: #4ade80; }
+.mom-row-delta.neg      { color: #f87171; }
 .mom-row-delta.zero     { color: var(--neutral); }
 .mom-row-pct            { font-size: 10px; opacity: 0.75; margin-left: 2px; }
 
@@ -858,7 +860,7 @@ onUnmounted(destroyChart)
   transition: background 0.12s;
 }
 .wealth-row:last-child  { border-bottom: none; }
-.wealth-row:active      { background: rgba(15,118,110,0.08); }
+.wealth-row:active      { background: rgba(136,189,242,0.10); }
 .wealth-row-liab        { opacity: 0.9; }
 .wealth-row-header {
   display: flex;
@@ -866,10 +868,14 @@ onUnmounted(destroyChart)
   gap: 8px;
   margin-bottom: 6px;
 }
-.wealth-icon  { font-size: 18px; flex-shrink: 0; }
+.wealth-icon  { width: 18px; height: 18px; color: var(--primary-deep); flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.wealth-icon :deep(svg) { width: 18px; height: 18px; }
 .wealth-label { flex: 1; font-weight: 600; font-size: 14px; }
 .wealth-value { font-size: 14px; font-weight: 700; color: var(--text); }
 .wealth-pct   { font-size: 12px; color: var(--neutral); min-width: 34px; text-align: right; }
+
+.sparkle-icon { width: 13px; height: 13px; display: inline-flex; align-items: center; justify-content: center; margin-right: 6px; vertical-align: middle; color: var(--primary-deep); }
+.sparkle-icon :deep(svg) { width: 13px; height: 13px; }
 
 .cat-bar-wealth { background: var(--primary); opacity: 0.7; }
 
@@ -1073,7 +1079,7 @@ onUnmounted(destroyChart)
   z-index: 10;
   transition: background 0.15s;
 }
-.wealth-fab:active { background: #0a5e58; }
+.wealth-fab:active { background: #6A89A7; }
 
 @media (min-width: 1024px) {
   .nw-hero {
@@ -1088,4 +1094,11 @@ onUnmounted(destroyChart)
     height: 320px;
   }
 }
+.empty-icon {
+  width: 40px; height: 40px;
+  margin: 0 auto 12px;
+  color: var(--primary-deep);
+  display: flex; align-items: center; justify-content: center;
+}
+.empty-icon :deep(svg) { width: 40px; height: 40px; }
 </style>

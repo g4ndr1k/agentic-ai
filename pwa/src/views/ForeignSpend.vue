@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="section-hd">💱 Foreign Spend</div>
+    <div class="section-hd">Foreign Spend</div>
 
     <!-- Filters -->
     <div class="filter-bar">
@@ -23,13 +23,13 @@
 
     <!-- Error -->
     <div v-else-if="error" class="alert alert-error">
-      ❌ {{ error }}
+      {{ error }}
       <button class="btn btn-sm btn-ghost" style="margin-left:auto" @click="load">Retry</button>
     </div>
 
     <!-- Empty -->
     <div v-else-if="!rows.length" class="empty-state">
-      <div class="e-icon">🌐</div>
+      <div class="e-icon">FX</div>
       <div class="e-msg">No foreign transactions</div>
       <div class="e-sub">No foreign-currency spending found for the selected period.</div>
     </div>
@@ -132,7 +132,7 @@ const CCY_FLAGS = {
   JPY: '🇯🇵', GBP: '🇬🇧', HKD: '🇭🇰', THB: '🇹🇭', KRW: '🇰🇷',
   CNY: '🇨🇳', CHF: '🇨🇭', CAD: '🇨🇦', NZD: '🇳🇿', AED: '🇦🇪',
 }
-function ccyFlag(ccy) { return CCY_FLAGS[ccy] || '🌐' }
+function ccyFlag() { return 'FX' }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 const { fmt } = useFmt()
