@@ -109,6 +109,20 @@ describe('Settings category editor', () => {
       configurable: true,
       value: 0,
     })
+
+    // useLayout() calls window.matchMedia in onMounted
+    if (!window.matchMedia) {
+      window.matchMedia = vi.fn().mockImplementation(query => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }))
+    }
   })
 
   it('loads an existing category into the editor', async () => {

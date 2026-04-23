@@ -462,8 +462,6 @@ import { collapseMonthDates, monthKey } from '../utils/wealthDates.js'
 const route = useRoute()
 const store = useFinanceStore()
 
-const CARRY_FORWARD_CLASSES = new Set(['retirement', 'real_estate', 'vehicle', 'gold', 'other'])
-
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 const TABS = [
   { key: 'all',         label: 'All'         },
@@ -669,19 +667,6 @@ async function loadItems() {
     ])
     balances.value    = bals
     holdings.value    = holds
-
-    // Auto-carry-forward stable assets (retirement, real_estate, vehicle, gold, other)
-    // if any carry-forward class is missing and a prior month exists.
-    // Skip in read-only mode (NAS replica) — carry-forward is a write operation.
-    const hasPrevMonth = snapshotDates.value.some(d => d < snapshotDate.value)
-    const loadedClasses = new Set(holds.map(h => h.asset_class))
-    const missingCF = [...CARRY_FORWARD_CLASSES].some(c => !loadedClasses.has(c))
-    if (!store.isReadOnly && hasPrevMonth && missingCF) {
-      const { carried } = await api.carryForwardHoldings({ snapshot_date: snapshotDate.value })
-      if (carried > 0) {
-        holdings.value = await api.getHoldings({ snapshot_date: snapshotDate.value }, { forceFresh: true })
-      }
-    }
   } catch (e) {
     loadError.value = e.message
   } finally {

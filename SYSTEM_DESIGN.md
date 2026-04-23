@@ -2726,8 +2726,9 @@ SQLite (data/finance.db) — WAL mode
 
 ### Key design decisions
 
-- **Carry-forward**: `CARRY_FORWARD_CLASSES = {retirement, real_estate, vehicle, gold, other}` — when a holding is upserted for month M, `_cascade_holding_update()` propagates the new value forward to all future months that currently hold the same identity (snapshot_date, asset_class, asset_name, owner, institution)
-- **Snapshot generation**: `POST /api/wealth/snapshot` aggregates all balances and holdings for a date into a single `net_worth_snapshots` row with 24 asset-class breakdown columns
+- **Carry-forward (server-side, automatic)**: `CARRY_FORWARD_CLASSES = {retirement, real_estate, vehicle, gold, other}` — on `GET /api/wealth/holdings?snapshot_date=…`, the backend transparently carries forward any missing stable-asset rows from the most recent prior snapshot. Guard `_should_auto_carry_forward()` fast-exits when CF-class rows already exist. `_auto_carry_forward()` inserts via `INSERT OR IGNORE` (idempotent). Carry-forward inserts + `_aggregate_snapshot()` upsert happen inside a single `BEGIN`/`COMMIT` transaction (atomic). Skipped entirely when `_READ_ONLY=true` (NAS replica). The manual `POST /api/wealth/holdings/rollover` endpoint remains for the UI rollover button. Frontend does zero writes on page load.
+- **Cascade update**: when a holding is upserted for month M, `_cascade_holding_update()` propagates the new value forward to all future months that currently hold the same identity (snapshot_date, asset_class, asset_name, owner, institution)
+- **Snapshot generation**: `_aggregate_snapshot(snapshot_date, conn)` aggregates all balances, holdings, and liabilities for a date into a single `net_worth_snapshots` row with 24 asset-class breakdown columns. Accepts an existing connection so it can be called inside a transaction. The `POST /api/wealth/snapshot` endpoint is a thin wrapper; `_auto_snapshot_conn()` calls it inline during carry-forward; `_auto_snapshot()` opens its own connection for standalone post-mutation use.
 - **Two-layer caching in PWA**: `client.js` stores GET responses in IndexedDB (24 h TTL); service worker adds a `NetworkFirst` layer specifically for `/api/wealth/*` so POST mutations are immediately reflected in the next GET
 
 ---
@@ -2834,9 +2835,9 @@ All endpoints under `/api/wealth/`. All require `X-Api-Key` header.
 | GET | `/api/wealth/balances` | Account balances for a date |
 | POST | `/api/wealth/balances` | Upsert account balance |
 | DELETE | `/api/wealth/balances/{id}` | Delete balance |
-| GET | `/api/wealth/holdings` | Holdings for a date |
-| POST | `/api/wealth/holdings` | Upsert holding (triggers auto-snapshot) |
-| POST | `/api/wealth/holdings/carry-forward` | Carry forward prior-month holdings into a new snapshot |
+| GET | `/api/wealth/holdings` | Holdings for a date (triggers automatic carry-forward + snapshot if CF classes missing) |
+| POST | `/api/wealth/holdings` | Upsert holding (triggers auto-snapshot + cascade update) |
+| POST | `/api/wealth/holdings/rollover` | Manual carry-forward of prior-month stable assets into a new snapshot |
 | DELETE | `/api/wealth/holdings/{id}` | Delete holding |
 | GET | `/api/wealth/liabilities` | Liabilities for a date |
 | POST | `/api/wealth/liabilities` | Upsert liability |

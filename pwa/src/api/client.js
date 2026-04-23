@@ -9,9 +9,14 @@ const LAYOUT_STORAGE_KEY = 'pwa_layout_mode'
 // via Tailscale, so network-level ACLs are the real auth boundary. Do not reuse this key
 // for any other service or store sensitive credentials here.
 const API_KEY = import.meta.env.VITE_FINANCE_API_KEY || ''
-const AUTH_HEADERS = API_KEY
-  ? { 'X-Api-Key': API_KEY }
-  : (console.warn('VITE_FINANCE_API_KEY not set — requests will be unauthenticated'), {})
+const CF_CLIENT_ID = import.meta.env.VITE_CF_ACCESS_CLIENT_ID || ''
+const CF_CLIENT_SECRET = import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET || ''
+if (!API_KEY) console.warn('VITE_FINANCE_API_KEY not set — requests will be unauthenticated')
+const AUTH_HEADERS = {
+  ...(API_KEY ? { 'X-Api-Key': API_KEY } : {}),
+  ...(CF_CLIENT_ID ? { 'CF-Access-Client-Id': CF_CLIENT_ID } : {}),
+  ...(CF_CLIENT_SECRET ? { 'CF-Access-Client-Secret': CF_CLIENT_SECRET } : {}),
+}
 
 function isNetworkError(error) {
   return !navigator.onLine || error?.name === 'TypeError'
@@ -68,7 +73,11 @@ async function get(path, params = {}, options = {}) {
     const res = await fetch(url.toString(), { headers: AUTH_HEADERS })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new Error(`${res.status}: ${text || res.statusText}`)
+      const isHtml = text.trimStart().startsWith('<')
+      const detail = isHtml
+        ? `HTTP ${res.status} — ${res.url} — ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`
+        : (text || res.statusText)
+      throw new Error(detail)
     }
     const payload = await res.json()
     await cacheSet(cacheKey, payload)
@@ -105,7 +114,11 @@ async function post(path, body = {}) {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`${res.status}: ${text || res.statusText}`)
+    const isHtml = text.trimStart().startsWith('<')
+    const detail = isHtml
+      ? `Request blocked by network security (HTTP ${res.status}). Check Cloudflare settings or access the app on the local network.`
+      : (text || res.statusText)
+    throw new Error(detail)
   }
   return res.json()
 }
@@ -129,7 +142,11 @@ async function postMultipart(path, formData) {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`${res.status}: ${text || res.statusText}`)
+    const isHtml = text.trimStart().startsWith('<')
+    const detail = isHtml
+      ? `Request blocked by network security (HTTP ${res.status}). Check Cloudflare settings or access the app on the local network.`
+      : (text || res.statusText)
+    throw new Error(detail)
   }
   return res.json()
 }
@@ -138,7 +155,11 @@ async function del(path) {
   const res = await fetch(BASE + path, { method: 'DELETE', headers: AUTH_HEADERS })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`${res.status}: ${text || res.statusText}`)
+    const isHtml = text.trimStart().startsWith('<')
+    const detail = isHtml
+      ? `Request blocked by network security (HTTP ${res.status}). Check Cloudflare settings or access the app on the local network.`
+      : (text || res.statusText)
+    throw new Error(detail)
   }
   return res.json()
 }
@@ -230,7 +251,7 @@ export const api = {
   getHoldings: (p = {}, options = {}) => get('/wealth/holdings', p, options),
   upsertHolding: (body) => postQueued('/wealth/holdings', body),
   deleteHolding: (id) => delQueued(`/wealth/holdings/${id}`),
-  carryForwardHoldings: (body) => postQueued('/wealth/holdings/carry-forward', body),
+  carryForwardHoldings: (body) => postQueued('/wealth/holdings/rollover', body),
 
   getLiabilities: (p = {}, options = {}) => get('/wealth/liabilities', p, options),
   upsertLiability: (body) => postQueued('/wealth/liabilities', body),

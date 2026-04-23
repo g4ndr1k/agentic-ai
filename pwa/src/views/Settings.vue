@@ -5,9 +5,9 @@
 
     <ReadOnlyBanner />
 
-    <div class="settings-section-label">More Views</div>
+    <div class="settings-section-label" v-if="!isDesktop">More Views</div>
 
-    <div class="setting-card">
+    <div v-if="!isDesktop" class="setting-card">
       <div class="setting-title"><span class="setting-title-icon" v-html="NAV_SVGS.Settings"></span>Quick Navigation</div>
       <div class="setting-desc">
         Open views that live under More on mobile PWA.
@@ -158,16 +158,15 @@
     <!-- Health status -->
     <div class="setting-card">
       <div class="setting-title"><span class="setting-title-icon" v-html="INFO_SVG"></span> API Status</div>
-      <div class="setting-desc">Live status from the FastAPI backend.</div>
       <div v-if="!store.health" class="loading" style="padding:10px 0"><div class="spinner"></div> Checking…</div>
       <div v-else>
-        <div :class="['alert', store.health.status === 'ok' ? 'alert-success' : 'alert-error']" style="margin-bottom:12px">
-          {{ store.health.status === 'ok' ? 'Connected' : 'Offline' }}
-        </div>
         <div class="status-grid">
           <div class="status-item">
             <div class="sk">Transactions</div>
-            <div class="sv">{{ store.health.transaction_count?.toLocaleString() ?? '—' }}</div>
+            <div class="sv api-status-sv">
+              <span class="api-status-dot" :class="store.health.status === 'ok' ? 'api-status-dot--ok' : 'api-status-dot--err'"></span>
+              {{ store.health.transaction_count?.toLocaleString() ?? '—' }}
+            </div>
           </div>
           <div class="status-item">
             <div class="sk">Needs Review</div>
@@ -877,9 +876,11 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import ReadOnlyBanner from '../components/ReadOnlyBanner.vue'
+import { useLayout } from '../composables/useLayout.js'
 import { NAV_SVGS, EYE_SVG, REFRESH_SVG, SAVE_SVG, CHECK_SVG, X_SVG, ROBOT_SVG, DOCUMENT_SVG, FOLDER_SVG, DATABASE_SVG, INFO_SVG } from '../utils/icons.js'
 
 const store = useFinanceStore()
+const { isDesktop } = useLayout()
 
 const importState    = ref({ loading: false, result: null, error: null })
 const backupState    = ref({ loading: false, error: null, status: null, result: null })
@@ -1711,6 +1712,10 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.api-status-sv { display: flex; align-items: center; gap: 8px; }
+.api-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.api-status-dot--ok { background: #22c55e; box-shadow: 0 0 4px rgba(34,197,94,0.5); }
+.api-status-dot--err { background: #ef4444; box-shadow: 0 0 4px rgba(239,68,68,0.5); }
 .settings-head-icon,
 .setting-title-icon,
 .inline-icon {

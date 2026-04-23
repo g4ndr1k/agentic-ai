@@ -2542,6 +2542,74 @@ def delete_balance(balance_id: int):
 
 # ── /api/wealth/holdings ──────────────────────────────────────────────────────
 
+def _should_auto_carry_forward(snapshot_date: str, conn) -> bool:
+    """True when zero carry-forward-class rows exist for the target date."""
+    row = conn.execute(
+        "SELECT COUNT(1) FROM holdings WHERE snapshot_date = ? AND asset_class IN ({})".format(
+            ",".join(["?"] * len(CARRY_FORWARD_CLASSES))
+        ),
+        (snapshot_date, *CARRY_FORWARD_CLASSES),
+    ).fetchone()
+    return row[0] == 0
+
+
+def _auto_carry_forward(snapshot_date: str, conn) -> int:
+    """Idempotently carry forward stable-asset holdings into snapshot_date.
+
+    Preserves prior market values (user's data, not zeroed).
+    Returns the number of rows inserted.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    carried = 0
+    for asset_class in CARRY_FORWARD_CLASSES:
+        existing_keys = {
+            (row["asset_name"], row["owner"], row["institution"])
+            for row in conn.execute(
+                "SELECT asset_name, owner, institution FROM holdings "
+                "WHERE snapshot_date=? AND asset_class=?",
+                (snapshot_date, asset_class),
+            ).fetchall()
+        }
+        prev_rows = conn.execute(
+            "SELECT * FROM holdings WHERE asset_class=? AND snapshot_date < ? "
+            "ORDER BY snapshot_date DESC",
+            (asset_class, snapshot_date),
+        ).fetchall()
+        if not prev_rows:
+            continue
+        seen: set[tuple[str, str, str]] = set()
+        for row in prev_rows:
+            key = (row["asset_name"], row["owner"], row["institution"])
+            if key in existing_keys or key in seen:
+                continue
+            seen.add(key)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO holdings
+                    (snapshot_date, asset_class, asset_group, asset_name, isin_or_code,
+                     institution, account, owner, currency, quantity, unit_price,
+                     market_value, market_value_idr, cost_basis, cost_basis_idr,
+                     unrealised_pnl_idr, exchange_rate, maturity_date, coupon_rate,
+                     last_appraised_date, notes, import_date)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    snapshot_date, row["asset_class"], row["asset_group"],
+                    row["asset_name"], row["isin_or_code"], row["institution"],
+                    row["account"], row["owner"], row["currency"], row["quantity"],
+                    row["unit_price"],
+                    row["market_value"], row["market_value_idr"],  # preserve prior valuation
+                    row["cost_basis"], row["cost_basis_idr"],
+                    row["unrealised_pnl_idr"],
+                    row["exchange_rate"], row["maturity_date"], row["coupon_rate"],
+                    row["last_appraised_date"],
+                    (row["notes"] or "") + " [carried forward]", today,
+                ),
+            )
+            carried += conn.execute("SELECT changes()").fetchone()[0]
+    return carried
+
+
 @app.get("/api/wealth/holdings", dependencies=[Depends(require_api_key)])
 def get_holdings(
     snapshot_date: Optional[str] = Query(None),
@@ -2559,7 +2627,24 @@ def get_holdings(
     if owner and owner.lower() not in ("all", "both", ""):
         conditions.append("owner = ?"); params.append(owner)
     where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
     with _db() as conn:
+        # Fast-exit guard — avoids BEGIN/COMMIT on every normal GET
+        if snapshot_date and not _READ_ONLY and _should_auto_carry_forward(snapshot_date, conn):
+            conn.execute("BEGIN")
+            try:
+                carried = _auto_carry_forward(snapshot_date, conn)
+                if carried > 0:
+                    _auto_snapshot_conn(snapshot_date, conn)  # atomic with carry-forward
+                    log.info(
+                        "[carry-forward] snapshot=%s inserted=%d trigger=auto_get",
+                        snapshot_date, carried,
+                    )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
         rows = conn.execute(
             f"SELECT * FROM holdings{where} "
             "ORDER BY snapshot_date DESC, asset_group, asset_class, asset_name",
@@ -2634,76 +2719,17 @@ class CarryForwardRequest(BaseModel):
     def validate_snap(cls, v): return _validate_snapshot_date(v)
 
 
-@app.post("/api/wealth/holdings/carry-forward", dependencies=[Depends(require_api_key), Depends(require_writable)])
+@app.post("/api/wealth/holdings/rollover", dependencies=[Depends(require_api_key), Depends(require_writable)])
 def carry_forward_holdings(req: CarryForwardRequest):
     """
-    For carry-forward asset classes (retirement, real_estate, vehicle, gold, other),
-    copy any missing holdings from the most recent prior snapshot_date to
-    req.snapshot_date.
-
-    Existing target-month rows are preserved; only missing identities are filled.
-    Safe to call multiple times (idempotent per holding identity).
+    Manual carry-forward endpoint (e.g. rollover button in UI).
+    Delegates to _auto_carry_forward for the actual work.
     """
-    today   = datetime.now().strftime("%Y-%m-%d")
     carried = 0
     with _db() as conn:
-        for asset_class in CARRY_FORWARD_CLASSES:
-            existing_keys = {
-                (
-                    row["asset_name"],
-                    row["owner"],
-                    row["institution"],
-                )
-                for row in conn.execute(
-                    """
-                    SELECT asset_name, owner, institution
-                    FROM holdings
-                    WHERE snapshot_date=? AND asset_class=?
-                    """,
-                    (req.snapshot_date, asset_class),
-                ).fetchall()
-            }
-            prev_rows = conn.execute(
-                "SELECT * FROM holdings WHERE asset_class=? AND snapshot_date < ? "
-                "ORDER BY snapshot_date DESC",
-                (asset_class, req.snapshot_date),
-            ).fetchall()
-            if not prev_rows:
-                continue
-
-            seen: set[tuple[str, str, str]] = set()
-            for row in prev_rows:
-                key = (row["asset_name"], row["owner"], row["institution"])
-                if key in existing_keys or key in seen:
-                    continue
-                seen.add(key)
-                carried_notes = (row["notes"] or "") + " [carried forward]"
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO holdings
-                        (snapshot_date, asset_class, asset_group, asset_name, isin_or_code,
-                         institution, account, owner, currency, quantity, unit_price,
-                         market_value, market_value_idr, cost_basis, cost_basis_idr,
-                         unrealised_pnl_idr, exchange_rate, maturity_date, coupon_rate,
-                         last_appraised_date, notes, import_date)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (req.snapshot_date, row["asset_class"], row["asset_group"],
-                     row["asset_name"], row["isin_or_code"], row["institution"],
-                     row["account"], row["owner"], row["currency"], row["quantity"],
-                     row["unit_price"],
-                     0,          # market_value: zeroed — needs re-appraisal
-                     0,          # market_value_idr: zeroed — needs re-appraisal
-                     row["cost_basis"], row["cost_basis_idr"],
-                     0,          # unrealised_pnl_idr: zeroed — needs re-appraisal
-                     row["exchange_rate"], row["maturity_date"], row["coupon_rate"],
-                     row["last_appraised_date"], carried_notes, today),
-                )
-                carried += conn.execute("SELECT changes()").fetchone()[0]
-
+        carried = _auto_carry_forward(req.snapshot_date, conn)
     if carried > 0:
         _auto_snapshot(req.snapshot_date)
-
     return {"ok": True, "carried": carried}
 
 
@@ -2724,7 +2750,8 @@ def delete_holding(holding_id: int):
 def _auto_snapshot(snapshot_date: str):
     """Re-aggregate net_worth_snapshot for snapshot_date after any mutation (best-effort)."""
     try:
-        create_snapshot(SnapshotRequest(snapshot_date=snapshot_date))
+        with _db() as conn:
+            _aggregate_snapshot(snapshot_date, conn)
     except Exception as exc:
         log.error("Auto-snapshot failed for %s (non-fatal): %s", snapshot_date, exc, exc_info=True)
 
@@ -2893,129 +2920,141 @@ def get_snapshot_dates():
     return [r[0] for r in rows]
 
 
+def _aggregate_snapshot(snapshot_date: str, conn, notes: str = "") -> None:
+    """Core aggregation logic: balances + holdings + liabilities → net_worth_snapshots upsert.
+
+    Accepts an existing connection so it can be called inside a transaction.
+    """
+    sd = snapshot_date
+    # ── Account balances → liquid sub-totals ──────────────────────────────
+    bal_rows = conn.execute(
+        "SELECT account_type, SUM(balance_idr) AS total "
+        "FROM account_balances WHERE snapshot_date=? GROUP BY account_type",
+        (sd,),
+    ).fetchall()
+    bal = {r["account_type"]: r["total"] or 0.0 for r in bal_rows}
+
+    # ── Holdings → investment / tangible sub-totals ───────────────────────
+    hold_rows = conn.execute(
+        "SELECT asset_class, SUM(market_value_idr) AS total "
+        "FROM holdings WHERE snapshot_date=? GROUP BY asset_class",
+        (sd,),
+    ).fetchall()
+    hold = {r["asset_class"]: r["total"] or 0.0 for r in hold_rows}
+
+    # ── Liabilities → sub-totals ──────────────────────────────────────────
+    # Use the most recent balance per card as of snapshot_date (carry-forward),
+    # so month-end snapshots reflect CC balances even when statement dates differ.
+    liab_rows = conn.execute(
+        """
+        SELECT liability_type, SUM(balance_idr) AS total
+        FROM (
+            SELECT liability_type, liability_name, owner,
+                   institution, account, balance_idr, MAX(snapshot_date) AS latest_date
+            FROM liabilities
+            WHERE snapshot_date <= ?
+            GROUP BY liability_type, liability_name, owner, institution, account
+        )
+        GROUP BY liability_type
+        """,
+        (sd,),
+    ).fetchall()
+    liab = {r["liability_type"]: r["total"] or 0.0 for r in liab_rows}
+
+    # ── Build totals ──────────────────────────────────────────────────────
+    sv   = bal.get("savings", 0.0)
+    chk  = bal.get("checking", 0.0)
+    mm   = bal.get("money_market", 0.0)
+    cash = bal.get("physical_cash", 0.0)
+
+    bonds   = hold.get("bond", 0.0)
+    stocks  = hold.get("stock", 0.0)
+    mf      = hold.get("mutual_fund", 0.0)
+    retire  = hold.get("retirement", 0.0)
+    crypto  = hold.get("crypto", 0.0)
+    realty  = hold.get("real_estate", 0.0)
+    veh     = hold.get("vehicle", 0.0)
+    gold    = hold.get("gold", 0.0)
+    other_a = hold.get("other", 0.0)
+
+    total_assets = sv + chk + mm + cash + bonds + stocks + mf + retire + crypto + realty + veh + gold + other_a
+
+    mort     = liab.get("mortgage", 0.0)
+    loans    = liab.get("personal_loan", 0.0)
+    cc       = liab.get("credit_card", 0.0)
+    tax      = liab.get("taxes_owed", 0.0)
+    other_l  = liab.get("other", 0.0)
+    total_liabilities = mort + loans + cc + tax + other_l
+
+    net_worth = total_assets - total_liabilities
+
+    # MoM: most recent snapshot in a PRIOR calendar month.
+    prev = _get_previous_month_snapshot(conn, sd)
+    mom = net_worth - (prev["net_worth_idr"] if prev else 0.0)
+
+    conn.execute(
+        """
+        INSERT INTO net_worth_snapshots
+            (snapshot_date,
+             savings_idr, checking_idr, money_market_idr, physical_cash_idr,
+             bonds_idr, stocks_idr, mutual_funds_idr, retirement_idr, crypto_idr,
+             real_estate_idr, vehicles_idr, gold_idr, other_assets_idr,
+             total_assets_idr,
+             mortgages_idr, personal_loans_idr, credit_card_debt_idr,
+             taxes_owed_idr, other_liabilities_idr, total_liabilities_idr,
+             net_worth_idr, mom_change_idr, notes)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(snapshot_date) DO UPDATE SET
+            savings_idr           = excluded.savings_idr,
+            checking_idr          = excluded.checking_idr,
+            money_market_idr      = excluded.money_market_idr,
+            physical_cash_idr     = excluded.physical_cash_idr,
+            bonds_idr             = excluded.bonds_idr,
+            stocks_idr            = excluded.stocks_idr,
+            mutual_funds_idr      = excluded.mutual_funds_idr,
+            retirement_idr        = excluded.retirement_idr,
+            crypto_idr            = excluded.crypto_idr,
+            real_estate_idr       = excluded.real_estate_idr,
+            vehicles_idr          = excluded.vehicles_idr,
+            gold_idr              = excluded.gold_idr,
+            other_assets_idr      = excluded.other_assets_idr,
+            total_assets_idr      = excluded.total_assets_idr,
+            mortgages_idr         = excluded.mortgages_idr,
+            personal_loans_idr    = excluded.personal_loans_idr,
+            credit_card_debt_idr  = excluded.credit_card_debt_idr,
+            taxes_owed_idr        = excluded.taxes_owed_idr,
+            other_liabilities_idr = excluded.other_liabilities_idr,
+            total_liabilities_idr = excluded.total_liabilities_idr,
+            net_worth_idr         = excluded.net_worth_idr,
+            mom_change_idr        = excluded.mom_change_idr,
+            notes                 = excluded.notes
+        """,
+        (sd, sv, chk, mm, cash,
+         bonds, stocks, mf, retire, crypto,
+         realty, veh, gold, other_a, total_assets,
+         mort, loans, cc, tax, other_l, total_liabilities,
+         net_worth, mom, notes),
+    )
+
+
+def _auto_snapshot_conn(snapshot_date: str, conn) -> None:
+    """Re-aggregate net_worth_snapshot using an existing connection (for use inside transactions)."""
+    try:
+        _aggregate_snapshot(snapshot_date, conn)
+    except Exception as exc:
+        log.error("Auto-snapshot failed for %s (non-fatal): %s", snapshot_date, exc, exc_info=True)
+
+
 @app.post("/api/wealth/snapshot", dependencies=[Depends(require_api_key), Depends(require_writable)])
 def create_snapshot(req: SnapshotRequest):
     """
     Aggregate account_balances + holdings + liabilities for the given date
     into a net_worth_snapshots row (upsert).  Returns the saved snapshot.
     """
-    sd = req.snapshot_date
     with _db() as conn:
-        # ── Account balances → liquid sub-totals ──────────────────────────────
-        bal_rows = conn.execute(
-            "SELECT account_type, SUM(balance_idr) AS total "
-            "FROM account_balances WHERE snapshot_date=? GROUP BY account_type",
-            (sd,),
-        ).fetchall()
-        bal = {r["account_type"]: r["total"] or 0.0 for r in bal_rows}
-
-        # ── Holdings → investment / tangible sub-totals ───────────────────────
-        hold_rows = conn.execute(
-            "SELECT asset_class, SUM(market_value_idr) AS total "
-            "FROM holdings WHERE snapshot_date=? GROUP BY asset_class",
-            (sd,),
-        ).fetchall()
-        hold = {r["asset_class"]: r["total"] or 0.0 for r in hold_rows}
-
-        # ── Liabilities → sub-totals ──────────────────────────────────────────
-        # Use the most recent balance per card as of snapshot_date (carry-forward),
-        # so month-end snapshots reflect CC balances even when statement dates differ.
-        liab_rows = conn.execute(
-            """
-            SELECT liability_type, SUM(balance_idr) AS total
-            FROM (
-                SELECT liability_type, liability_name, owner,
-                       institution, account, balance_idr, MAX(snapshot_date) AS latest_date
-                FROM liabilities
-                WHERE snapshot_date <= ?
-                GROUP BY liability_type, liability_name, owner, institution, account
-            )
-            GROUP BY liability_type
-            """,
-            (sd,),
-        ).fetchall()
-        liab = {r["liability_type"]: r["total"] or 0.0 for r in liab_rows}
-
-        # ── Build totals ──────────────────────────────────────────────────────
-        sv   = bal.get("savings", 0.0)
-        chk  = bal.get("checking", 0.0)
-        mm   = bal.get("money_market", 0.0)
-        cash = bal.get("physical_cash", 0.0)
-
-        bonds   = hold.get("bond", 0.0)
-        stocks  = hold.get("stock", 0.0)
-        mf      = hold.get("mutual_fund", 0.0)
-        retire  = hold.get("retirement", 0.0)
-        crypto  = hold.get("crypto", 0.0)
-        realty  = hold.get("real_estate", 0.0)
-        veh     = hold.get("vehicle", 0.0)
-        gold    = hold.get("gold", 0.0)
-        other_a = hold.get("other", 0.0)
-
-        total_assets = sv + chk + mm + cash + bonds + stocks + mf + retire + crypto + realty + veh + gold + other_a
-
-        mort     = liab.get("mortgage", 0.0)
-        loans    = liab.get("personal_loan", 0.0)
-        cc       = liab.get("credit_card", 0.0)
-        tax      = liab.get("taxes_owed", 0.0)
-        other_l  = liab.get("other", 0.0)
-        total_liabilities = mort + loans + cc + tax + other_l
-
-        net_worth = total_assets - total_liabilities
-
-        # MoM: most recent snapshot in a PRIOR calendar month.
-        # Using the immediately preceding snapshot would compare against intermediate
-        # savings/CC-statement-date snapshots that have partial data (e.g. assets=0),
-        # producing meaningless deltas.  Restricting to a different YYYY-MM ensures
-        # the baseline is always the last complete snapshot of the previous month.
-        prev = _get_previous_month_snapshot(conn, sd)
-        mom = net_worth - (prev["net_worth_idr"] if prev else 0.0)
-
-        conn.execute(
-            """
-            INSERT INTO net_worth_snapshots
-                (snapshot_date,
-                 savings_idr, checking_idr, money_market_idr, physical_cash_idr,
-                 bonds_idr, stocks_idr, mutual_funds_idr, retirement_idr, crypto_idr,
-                 real_estate_idr, vehicles_idr, gold_idr, other_assets_idr,
-                 total_assets_idr,
-                 mortgages_idr, personal_loans_idr, credit_card_debt_idr,
-                 taxes_owed_idr, other_liabilities_idr, total_liabilities_idr,
-                 net_worth_idr, mom_change_idr, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(snapshot_date) DO UPDATE SET
-                savings_idr           = excluded.savings_idr,
-                checking_idr          = excluded.checking_idr,
-                money_market_idr      = excluded.money_market_idr,
-                physical_cash_idr     = excluded.physical_cash_idr,
-                bonds_idr             = excluded.bonds_idr,
-                stocks_idr            = excluded.stocks_idr,
-                mutual_funds_idr      = excluded.mutual_funds_idr,
-                retirement_idr        = excluded.retirement_idr,
-                crypto_idr            = excluded.crypto_idr,
-                real_estate_idr       = excluded.real_estate_idr,
-                vehicles_idr          = excluded.vehicles_idr,
-                gold_idr              = excluded.gold_idr,
-                other_assets_idr      = excluded.other_assets_idr,
-                total_assets_idr      = excluded.total_assets_idr,
-                mortgages_idr         = excluded.mortgages_idr,
-                personal_loans_idr    = excluded.personal_loans_idr,
-                credit_card_debt_idr  = excluded.credit_card_debt_idr,
-                taxes_owed_idr        = excluded.taxes_owed_idr,
-                other_liabilities_idr = excluded.other_liabilities_idr,
-                total_liabilities_idr = excluded.total_liabilities_idr,
-                net_worth_idr         = excluded.net_worth_idr,
-                mom_change_idr        = excluded.mom_change_idr,
-                notes                 = excluded.notes
-            """,
-            (sd, sv, chk, mm, cash,
-             bonds, stocks, mf, retire, crypto,
-             realty, veh, gold, other_a, total_assets,
-             mort, loans, cc, tax, other_l, total_liabilities,
-             net_worth, mom, req.notes),
-        )
+        _aggregate_snapshot(req.snapshot_date, conn, req.notes or "")
         snap = conn.execute(
-            "SELECT * FROM net_worth_snapshots WHERE snapshot_date=?", (sd,)
+            "SELECT * FROM net_worth_snapshots WHERE snapshot_date=?", (req.snapshot_date,)
         ).fetchone()
 
     return {"ok": True, "snapshot": _row(snap)}
