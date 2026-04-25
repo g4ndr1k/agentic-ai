@@ -147,6 +147,7 @@ Important sections:
 | `[fastapi]` | Finance API host, port, CORS. |
 | `[ollama_finance]` | Finance categorization AI settings. |
 | `[household]` | Household satellite base URL and API key file. |
+| `[coretax]` | CoreTax template/output dirs, match mode, rounding, owner and institution aliases. |
 
 Validate TOML syntax:
 
@@ -225,6 +226,42 @@ Household maintenance:
 - Settings -> Household Expense manages categories, recent expense category corrections, and cash pools through the finance API proxy.
 - The household API key is loaded from `household-expense/secrets/household_api.key` via `[household].api_key_file`.
 - Reconciliation import into the main finance model should be verified before documenting it as fully automated.
+
+## CoreTax SPT Workflow
+
+Use PWA → CoreTax SPT for the annual Indonesian DJP tax return (SPT) export.
+
+1. Drop the current year's template into `data/coretax/templates/` (e.g. `CoreTax 2025.xlsx`).
+2. Ensure PWM has `account_balances` and `holdings` rows for the relevant snapshot date (typically the last day of the tax year).
+3. Navigate to **CoreTax SPT** in the PWA.
+4. Set the **Reporting Period** (start and end month — end month determines the snapshot date).
+5. Pick the template from the dropdown.
+6. Click **Preview (dry run)** to review the confidence breakdown:
+   - Filled rows, unmatched rows, aggregated rows, currency warnings, and unused PWM accounts.
+7. Expand unmatched rows and resolve any mismatches (owner alias gaps, institution alias gaps, missing PWM data).
+8. Click **Generate XLSX** — the browser downloads `CoreTax_YEAR_SNAPSHOT_vN.xlsx` and the server writes the same file plus a `.audit.json` sidecar to `data/coretax/output/`.
+9. Click **Download audit log** to retrieve the sidecar for offline review.
+
+CLI equivalent (dry run):
+
+```bash
+python3 -c "
+from pathlib import Path
+from finance.coretax_export import generate_coretax_xlsx
+r = generate_coretax_xlsx(
+    Path('data/coretax/templates/CoreTax 2025.xlsx'),
+    None,
+    '2025-12-31',
+    Path('data/finance.db'),
+    dry_run=True,
+)
+print(f'filled={r.filled_count} unmatched={r.unmatched_count} currency_warnings={r.currency_warning_count}')
+"
+```
+
+Adding or adjusting institution/owner mappings — edit `config/settings.toml` under `[coretax.institution_aliases]` and `[coretax.owner_aliases]`. Changes take effect on the next server start (no rebuild needed for config-only changes unless running in Docker).
+
+NAS replica: `dry_run=true` is always available. `dry_run=false` is blocked under `FINANCE_READ_ONLY=true` (returns 403).
 
 ## Existing Specialized Docs
 

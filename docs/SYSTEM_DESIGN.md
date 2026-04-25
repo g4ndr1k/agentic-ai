@@ -54,6 +54,8 @@ Bank PDFs
 | `finance/db.py` | SQLite schema, migrations, resolved transaction view. |
 | `finance/api.py` | FastAPI backend, PWA static mount, bridge proxy routes, wealth APIs. |
 | `pwa/src/api/client.js` | Frontend API client and cache behavior. |
+| `finance/coretax_export.py` | CoreTax XLSX filler: normalises column H, matches PWM rows, writes output + audit JSON. |
+| `pwa/src/views/CoreTaxSpt.vue` | CoreTax SPT view: reporting period, template picker, dry-run preview, XLSX download. |
 | `pwa/src/views/Settings.vue` | Import, backup, PDF workspace, preflight, and operations UI. |
 | `pwa/src/utils/pdfFormatters.js` | Shared frontend PDF status vocabulary and display helpers. |
 | `household-expense/api/` | Household Expense FastAPI app, auth, SQLite schema, and routers. |
@@ -205,6 +207,8 @@ Current production provider order is `["rule_based"]`. `rule_based` is a support
 | `holdings` | Investments and other assets by snapshot date. |
 | `liabilities` | Credit cards, loans, and other liabilities. |
 | `net_worth_snapshots` | Aggregated monthly net worth rows. |
+| `data/coretax/templates/` | User-placed CoreTax XLSX templates (e.g. `CoreTax 2025.xlsx`). |
+| `data/coretax/output/` | Filled CoreTax outputs: `CoreTax_YEAR_SNAP_vN.xlsx` + `.audit.json` sidecars. |
 | `data/pdf_jobs.db` | Bridge PDF job state. |
 | `data/processed_files.db` | Processed PDF registry keyed by SHA-256. |
 | `household-expense/data/household.db` | Separate household expense store on NAS deployment. |
@@ -246,11 +250,14 @@ Finance API:
 | `DELETE` | `/api/household/categories/{code}` | Soft-disable household category. |
 | `PUT` | `/api/household/cash-pools/{pool_id}` | Adjust household cash pool balance/notes/status. |
 | `GET` | `/api/reports/financial-statement` | Composite personal financial statement (net worth, income/expense, allocation, cash flow) for a `start_month`/`end_month` range. Read-only; works under `FINANCE_READ_ONLY=true`. |
+| `GET` | `/api/coretax/templates` | List XLSX templates available in `data/coretax/templates/`. |
+| `POST` | `/api/coretax/generate` | Fill CoreTax template from PWM data. Body: `{template, snapshot_date, dry_run}`. `dry_run=true` returns JSON audit trace only (no file written, works under `FINANCE_READ_ONLY=true`). `dry_run=false` returns filled XLSX as download and writes output + audit JSON sidecar. |
+| `GET` | `/api/coretax/audit/{filename}` | Return the audit JSON sidecar for a previously generated file. |
 
 ### Financial Statement Report
 
 - **Endpoint**: `GET /api/reports/financial-statement?start_month=YYYY-MM&end_month=YYYY-MM&owner=<optional>`
-- **UI entry point**: PWA → Settings → *Dashboard Range* card → **Generate Financial Statements** button (opens `FinancialStatementModal.vue`).
+- **UI entry point**: PWA → CoreTax SPT view → *Reporting Period* card → **Generate Financial Statements** button (opens `FinancialStatementModal.vue`). Previously in Settings; moved to the CoreTax SPT view so the same reporting period drives both the FS and the CoreTax export.
 - **Source data**: composes existing helpers — `_get_monthly_summary_data` for per-month income/expense and `net_worth_snapshots`/`account_balances`/`holdings`/`liabilities` rows for opening + closing dates. The endpoint never writes; it requires no DB migration.
 - **Read-only behavior**: pure GET, no `require_writable` dep, so the NAS replica serves it identically.
 - **Warning policy**: any missing snapshot, uncategorised transactions, owner-filter limitation, or material mismatch between net-worth movement and recorded cash flow is appended to a `warnings[]` array. Missing data must never be returned as a silent zero.

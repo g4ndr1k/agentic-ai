@@ -11,6 +11,7 @@ const GroupDrilldown = () => import('../views/GroupDrilldown.vue')
 const Wealth = () => import('../views/Wealth.vue')
 const Holdings = () => import('../views/Holdings.vue')
 const Audit = () => import('../views/Audit.vue')
+const CoreTaxSpt = () => import('../views/CoreTaxSpt.vue')
 const Adjustment = () => import('../views/Adjustment.vue')
 const Goal = () => import('../views/Goal.vue')
 
@@ -26,8 +27,9 @@ export default createRouter({
     { path: '/review', name: 'review', component: ReviewQueue, meta: { title: 'Review', keepAlive: true } },
     { path: '/foreign', name: 'foreign', component: ForeignSpend, meta: { title: 'Foreign Spend' } },
     { path: '/adjustment', name: 'adjustment', component: Adjustment, meta: { title: 'Adjustment', keepAlive: true } },
-    { path: '/settings', name: 'settings', component: Settings, meta: { title: 'More' } },
     { path: '/audit', name: 'audit', component: Audit, meta: { title: 'Audit', keepAlive: true } },
+    { path: '/coretax', name: 'coretax', component: CoreTaxSpt, meta: { title: 'CoreTax', keepAlive: true } },
+    { path: '/settings', name: 'settings', component: Settings, meta: { title: 'More' } },
     { path: '/group-drilldown', name: 'group-drilldown', component: GroupDrilldown, meta: { title: 'Group Detail' } },
     { path: '/category-drilldown', name: 'category-drilldown', component: CategoryDrilldown, meta: { title: 'Category Detail' } },
     { path: '/:pathMatch(.*)*', redirect: '/' },

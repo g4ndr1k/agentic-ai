@@ -57,6 +57,14 @@
           </span>
           <span class="more-nav-card__chevron">›</span>
         </RouterLink>
+        <RouterLink to="/coretax" class="more-nav-card">
+          <span class="more-nav-card__icon" v-html="NAV_SVGS.CoreTax"></span>
+          <span class="more-nav-card__body">
+            <span class="more-nav-card__title">CoreTax SPT</span>
+            <span class="more-nav-card__desc">Preview and generate the annual CoreTax XLSX with audit trace.</span>
+          </span>
+          <span class="more-nav-card__chevron">›</span>
+        </RouterLink>
       </div>
     </div>
 
@@ -103,15 +111,6 @@
       </div>
       <div class="setting-desc" style="margin-top:10px">
         Active range: <strong>{{ store.dashboardRangeLabel }}</strong>
-      </div>
-      <div class="setting-row" style="margin-top:12px">
-        <button class="btn" @click="openStatement"
-          :disabled="!store.dashboardStartMonth || !store.dashboardEndMonth">
-          Generate Financial Statements
-        </button>
-      </div>
-      <div class="setting-desc" style="margin-top:6px">
-        Builds a personal financial statement (net worth, income/expense, allocation, cash flow) for the selected range.
       </div>
     </div>
 
@@ -1018,12 +1017,6 @@
     </Transition>
     </div>
 
-    <FinancialStatementModal
-      :open="statementOpen"
-      :start="store.dashboardStartMonth"
-      :end="store.dashboardEndMonth"
-      @close="statementOpen = false"
-    />
   </div>
 </template>
 
@@ -1033,7 +1026,6 @@ import { api } from '../api/client.js'
 import { useFinanceStore } from '../stores/finance.js'
 import ReadOnlyBanner from '../components/ReadOnlyBanner.vue'
 import PdfFileTable from '../components/PdfFileTable.vue'
-import FinancialStatementModal from '../components/FinancialStatementModal.vue'
 import { formatPdfDate, formatPdfSize, truncateText, getPdfStatusClass, getPdfStatusLabel, getPdfDetail, isPdfReadyToProcess, groupFilesByInstitution } from '../utils/pdfFormatters.js'
 import { useLayout } from '../composables/useLayout.js'
 import { NAV_SVGS, EYE_SVG, REFRESH_SVG, SAVE_SVG, CHECK_SVG, X_SVG, ROBOT_SVG, DOCUMENT_SVG, FOLDER_SVG, DATABASE_SVG, INFO_SVG } from '../utils/icons.js'
@@ -1123,11 +1115,6 @@ const householdState = ref({
   success: '',
 })
 const householdCategoryForm = ref({ code: '', label_id: '', sort_order: 99 })
-const statementOpen = ref(false)
-function openStatement() {
-  if (!store.dashboardStartMonth || !store.dashboardEndMonth) return
-  statementOpen.value = true
-}
 
 function makeEmptyCategoryForm() {
   return {

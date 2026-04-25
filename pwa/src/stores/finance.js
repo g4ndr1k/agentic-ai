@@ -6,6 +6,8 @@ import { cacheGet, cacheSet } from '../db/index.js'
 const DASHBOARD_MIN_MONTH = '2026-01'
 const DASHBOARD_START_KEY = 'finance.dashboard.startMonth'
 const DASHBOARD_END_KEY = 'finance.dashboard.endMonth'
+const REPORTING_START_KEY = 'finance.reporting.startMonth'
+const REPORTING_END_KEY = 'finance.reporting.endMonth'
 const AUTO_AI_REFINE_KEY = 'finance.autoAiRefine'
 const HIDE_NUMBERS_KEY = 'finance.hideNumbers'
 const CACHE_KEYS = {
@@ -69,9 +71,13 @@ export const useFinanceStore = defineStore('finance', () => {
   const currentMonthKey = computed(() => _getCurrentMonthKey())
   const dashboardStartMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_START_KEY), DASHBOARD_MIN_MONTH))
   const dashboardEndMonth = ref(normalizeDashboardMonth(safeStorageGet(DASHBOARD_END_KEY), currentMonthKey.value))
+  const reportingStartMonth = ref(normalizeDashboardMonth(safeStorageGet(REPORTING_START_KEY), DASHBOARD_MIN_MONTH))
+  const reportingEndMonth = ref(normalizeDashboardMonth(safeStorageGet(REPORTING_END_KEY), currentMonthKey.value))
   // Eagerly persist so defaults are always in localStorage (watchers only fire on change)
   safeStorageSet(DASHBOARD_START_KEY, dashboardStartMonth.value)
   safeStorageSet(DASHBOARD_END_KEY, dashboardEndMonth.value)
+  safeStorageSet(REPORTING_START_KEY, reportingStartMonth.value)
+  safeStorageSet(REPORTING_END_KEY, reportingEndMonth.value)
 
   // Clamp selectedYear/selectedMonth to dashboard range end on init
   const _initEnd = dashboardEndMonth.value || currentMonthKey.value
@@ -114,6 +120,11 @@ export const useFinanceStore = defineStore('finance', () => {
   const dashboardRangeLabel = computed(() => {
     const lookup = new Map(dashboardMonthOptions.value.map(option => [option.value, option.label]))
     return `${lookup.get(dashboardStartMonth.value) || dashboardStartMonth.value} - ${lookup.get(dashboardEndMonth.value) || dashboardEndMonth.value}`
+  })
+
+  const reportingRangeLabel = computed(() => {
+    const lookup = new Map(dashboardMonthOptions.value.map(option => [option.value, option.label]))
+    return `${lookup.get(reportingStartMonth.value) || reportingStartMonth.value} - ${lookup.get(reportingEndMonth.value) || reportingEndMonth.value}`
   })
 
   async function loadCachedResource(cacheKey, fetcher, applyValue, options = {}) {
@@ -224,6 +235,18 @@ export const useFinanceStore = defineStore('finance', () => {
     _savePrefsToServer()
   }
 
+  function setReportingRange(startMonth, endMonth) {
+    const normalizedStart = normalizeDashboardMonth(startMonth, DASHBOARD_MIN_MONTH)
+    const normalizedEnd = normalizeDashboardMonth(endMonth, currentMonthKey.value)
+    if (normalizedStart <= normalizedEnd) {
+      reportingStartMonth.value = normalizedStart
+      reportingEndMonth.value = normalizedEnd
+    } else {
+      reportingStartMonth.value = normalizedEnd
+      reportingEndMonth.value = normalizedStart
+    }
+  }
+
   watch(dashboardStartMonth, (value) => {
     safeStorageSet(DASHBOARD_START_KEY, value)
     if (value > dashboardEndMonth.value) dashboardEndMonth.value = value
@@ -232,6 +255,16 @@ export const useFinanceStore = defineStore('finance', () => {
   watch(dashboardEndMonth, (value) => {
     safeStorageSet(DASHBOARD_END_KEY, value)
     if (value < dashboardStartMonth.value) dashboardStartMonth.value = value
+  })
+
+  watch(reportingStartMonth, (value) => {
+    safeStorageSet(REPORTING_START_KEY, value)
+    if (value > reportingEndMonth.value) reportingEndMonth.value = value
+  })
+
+  watch(reportingEndMonth, (value) => {
+    safeStorageSet(REPORTING_END_KEY, value)
+    if (value < reportingStartMonth.value) reportingStartMonth.value = value
   })
 
   async function _loadServerPreferences() {
@@ -265,10 +298,10 @@ export const useFinanceStore = defineStore('finance', () => {
   return {
     owners, accounts, categories, years, health, reviewCount, isReadOnly, autoAiRefine,
     selectedYear, selectedMonth, selectedOwner,
-    dashboardStartMonth, dashboardEndMonth,
-    categoryMap, categoryNames, dashboardMonthOptions, dashboardRangeLabel,
+    dashboardStartMonth, dashboardEndMonth, reportingStartMonth, reportingEndMonth,
+    categoryMap, categoryNames, dashboardMonthOptions, dashboardRangeLabel, reportingRangeLabel,
     loadHealth, loadOwners, loadAccounts, loadCategories, loadYears,
-    decrementReviewCount, setReviewCount, setDashboardRange, setAutoAiRefine, setHideNumbers, bootstrap,
+    decrementReviewCount, setReviewCount, setDashboardRange, setReportingRange, setAutoAiRefine, setHideNumbers, bootstrap,
     hideNumbers,
   }
 })

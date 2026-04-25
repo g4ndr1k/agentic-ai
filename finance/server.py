@@ -20,10 +20,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 
-from finance.config import load_config, get_fastapi_config
+from finance.config import load_config, get_fastapi_config, get_coretax_config
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ Examples:
 
     cfg     = load_config(args.config)
     api_cfg = get_fastapi_config(cfg)
+    coretax_cfg = get_coretax_config(cfg)
+
+    Path(coretax_cfg.template_dir).mkdir(parents=True, exist_ok=True)
+    Path(coretax_cfg.output_dir).mkdir(parents=True, exist_ok=True)
 
     host = args.host or api_cfg.host
     port = args.port or api_cfg.port

@@ -64,6 +64,10 @@ const txnCount = computed(() => {
         <span class="sidebar-icon" v-html="NAV_SVGS.Audit"></span>
         <span>Audit</span>
       </RouterLink>
+      <RouterLink to="/coretax" class="desktop-sidebar__link">
+        <span class="sidebar-icon" v-html="NAV_SVGS.CoreTax"></span>
+        <span>CoreTax</span>
+      </RouterLink>
       <RouterLink to="/settings" class="desktop-sidebar__link">
         <span class="sidebar-icon" v-html="NAV_SVGS.Settings"></span>
         <span>Settings</span>

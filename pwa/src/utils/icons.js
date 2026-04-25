@@ -22,6 +22,7 @@ export const NAV_SVGS = {
   'Foreign Spend': `<svg ${S}><circle cx="10" cy="10" r="7"/><line x1="10" y1="3" x2="10" y2="17"/><path d="M13.5 7c0 0-1-1.5-3.5-1.5S6.5 7 6.5 7s1 1.5 3.5 1.5S13.5 7 13.5 7"/><path d="M13.5 13c0 0-1 1.5-3.5 1.5S6.5 13 6.5 13s1-1.5 3.5-1.5 3.5 1.5 3.5 1.5"/></svg>`,
   Adjustment:      `<svg ${S}><line x1="4" y1="10" x2="16" y2="10"/><line x1="4" y1="6" x2="10" y2="6"/><line x1="10" y1="14" x2="16" y2="14"/><circle cx="12" cy="6" r="1.5"/><circle cx="8" cy="14" r="1.5"/></svg>`,
   Audit:           `<svg ${S}><path d="M13 3H5a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V7l-3-4z"/><polyline points="13,3 13,7 16,7"/><polyline points="7,12 9,14 13,10"/></svg>`,
+  CoreTax:         `<svg ${S}><path d="M13 3H5a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V7l-3-4z"/><polyline points="13,3 13,7 16,7"/><line x1="7" y1="10" x2="13" y2="10"/><line x1="7" y1="13" x2="11" y2="13"/></svg>`,
   Settings:        `<svg ${S}><circle cx="10" cy="10" r="2.5"/><path d="M10 3v1.5M10 15.5v1.5M3 10h1.5M15.5 10H17M5.2 5.2l1 1M13.8 13.8l1 1M14.8 5.2l-1 1M6.2 13.8l-1 1"/></svg>`,
 }
 

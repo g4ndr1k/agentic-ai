@@ -163,6 +163,26 @@ async function post(path, body = {}) {
   return res.json()
 }
 
+async function postRaw(path, body = {}) {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    if (res.status === 401 && await recoverFromUnauthorized()) {
+      return new Promise(() => {})
+    }
+    const text = await res.text().catch(() => '')
+    const isHtml = text.trimStart().startsWith('<')
+    const detail = isHtml
+      ? `Request blocked by network security (HTTP ${res.status}). Check Cloudflare settings or access the app on the local network.`
+      : (text || res.statusText)
+    throw new Error(detail)
+  }
+  return res
+}
+
 async function postQueued(path, body = {}) {
   try {
     return await post(path, body)
@@ -278,6 +298,10 @@ export const api = {
   patchCategory: (hash, body) => patchQueued(`/transaction/${hash}/category`, body),
 
   financialStatement: (p = {}, options = {}) => get('/reports/financial-statement', p, options),
+  coretaxTemplates: (options = {}) => get('/coretax/templates', {}, { maxAgeMs: 0, ...options }),
+  coretaxPreview: (body) => post('/coretax/generate', { ...body, dry_run: true }),
+  coretaxGenerate: (body) => postRaw('/coretax/generate', { ...body, dry_run: false }),
+  coretaxAudit: (filename, options = {}) => get(`/coretax/audit/${encodeURIComponent(filename)}`, {}, { maxAgeMs: 0, ...options }),
 
   wealthSummary: (p = {}, options = {}) => get('/wealth/summary', p, options),
   wealthHistory: (limit = 24, options = {}) => get('/wealth/history', { limit }, options),

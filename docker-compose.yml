@@ -15,6 +15,8 @@ services:
       OLLAMA_FINANCE_HOST:      http://host.docker.internal:11434
       BRIDGE_TOKEN_FILE:        /run/secrets/bridge.token
       FINANCE_BACKUP_DIR:       /app/data/backups
+      CORETAX_TEMPLATE_DIR:     /app/data/coretax/templates
+      CORETAX_OUTPUT_DIR:       /app/data/coretax/output
       HOUSEHOLD_API_KEY_FILE:   /run/secrets/household_api.key
       NAS_SYNC_TARGET:          ${NAS_SYNC_TARGET:-}
     volumes:

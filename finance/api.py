@@ -28,6 +28,8 @@ import os
 import sqlite3
 import json
 import hashlib
+import re
+from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from datetime import datetime, timezone
 from typing import Generator, NamedTuple, Optional
@@ -48,8 +50,10 @@ from finance.config import (
     get_fastapi_config,
     get_ollama_finance_config,
     get_household_config,
+    get_coretax_config,
 )
 from finance.db import open_db
+from finance.coretax_export import CoretaxTemplateError, generate_coretax_xlsx, result_to_dict, _write_audit_json, _next_output_path
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +65,7 @@ _finance_cfg   = get_finance_config(_cfg)
 _fastapi_cfg   = get_fastapi_config(_cfg)
 _ollama_cfg    = get_ollama_finance_config(_cfg)
 _household_cfg = get_household_config(_cfg)
+_coretax_cfg   = get_coretax_config(_cfg)
 
 _db_path: str = _finance_cfg.sqlite_db
 
@@ -1255,6 +1260,17 @@ class AliasRequest(BaseModel):
 class ImportRequest(BaseModel):
     dry_run:   bool = False
     overwrite: bool = False
+
+
+class CoretaxGenerateRequest(BaseModel):
+    template: str = Field(..., min_length=1, max_length=255)
+    snapshot_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    dry_run: bool = False
+
+    @field_validator("snapshot_date")
+    @classmethod
+    def validate_snap(cls, v):
+        return _validate_snapshot_date(v)
 
 
 class CategoryOverrideRequest(BaseModel):
@@ -3261,6 +3277,99 @@ def query_wealth_explanation(req: WealthQuestionRequest):
         except Exception as exc:
             log.warning("Unexpected wealth Q&A error, using fallback: %s", exc)
             return _fallback_wealth_question_answer(req.question, context)
+
+
+# ── /api/coretax/* ────────────────────────────────────────────────────────────
+
+def _coretax_template_dir() -> Path:
+    path = Path(_coretax_cfg.template_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _coretax_output_dir() -> Path:
+    path = Path(_coretax_cfg.output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _safe_filename(name: str, *, allowed_suffixes: tuple[str, ...]) -> str:
+    cleaned = str(name or "").strip()
+    if not cleaned or cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned or Path(cleaned).is_absolute():
+        raise HTTPException(status_code=400, detail="invalid_filename")
+    if allowed_suffixes and Path(cleaned).suffix.lower() not in allowed_suffixes:
+        raise HTTPException(status_code=400, detail=f"filename must end with {', '.join(allowed_suffixes)}")
+    return cleaned
+
+
+def _resolve_coretax_template(name: str) -> Path:
+    filename = _safe_filename(name, allowed_suffixes=(".xlsx",))
+    for candidate in _coretax_template_dir().iterdir():
+        if candidate.is_file() and candidate.name == filename:
+            return candidate
+    raise HTTPException(status_code=404, detail="template_not_found")
+
+
+def _resolve_coretax_audit(name: str) -> Path:
+    cleaned = _safe_filename(name, allowed_suffixes=(".json", ".xlsx"))
+    filename = f"{Path(cleaned).stem}.audit.json" if cleaned.lower().endswith(".xlsx") else cleaned
+    for candidate in _coretax_output_dir().iterdir():
+        if candidate.is_file() and candidate.name == filename:
+            return candidate
+    raise HTTPException(status_code=404, detail="audit_not_found")
+
+
+@app.get("/api/coretax/templates", dependencies=[Depends(require_api_key)])
+def get_coretax_templates():
+    templates = []
+    for path in sorted(_coretax_template_dir().glob("*.xlsx"), key=lambda fp: fp.stat().st_mtime, reverse=True):
+        stat = path.stat()
+        templates.append({
+            "name": path.name,
+            "size_bytes": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        })
+    return {"templates": templates}
+
+
+@app.post("/api/coretax/generate", dependencies=[Depends(require_api_key)])
+def post_coretax_generate(req: CoretaxGenerateRequest):
+    if not req.dry_run:
+        require_writable()
+
+    template_path = _resolve_coretax_template(req.template)
+
+    try:
+        if req.dry_run:
+            result = generate_coretax_xlsx(template_path, None, req.snapshot_date, Path(_db_path), dry_run=True)
+            return result_to_dict(result)
+
+        output_path = _next_output_path(_coretax_output_dir(), re.search(r"(20\d{2})", template_path.stem).group(1) if re.search(r"(20\d{2})", template_path.stem) else "unknown", req.snapshot_date)
+        result = generate_coretax_xlsx(template_path, output_path, req.snapshot_date, Path(_db_path), dry_run=False)
+        audit_path = output_path.with_suffix(".audit.json")
+        _write_audit_json(result, audit_path)
+
+        from starlette.responses import FileResponse
+
+        response = FileResponse(
+            str(output_path),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=output_path.name,
+        )
+        response.headers["X-Coretax-Audit-File"] = audit_path.name
+        response.headers["Access-Control-Expose-Headers"] = "Content-Disposition, X-Coretax-Audit-File"
+        return response
+    except CoretaxTemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/coretax/audit/{filename}", dependencies=[Depends(require_api_key)])
+def get_coretax_audit(filename: str):
+    audit_path = _resolve_coretax_audit(filename)
+    try:
+        return json.loads(audit_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="invalid_audit_json") from exc
 
 
 # ── /api/reports/financial-statement ──────────────────────────────────────────

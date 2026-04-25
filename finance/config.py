@@ -33,6 +33,16 @@ class HouseholdConfig:
     api_key_file: str
 
 
+@dataclass
+class CoretaxConfig:
+    template_dir: str
+    output_dir: str
+    investment_match_mode: str
+    rounding: str
+    owner_aliases: dict[str, str]
+    institution_aliases: dict[str, list[str]]
+
+
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 def load_config(settings_file: str | None = None) -> dict:
@@ -78,6 +88,23 @@ def get_household_config(cfg: dict) -> HouseholdConfig:
     return HouseholdConfig(
         base_url=(os.environ.get("HOUSEHOLD_API_BASE_URL") or s.get("base_url", "http://192.168.1.44:8088")).rstrip("/"),
         api_key_file=os.environ.get("HOUSEHOLD_API_KEY_FILE") or s.get("api_key_file", os.path.expanduser("~/agentic-ai/household-expense/secrets/household_api.key")),
+    )
+
+
+def get_coretax_config(cfg: dict) -> CoretaxConfig:
+    s = cfg.get("coretax", {})
+    raw_owner_aliases = s.get("owner_aliases", {})
+    raw_institution_aliases = s.get("institution_aliases", {})
+    return CoretaxConfig(
+        template_dir=os.environ.get("CORETAX_TEMPLATE_DIR") or s.get("template_dir", "data/coretax/templates"),
+        output_dir=os.environ.get("CORETAX_OUTPUT_DIR") or s.get("output_dir", "data/coretax/output"),
+        investment_match_mode=s.get("investment_match_mode", "strict"),
+        rounding=s.get("rounding", "none"),
+        owner_aliases={str(alias): str(owner) for alias, owner in raw_owner_aliases.items()},
+        institution_aliases={
+            str(canonical): [str(alias) for alias in aliases]
+            for canonical, aliases in raw_institution_aliases.items()
+        },
     )
 
 

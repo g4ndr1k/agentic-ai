@@ -162,3 +162,31 @@ api_key_file = "/Users/g4ndr1k/agentic-ai/household-expense/secrets/household_ap
 
 [backups]
 dir = "/Users/g4ndr1k/agentic-ai/data/backups"
+
+[coretax]
+template_dir = "/Users/g4ndr1k/agentic-ai/data/coretax/templates"
+output_dir   = "/Users/g4ndr1k/agentic-ai/data/coretax/output"
+investment_match_mode = "strict"     # "strict" | "aggregate_with_warning"
+rounding = "none"                    # "none" | "thousands"
+
+[coretax.owner_aliases]
+"Emanuel G Adrianto" = "Gandrik"
+"Emanuel G. Adrianto" = "Gandrik"
+"Emanuel Adrianto" = "Gandrik"
+"E G Adrianto" = "Gandrik"
+"Dian Pratiwi" = "Helen"
+
+[coretax.institution_aliases]
+# Canonical name (left) MUST match the value stored in PWM
+# (account_balances.institution / holdings.institution).
+# Aliases (right) are case-insensitive substrings tested against the
+# normalised column-H text — order matters: more specific first.
+"BNI Sekuritas"      = ["bni sekuritas"]
+"Stockbit Sekuritas" = ["stockbit sekuritas", "stockbit"]
+"CIMB Niaga"         = ["cimb niaga", "cimb"]
+IPOT                 = ["ipot", "indopremier", "indo premier"]
+BCA                  = ["bca", "bank central asia"]
+Maybank              = ["maybank", "may bank", "bank maybank"]
+Permata              = ["permata", "bank permata"]
+BRI                  = ["bri", "bank rakyat indonesia"]
+DBS                  = ["dbs"]

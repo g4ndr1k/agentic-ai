@@ -2,6 +2,23 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-04-25 — CoreTax SPT Generator
+
+- Added `finance/coretax_export.py` — maps PWM `account_balances` (savings) and `holdings` (investments) to an Indonesian DJP CoreTax XLSX template.
+- Column F (closing value) filled from `balance_idr` for savings rows (kode 012) and `cost_basis_idr` for investment rows (kode 034/036/039). Column G filled from `market_value_idr` for investments. Hard-asset rows (real estate, vehicles, gold) are left untouched.
+- Per-row audit trace: every filled cell is traceable back to a specific PWM source row. Unmatched, aggregated, and currency-warning rows are surfaced explicitly — no silent zeros.
+- `investment_match_mode = "strict"` (default) requires `(institution, asset_class, owner)` match. `"aggregate_with_warning"` sums across institutions with a trace warning.
+- Non-IDR holdings are filled via `*_idr` columns with a `currency_warning` status so the user can verify.
+- Output written to `data/coretax/output/CoreTax_YEAR_SNAPSHOT_vN.xlsx` with a `<same-name>.audit.json` sidecar. Version number auto-increments to avoid overwriting reviewed runs.
+- Added three API endpoints: `GET /api/coretax/templates`, `POST /api/coretax/generate` (supports `dry_run=true` for JSON preview), `GET /api/coretax/audit/{filename}`.
+- Generate endpoint returns the filled XLSX as a download when `dry_run=false`; blocked under `FINANCE_READ_ONLY=true`. Dry-run is always available.
+- New PWA view `/coretax` (CoreTax SPT) with four cards: Reporting Period, Generate Financial Statement (moved from Settings), CoreTax SPT Template picker, and Generate CoreTax SPT.
+- Preview (dry-run) button shows confidence breakdown before the user commits to a file download.
+- Generate XLSX button disabled until at least one preview has been run.
+- `[coretax]`, `[coretax.owner_aliases]`, and `[coretax.institution_aliases]` added to `config/settings.toml`. Owner and institution mappings are config-driven so they can be updated without code changes.
+- Docker env vars `CORETAX_TEMPLATE_DIR` and `CORETAX_OUTPUT_DIR` added to `docker-compose.yml` to map container paths independently of host-absolute settings.toml paths.
+- 8 unit tests added in `tests/test_coretax_export.py` covering normalisation, parsing, institution/owner canonicalisation, strict vs aggregate matching, currency warnings, template validation, and unused PWM rows.
+
 ## 2026-04-25 — Documentation Split And PDF Hardening Follow-up
 
 - Refactored project documentation into purpose-specific docs:
