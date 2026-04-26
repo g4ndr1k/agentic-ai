@@ -11,9 +11,9 @@ export default defineConfig({
       srcDir: 'src',
       filename: 'sw.js',
       manifest: {
-        name: 'Finance Dashboard',
-        short_name: 'Finance',
-        description: 'Personal finance dashboard',
+        name: 'Personal Wealth Management',
+        short_name: 'PWM',
+        description: 'Personal wealth management dashboard',
         theme_color: '#1e3a5f',
         background_color: '#f8fafc',
         display: 'standalone',

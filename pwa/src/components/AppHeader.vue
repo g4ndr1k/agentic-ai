@@ -7,7 +7,7 @@ import { useOfflineSync } from '../composables/useOfflineSync.js'
 const store = useFinanceStore()
 const route = useRoute()
 const { isOnline } = useOfflineSync(() => store.loadHealth({ forceFresh: true }))
-const pageTitle = computed(() => route.meta?.title || 'Personal Finance')
+const pageTitle = computed(() => route.meta?.title || 'Personal Wealth Management')
 
 const txnCount = computed(() => {
   const n = store.health?.transaction_count ?? 0
@@ -18,7 +18,7 @@ const txnCount = computed(() => {
 <template>
   <header class="top-bar">
     <div class="title-block">
-      <span class="title-eyebrow">Personal Finance</span>
+      <span class="title-eyebrow">Personal Wealth Management</span>
       <span class="title">{{ pageTitle }}</span>
     </div>
     <div class="sync-info">

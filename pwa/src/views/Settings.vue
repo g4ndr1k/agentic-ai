@@ -997,7 +997,7 @@
     <div class="setting-card" v-show="!isDesktop || activeSection === 'about'">
       <div class="setting-title"><span class="setting-title-icon" v-html="INFO_SVG"></span> About</div>
       <div class="about-stack">
-        <div><strong>Finance Dashboard</strong> — Stage 3 wealth cockpit + operations console</div>
+        <div><strong>Personal Wealth Management</strong> — Stage 3 wealth cockpit + operations console</div>
         <div>Vue 3 desktop/mobile PWA · FastAPI backend · SQLite authoritative store · local Ollama refinement</div>
         <div>Desktop Settings now also manages the Household Expense satellite on the DS920+ LAN app (port 8088).</div>
         <div v-if="store.isReadOnly" class="about-pill about-pill--readonly">

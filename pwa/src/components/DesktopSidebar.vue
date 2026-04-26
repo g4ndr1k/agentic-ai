@@ -16,7 +16,7 @@ const txnCount = computed(() => {
 <template>
   <nav class="desktop-sidebar">
     <div class="desktop-sidebar__brand">
-      <div class="desktop-sidebar__title">Personal Finance</div>
+      <div class="desktop-sidebar__title">Personal Wealth Management</div>
       <div class="desktop-sidebar__subtitle">Wealth Dashboard</div>
     </div>
 

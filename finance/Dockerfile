@@ -21,7 +21,8 @@ RUN pip install --no-cache-dir \
         rapidfuzz>=3.6.0 \
         openpyxl>=3.1.0 \
         "fastapi>=0.110.0" \
-        "uvicorn[standard]>=0.27.0"
+        "uvicorn[standard]>=0.27.0" \
+        "python-multipart>=0.0.6"
 
 # Copy finance package
 COPY finance/ /app/finance/
