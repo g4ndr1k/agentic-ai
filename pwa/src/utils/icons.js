@@ -24,6 +24,7 @@ export const NAV_SVGS = {
   Audit:           `<svg ${S}><path d="M13 3H5a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V7l-3-4z"/><polyline points="13,3 13,7 16,7"/><polyline points="7,12 9,14 13,10"/></svg>`,
   CoreTax:         `<svg ${S}><path d="M13 3H5a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V7l-3-4z"/><polyline points="13,3 13,7 16,7"/><line x1="7" y1="10" x2="13" y2="10"/><line x1="7" y1="13" x2="11" y2="13"/></svg>`,
   Settings:        `<svg ${S}><circle cx="10" cy="10" r="2.5"/><path d="M10 3v1.5M10 15.5v1.5M3 10h1.5M15.5 10H17M5.2 5.2l1 1M13.8 13.8l1 1M14.8 5.2l-1 1M6.2 13.8l-1 1"/></svg>`,
+  Matching:        `<svg ${S}><circle cx="6" cy="7" r="2"/><circle cx="14" cy="13" r="2"/><path d="M8 7h3a3 3 0 013 3v1"/><path d="M12 13H9a3 3 0 01-3-3V9"/></svg>`,
 }
 
 export const KPI_SVGS = {

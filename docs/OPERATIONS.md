@@ -161,6 +161,40 @@ Validate provider configuration:
 python3 -c "from agent.app.providers import PROVIDERS; print(sorted(PROVIDERS))"
 ```
 
+## Matching Engine Operations
+
+The generic matching engine stores per-domain mappings and audit data in `matching_*` tables. Parser routing, dedup, and categorization engine paths are intentionally flag-gated during rollout:
+
+| Flag | Values | Effect |
+|---|---|---|
+| `PARSER_USE_ENGINE` | `true` / `false` | Route PDFs through the parser matching domain before legacy fallback. |
+| `DEDUP_USE_ENGINE` | `true` / `false` | Use the dedup domain for parser-variant reconciliation during import. |
+| `CATEGORIZATION_USE_ENGINE` | `false` / `shadow` / `true` | `shadow` logs Tier-1 disagreements while returning legacy results; `true` allows Tier-1 cached categorization. |
+| `MATCHING_ENABLED_<DOMAIN>` | `true` / `false` | Runtime-config default for generic engine domain status where callers use `finance.matching.runtime_config`. |
+
+Useful API probes:
+
+```bash
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" http://127.0.0.1:8090/api/matching/stats | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/matching/parser/mappings?limit=20" | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/matching/shadow-diffs?limit=20" | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/matching/invariant-log?limit=20" | python3 -m json.tool
+```
+
+Validation:
+
+```bash
+python3 -m pytest tests/matching -q
+python3 -m pytest tests/test_categorizer.py tests/test_importer_duplicate_reconcile.py tests/matching -q
+```
+
+Operational notes:
+
+- Keep legacy flags off unless actively testing a domain rollout.
+- Use `CATEGORIZATION_USE_ENGINE=shadow` before `true`; shadow mode records disagreements in `category_shadow_diff`.
+- A missing mapping confirmation should return `404 mapping_not_found`; unexpected 500s on `/api/matching/*` are bugs.
+- Dynamic matching table access must go through `finance.matching.storage`; do not hand-build `matching_<domain>` SQL in new code unless the domain is validated by API allow-list or storage helpers.
+
 ## Secrets
 
 macOS Keychain is the source of truth. `secrets/` files are runtime/export artifacts for Docker and local scripts.
@@ -237,9 +271,9 @@ The current implementation is a persistent tax-version ledger. It is not a one-s
 2. Upload the prior-year submitted SPT XLSX in the **Import Previous SPT** tab. For example, a workbook with headers `E=2025` and `F=2026` must be uploaded with `target_tax_year=2026`.
 3. Review staged rows. The staging table preserves raw Excel cells for B/H descriptions and E/F/G values so the import can be audited before commit.
 4. Commit staging to create `coretax_rows` for the target tax year. Sticky codes carry forward; refreshable codes stay unset.
-5. Use **Carry Forward Review** to edit rows or lock/unlock fields. Any manual edit to `current_amount_idr` or `market_value_idr` auto-locks that field.
-6. Use **Reconcile from PWM** with the relevant month range. Reconcile reads `account_balances`, `holdings`, and `liabilities` for the snapshot date and only writes unlocked fields.
-7. Use **Review & Manual Mapping** for unmatched PWM rows. "Create from unmatched" creates a row and stores a learned mapping keyed by source signature and `target_stable_key`.
+5. Use **Review** to edit rows or lock/unlock fields. Any manual edit to `current_amount_idr` or `market_value_idr` auto-locks that field.
+6. Use **Mapping** before reconcile. The live unmapped list is computed from current PWM rows and learned mappings, not from the last reconcile run. Map PWM items to existing rows, create rows for genuinely new tax rows, or run suggestions and preview high-confidence bulk accepts.
+7. Use **Reconcile from PWM** with the relevant month range. Reconcile reads `account_balances`, `holdings`, and `liabilities` for the snapshot date and only writes unlocked fields. It applies explicit mappings first, then safe 1:1 heuristics (unique ISIN or account-number matches) that can be learned as `auto_safe` mappings.
 8. Use **Export CoreTax XLSX**. The API writes `CoreTax_{tax_year}_vN.xlsx` plus `CoreTax_{tax_year}_vN.audit.json` under `data/coretax/output/` and returns only `file_id`, `download_url`, and `audit_url`.
 
 Carry-forward defaults:
@@ -254,8 +288,25 @@ Useful API probes:
 ```bash
 curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/coretax/summary?tax_year=2026" | python3 -m json.tool
 curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/coretax/rows?tax_year=2026" | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/coretax/2026/unmapped-pwm" | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/coretax/mappings/lifecycle?year=2026" | python3 -m json.tool
 curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/coretax/reconcile-runs?tax_year=2026" | python3 -m json.tool
 ```
+
+Mapping notes:
+
+- Mapping fingerprints are generated by `finance/coretax/fingerprint.py`; do not hand-type hashes unless debugging.
+- `account_number_norm` values are SHA-256 hashes of `institution_norm:account_norm`; use `fingerprint_raw` in API responses for audit/display.
+- `isin` values are stored as normalized ISINs.
+- `holding_signature` and `liability_signature` are more volatile because they include editable names; expect lower confidence and lifecycle review.
+- Mapping assignment conflicts return HTTP 409 with structured details instead of silently retargeting a source fingerprint.
+- Rejected suggestions are remembered in `coretax_rejected_suggestions`; use the Mapping tab controls to reverse or manually override them.
+
+Reconcile notes:
+
+- `CORETAX_LEGACY_HEURISTICS` defaults to off. Only enable it temporarily for migration/debugging because it can attach rows by weaker substring or single-row heuristics.
+- Component history is retained in `coretax_row_components`. Current components have `is_current=1`; older run components are kept with `is_current=0` for run diff/debugging.
+- Low-confidence mapping matches are allowed but should be reviewed in the Mapping tab.
 
 CLI smoke test using a local workbook and scratch DB:
 

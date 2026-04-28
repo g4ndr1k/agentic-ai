@@ -51,12 +51,13 @@ Bank PDFs
 | `parsers/*.py` | Bank-specific PDF extraction logic. |
 | `exporters/xls_writer.py` | XLS output, including `ALL_TRANSACTIONS.xlsx`. |
 | `finance/importer.py` | XLSX to SQLite import, deduplication, categorization, header validation. |
+| `finance/matching/` | Generic matching engine: fingerprints, mappings, confidence, storage, rejected suggestions, invariant logs, and domain adapters. |
 | `finance/db.py` | SQLite schema, migrations, resolved transaction view. |
 | `finance/api.py` | FastAPI backend, PWA static mount, bridge proxy routes, wealth APIs. |
 | `pwa/src/api/client.js` | Frontend API client and cache behavior. |
-| `finance/coretax/` | Persistent CoreTax SPT ledger: prior-year import, carry-forward, reconcile, learned mappings, XLSX export. |
-| `pwa/src/views/CoreTaxSpt.vue` | CoreTax SPT wizard: import, carry-forward review, reconcile from PWM, manual mapping, export. |
-| `pwa/src/stores/coretax.js` | Pinia state for CoreTax rows, staging, mappings, reconcile runs, unmatched rows, and exports. |
+| `finance/coretax/` | Persistent CoreTax SPT ledger: prior-year import, carry-forward, fingerprint derivation, mapping suggestions, reconcile, component history, XLSX export. |
+| `pwa/src/views/CoreTaxSpt.vue` | CoreTax SPT wizard: import, carry-forward review, mapping, reconcile from PWM, export. |
+| `pwa/src/stores/coretax.js` | Pinia state for CoreTax rows, staging, mappings, unmapped PWM items, reconcile runs, component history, and exports. |
 | `pwa/src/views/Settings.vue` | Import, backup, PDF workspace, preflight, and operations UI. |
 | `pwa/src/utils/pdfFormatters.js` | Shared frontend PDF status vocabulary and display helpers. |
 | `household-expense/api/` | Household Expense FastAPI app, auth, SQLite schema, and routers. |
@@ -212,11 +213,13 @@ Current production provider order is `["rule_based"]`. `rule_based` is a support
 | `data/coretax/output/` | Exported CoreTax XLSX files: `CoreTax_YEAR_vN.xlsx` + `.audit.json` sidecars. |
 | `coretax_rows` | Authoritative tax-version ledger, one row per asset/liability per SPT year. |
 | `coretax_taxpayer` | Per-tax-year taxpayer metadata imported from C1/C2/C3. |
-| `coretax_mappings` | Learned PWM-to-CoreTax mapping rules keyed by source signatures and target stable keys. |
+| `coretax_mappings` | Learned PWM-to-CoreTax mapping rules keyed by stable fingerprints and target stable keys. |
 | `coretax_import_staging` | Prior-year XLSX preview rows with raw Excel coordinate audit fields. |
 | `coretax_asset_codes` | Kode Harta lookup and default carry-forward rules. |
 | `coretax_reconcile_runs` | Persisted reconcile run summaries and trace JSON. |
-| `coretax_unmatched_pwm` | PWM rows not mapped during a reconcile run. |
+| `coretax_unmatched_pwm` | Per-run audit copy of PWM rows not mapped during reconcile. The live Mapping tab computes unmapped PWM rows fresh. |
+| `coretax_row_components` | Per-run source component breakdown for many-to-one CoreTax rows. Current components have `is_current=1`; older run history is retained with `is_current=0`. |
+| `coretax_rejected_suggestions` | Negative-learning table for user-rejected mapping suggestions. |
 | `data/pdf_jobs.db` | Bridge PDF job state. |
 | `data/processed_files.db` | Processed PDF registry keyed by SHA-256. |
 | `household-expense/data/household.db` | Separate household expense store on NAS deployment. |
@@ -263,10 +266,21 @@ Finance API:
 | `GET` | `/api/coretax/summary` | Totals, lock counts, and coverage for one tax year. |
 | `GET/POST/PATCH/DELETE` | `/api/coretax/rows*` | Ledger row list, manual add/edit/delete, and field lock/unlock. |
 | `POST` | `/api/coretax/reset-from-rules` | Re-apply carry-forward defaults to unlocked rows only. |
-| `POST` | `/api/coretax/auto-reconcile` | Reconcile from PWM `account_balances`, `holdings`, and `liabilities`; persists run trace and unmatched rows. |
+| `POST` | `/api/coretax/auto-reconcile` | Reconcile from PWM `account_balances`, `holdings`, and `liabilities`; applies explicit mappings first, then safe 1:1 heuristics; persists run trace, component rows, and unmatched rows. |
 | `GET` | `/api/coretax/reconcile-runs` | List recent reconcile runs for a tax year. |
 | `GET` | `/api/coretax/unmatched` | Return unmatched PWM rows for a reconcile run, defaulting to the latest run. |
 | `GET/POST/DELETE` | `/api/coretax/mappings*` | List, upsert, or delete learned PWM-to-CoreTax mappings. |
+| `GET` | `/api/coretax/{year}/unmapped-pwm` | Compute the current unmapped PWM universe against live mappings. |
+| `GET` | `/api/coretax/{year}/mappings/grouped` | List mappings grouped by target row. |
+| `GET` | `/api/coretax/mappings/lifecycle` | Classify mappings as `STALE`, `WEAK`, `UNUSED`, or `ORPHANED`. |
+| `POST` | `/api/coretax/{year}/mappings/assign` | Create/update a mapping with conflict protection. Returns HTTP 409 with structured conflict metadata on target mismatch. |
+| `POST` | `/api/coretax/mappings/{mapping_id}/confirm` | Confirm a mapping and raise its confidence floor. |
+| `POST` | `/api/coretax/{year}/mappings/suggest` | Return ranked suggestions for unmapped PWM items. |
+| `POST` | `/api/coretax/{year}/mappings/suggest/preview` | Preview accepted suggestions without writing. Computes target deltas, component counts, and conflicts. Optional `snapshot_date` aligns amounts with a future reconcile run. |
+| `POST` | `/api/coretax/{year}/mappings/suggest/reject` | Persist a rejected suggestion so it is no longer proposed. |
+| `GET` | `/api/coretax/{year}/rows/{stable_key}/components` | Return current components for a target row, or run-specific historical components when `run_id` is supplied. |
+| `GET` | `/api/coretax/components/history` | Reverse trace for a PWM fingerprint across reconcile runs. |
+| `GET` | `/api/coretax/{year}/reconcile/runs/{run_id}/diff` | Compare component membership between reconcile runs. |
 | `POST` | `/api/coretax/export` | Export the ledger to XLSX and audit JSON. Returns only `file_id`, `download_url`, and `audit_url` plus totals. |
 | `GET` | `/api/coretax/exports` | List prior exports for a tax year. |
 | `GET` | `/api/coretax/export/{file_id}/download` | Stream a previously exported XLSX file. |
@@ -287,9 +301,49 @@ Finance API:
 - **Row identity**: every row has a non-null `stable_key`. PWM rows use source-derived keys where possible; manual/imported rows use `manual:{kode}:{slug}:{acquisition_year}:{uuid8}`.
 - **Carry-forward**: prior-year import creates the next tax year's ledger. Sticky codes such as `061`, `051`, `043`, `042`, and `038` copy prior current value into current value. Refreshable codes such as `012`, `034`, `036`, and `039` are left unset for reconcile.
 - **Template year validation**: the parser rejects mismatched E/F headers. A workbook with `E=2025` and `F=2026` is valid only when preparing `target_tax_year=2026`.
-- **Reconcile**: PWM cash writes current amount only. Holdings can write current amount and market value independently. Liabilities write current amount. Each field respects its own lock flag.
-- **Mappings**: learned mappings use prioritized source signatures such as account number, ISIN, asset signature, and liability signature. A successful mapping resolves to `target_stable_key`, increments `hits`, updates `last_used_tax_year`, and stamps `last_mapping_id` on the row.
+- **Mapping-first flow**: the PWA order is Import -> Review -> Mapping -> Reconcile -> Export. Mapping is the human decision layer; Reconcile is the execution layer.
+- **Fingerprints**: PWM sources derive stable mapping keys in `finance/coretax/fingerprint.py`. Cash uses `account_number_norm = sha256(institution_norm:account_norm)`, holdings use normalized ISIN when available, holdings without ISIN use `holding_signature`, and liabilities use `liability_signature`. `fingerprint_raw` stores the canonical pre-hash string for audit where available.
+- **Reconcile**: Tier 1 applies explicit mappings. Tier 2 applies only safe 1:1 heuristics, currently exact unique ISIN and exact unique account-number matches. Tier 2 auto-persists guarded `auto_safe` mappings and uses them in the same run. Deprecated legacy heuristics are disabled by default and require `CORETAX_LEGACY_HEURISTICS=true`.
+- **Writes and locks**: PWM cash writes current amount only. Holdings can write current amount and market value independently. Liabilities write current amount. Each field respects its own lock flag.
+- **Mappings**: a successful mapping resolves to `target_stable_key`, increments `hits`, updates `last_used_tax_year`, stamps `last_mapping_id` on the row, and contributes a `coretax_row_components` entry for the target row.
+- **Confidence and lifecycle**: mappings store `confidence_score`, derived `confidence_level`, source, confirmation count, years used, and last-used data. Lifecycle classification distinguishes `STALE`, `WEAK`, `UNUSED`, and `ORPHANED`; missing PWM fingerprints are orphaned instead of confidence-decayed.
+- **Many-to-one**: multiple PWM sources can map to one CoreTax row. Component rows preserve the per-source breakdown and make run diffs auditable.
+- **Suggestion preview**: suggestions are read-only until accepted. Preview groups same-target suggestions as components and reports conflicts only for duplicate source fingerprints, existing mapping target conflicts, missing target rows, or incompatible asset/liability target kinds.
 - **Export**: exporter loads a canonical XLSX template, writes rows 6-47 only, preserves rows 48+ formulas/styles, and raises before writing if more than 42 asset rows would exceed template capacity.
+
+### Generic Matching Engine
+
+`finance/matching/` is the shared infrastructure for systems that map source rows to durable targets. It currently has domain adapters for:
+
+| Domain | Adapter | Current rollout shape |
+|---|---|---|
+| CoreTax | `finance/matching/domains/coretax.py` | Compatibility adapter while CoreTax keeps its established ledger API. |
+| Parser routing | `finance/matching/domains/parser_routing.py` | Flag-gated by `PARSER_USE_ENGINE=true`; legacy router remains the fallback. |
+| Import dedup | `finance/matching/domains/dedup.py` | Flag-gated by `DEDUP_USE_ENGINE=true`; exact hash dedup remains the primary backstop. |
+| Categorization | `finance/matching/domains/categorization.py` | Flag-gated by `CATEGORIZATION_USE_ENGINE=shadow|true`; legacy categorizer remains the source of truth unless true mode is enabled. |
+
+Engine-owned tables use a fixed shape per domain:
+
+- `matching_<domain>_mappings`
+- `matching_<domain>_components`
+- `matching_<domain>_rejected_suggestions`
+
+Engine-wide tables:
+
+- `matching_invariant_log`
+- `matching_invariant_diagnostic`
+- `matching_drift_metrics`
+- `matching_trace_archive`
+- `category_shadow_diff`
+
+Runtime contract:
+
+- Domains provide explicit `normalize()`, `derive()`, `rules()`, `resolve_conflict()`, and `on_persist()` hooks.
+- `identity_hash` is the stable mapping key; `identity_raw` stores the canonical pre-hash form for audit and fingerprint-version checks.
+- Tier 1 uses persisted mappings. Tier 2 runs safe domain rules and may auto-persist only when score, conflict, observation, and per-run guard checks pass.
+- Storage helpers validate dynamic table/domain/field identifiers before SQL interpolation. SQLite values remain parameterized.
+- Matching-console APIs are exposed under `/api/matching/*` and validate domains against the fixed allow-list: `coretax`, `parser`, `dedup`, `categorization`.
+- Not-yet-shipped platform features from the extraction plan, such as deterministic replay, persisted trace sampling, drift response automation, and daily/30-day/per-rule learning caps, should be added centrally in `finance/matching/` rather than inside individual domains.
 
 Household API:
 

@@ -436,6 +436,19 @@
         :end="fsEnd"
         @close="statementOpen = false"
       />
+
+      <CoretaxDialog
+        :open="dialog.open"
+        :title="dialog.title"
+        :message="dialog.message"
+        :type="dialog.type"
+        :initialValue="dialog.initialValue"
+        :suggestions="dialog.suggestions"
+        :preview="dialog.preview"
+        :loading="dialog.loading"
+        @close="dialog.open = false"
+        @confirm="handleDialogConfirm"
+      />
     </div>
   </div>
 </template>
@@ -444,6 +457,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api/client.js'
 import FinancialStatementModal from '../components/FinancialStatementModal.vue'
+import CoretaxDialog from '../components/CoretaxDialog.vue'
 import { useLayout } from '../composables/useLayout.js'
 import { useCoretaxStore } from '../stores/coretax.js'
 import { useFinanceStore } from '../stores/finance.js'
@@ -452,6 +466,49 @@ import { NAV_SVGS } from '../utils/icons.js'
 const store = useCoretaxStore()
 const financeStore = useFinanceStore()
 const { isDesktop } = useLayout()
+
+const dialog = ref({
+  open: false,
+  title: '',
+  message: '',
+  type: 'confirm',
+  initialValue: '',
+  suggestions: [],
+  preview: null,
+  loading: false,
+  onConfirm: null,
+})
+
+function showDialog(opts) {
+  dialog.value = {
+    open: true,
+    title: opts.title || 'Action Required',
+    message: opts.message || '',
+    type: opts.type || 'confirm',
+    initialValue: opts.initialValue || '',
+    suggestions: opts.suggestions || [],
+    preview: opts.preview || null,
+    loading: false,
+    onConfirm: opts.onConfirm,
+  }
+}
+
+async function handleDialogConfirm(value) {
+  if (dialog.value.onConfirm) {
+    dialog.value.loading = true
+    try {
+      await dialog.value.onConfirm(value)
+      dialog.value.open = false
+    } catch (e) {
+      console.error('Dialog action failed:', e)
+      dialog.value.open = false
+    } finally {
+      dialog.value.loading = false
+    }
+  } else {
+    dialog.value.open = false
+  }
+}
 
 const TAB_KEY = 'coretax_active_tab'
 const tabs = [
@@ -568,11 +625,17 @@ async function toggleLock(row, field) {
 
 async function editCell(row, field) {
   const current = row[field]
-  const input = prompt(`Edit ${field} (IDR):`, current ?? '')
-  if (input === null) return
-  const val = input === '' ? null : Number(input)
-  if (input !== '' && isNaN(val)) return
-  await store.updateRow(row.id, { [field]: val })
+  showDialog({
+    title: `Edit ${field} (IDR)`,
+    type: 'prompt',
+    initialValue: current ?? '',
+    onConfirm: async (val) => {
+      if (val === null) return
+      const num = val === '' ? null : Number(val)
+      if (val !== '' && isNaN(num)) return
+      await store.updateRow(row.id, { [field]: num })
+    }
+  })
 }
 
 async function resetRules() {
@@ -593,29 +656,40 @@ async function runReconcile() {
 // ── Mapping panel actions ────────────────────────────────────────────────
 
 async function mapToRow(um) {
-  // Open a prompt to select target stable_key
-  const targetKey = prompt('Enter target stable_key (paste from Review tab):', '')
-  if (!targetKey) return
-  try {
-    await store.assignMappingDirect({
-      match_kind: um.match_kind,
-      match_value: um.match_value,
-      target_kode_harta: um.payload?.kode_harta || '',
-      target_kind: um.source_kind === 'liability' ? 'liability' : 'asset',
-      target_stable_key: targetKey,
-      source: 'manual',
-      confidence_score: 1.0,
-      fingerprint_raw: um.fingerprint_raw,
-    })
-  } catch (e) {
-    console.warn('Failed to assign mapping:', e)
-  }
+  showDialog({
+    title: 'Map to CoreTax Row',
+    message: 'Enter target stable_key (paste from Review tab):',
+    type: 'prompt',
+    onConfirm: async (targetKey) => {
+      if (!targetKey) return
+      // Validate stable_key against known rows
+      const target = store.rows.find(r => r.stable_key === targetKey)
+      if (!target) {
+        showDialog({
+          title: 'Invalid Stable Key',
+          message: `No row found with key "${targetKey}". Please copy correctly from the Review tab.`,
+          type: 'alert'
+        })
+        return
+      }
+      await store.assignMappingDirect({
+        match_kind: um.match_kind,
+        match_value: um.match_value,
+        target_kode_harta: um.suggested_kode_harta || '',
+        target_kind: um.source_kind === 'liability' ? 'liability' : 'asset',
+        target_stable_key: targetKey,
+        source: 'manual',
+        confidence_score: 1.0,
+        fingerprint_raw: um.fingerprint_raw,
+      })
+    }
+  })
 }
 
-async function createRowFromUnmatched(um) {
+async function createRowFromUnmapped(um) {
   const payload = um.payload || {}
   const kind = um.source_kind === 'liability' ? 'liability' : 'asset'
-  const kodeHarta = inferKodeHarta({ source_kind: um.source_kind, payload })
+  const kodeHarta = inferKodeHarta(um)
   const newRow = await store.createRow({
     kind,
     kode_harta: kodeHarta,
@@ -647,58 +721,74 @@ async function createRowFromUnmatched(um) {
 async function suggestOne(um) {
   const suggestions = await store.suggestMappings([um])
   if (suggestions.length === 0) {
-    alert('No suggestions found for this item.')
+    showDialog({ title: 'No Suggestions', message: 'No suggestions found for this item.', type: 'alert' })
     return
   }
-  const best = suggestions[0]
-  const accept = confirm(`Suggestion: ${best.rule} (score ${best.confidence_score})\n→ ${best.target_stable_key}\n\nAccept?`)
-  if (accept) {
-    await store.assignMappingDirect({
-      match_kind: um.match_kind,
-      match_value: um.match_value,
-      target_kode_harta: best.target_kode_harta || '',
-      target_kind: um.source_kind === 'liability' ? 'liability' : 'asset',
-      target_stable_key: best.target_stable_key,
-      source: 'suggested',
-      confidence_score: best.confidence_score,
-      fingerprint_raw: um.fingerprint_raw,
-    })
-    await store.fetchUnmappedPwm()
-  }
+  showDialog({
+    title: 'Review Suggestion',
+    type: 'suggestion',
+    suggestions,
+    onConfirm: async () => {
+      const best = suggestions[0]
+      await store.assignMappingDirect({
+        match_kind: um.match_kind,
+        match_value: um.match_value,
+        target_kode_harta: best.target_kode_harta || '',
+        target_kind: um.source_kind === 'liability' ? 'liability' : 'asset',
+        target_stable_key: best.target_stable_key,
+        source: 'suggested',
+        confidence_score: best.confidence_score,
+        fingerprint_raw: um.fingerprint_raw,
+      })
+      await store.fetchUnmappedPwm()
+    }
+  })
 }
 
 async function suggestAll() {
   const suggestions = await store.suggestMappings()
   if (suggestions.length === 0) {
-    alert('No suggestions found.')
+    showDialog({ title: 'No Suggestions', message: 'No suggestions found.', type: 'alert' })
     return
   }
   // Filter to high-confidence (>= 0.9)
   const highConf = suggestions.filter(s => s.confidence_score >= 0.9)
   if (highConf.length === 0) {
-    alert(`Found ${suggestions.length} suggestions, but none with confidence >= 0.9.`)
+    showDialog({ title: 'Low Confidence', message: `Found ${suggestions.length} suggestions, but none with confidence >= 0.9.`, type: 'alert' })
     return
   }
-  const accept = confirm(`Accept ${highConf.length} high-confidence suggestions (>= 0.9)?\n\n${highConf.map(s => `${s.rule}: ${s.target_stable_key}`).join('\n')}`)
-  if (accept) {
-    for (const s of highConf) {
-      try {
-        await store.assignMappingDirect({
-          match_kind: s.match_kind,
-          match_value: s.match_value,
-          target_kode_harta: s.target_kode_harta || '',
-          target_kind: s.source_kind === 'liability' ? 'liability' : 'asset',
-          target_stable_key: s.target_stable_key,
-          source: 'suggested',
-          confidence_score: s.confidence_score,
-          fingerprint_raw: s.fingerprint_raw,
-        })
-      } catch (e) {
-        console.warn('Failed to accept suggestion:', e)
+  
+  const preview = await store.suggestPreview(highConf)
+  
+  showDialog({
+    title: 'Accept Bulk Suggestions',
+    type: 'bulk_suggestions',
+    suggestions: highConf,
+    preview,
+    onConfirm: async () => {
+      if (preview.conflicts?.length > 0) {
+        console.warn('Blocked bulk accept due to conflicts')
+        return
       }
+      for (const s of highConf) {
+        try {
+          await store.assignMappingDirect({
+            match_kind: s.match_kind,
+            match_value: s.match_value,
+            target_kode_harta: s.target_kode_harta || '',
+            target_kind: s.source_kind === 'liability' ? 'liability' : 'asset',
+            target_stable_key: s.target_stable_key,
+            source: 'suggested',
+            confidence_score: s.confidence_score,
+            fingerprint_raw: s.fingerprint_raw,
+          })
+        } catch (e) {
+          console.warn('Failed to accept suggestion:', e)
+        }
+      }
+      await store.fetchUnmappedPwm()
     }
-    await store.fetchUnmappedPwm()
-  }
+  })
 }
 
 async function confirmMappingAction(m) {
@@ -708,10 +798,14 @@ async function confirmMappingAction(m) {
 async function doFindRenames() {
   const candidates = await store.findRenames()
   if (candidates.length === 0) {
-    alert('No rename candidates found.')
+    showDialog({ title: 'No Candidates', message: 'No rename candidates found.', type: 'alert' })
     return
   }
-  alert(`Found ${candidates.length} rename candidates. Review in the table.`)
+  showDialog({
+    title: 'Rename Candidates Found',
+    message: `Found ${candidates.length} rename candidates. Review them in the Mapping tab.`,
+    type: 'alert'
+  })
 }
 
 async function compareRuns() {
@@ -729,7 +823,7 @@ async function deleteMapping(id) {
 async function createFromUnmatched(um) {
   const payload = um.payload || {}
   const kind = um.source_kind === 'liability' ? 'liability' : 'asset'
-  const kodeHarta = inferKodeHarta(um)
+  const kodeHarta = um.suggested_kode_harta || ''
   const newRow = await store.createRow({
     kind,
     kode_harta: kodeHarta,
@@ -741,30 +835,20 @@ async function createFromUnmatched(um) {
   // Persist a learned mapping so future reconciles auto-apply this row.
   if (newRow && newRow.stable_key && kodeHarta && payload.proposed_match_kind && payload.proposed_match_value) {
     try {
-      await store.createMapping({
+      await store.assignMappingDirect({
         match_kind: payload.proposed_match_kind,
         match_value: payload.proposed_match_value,
         target_kode_harta: kodeHarta,
         target_kind: kind,
         target_stable_key: newRow.stable_key,
+        source: 'manual',
+        confidence_score: 1.0,
       })
     } catch (e) {
       console.warn('Failed to persist learned mapping:', e)
     }
   }
   await store.fetchUnmatched()
-}
-
-function inferKodeHarta(um) {
-  const payload = um.payload || {}
-  if (um.source_kind === 'account_balance') return '012'
-  if (um.source_kind === 'liability') return 'liability'
-  if (um.source_kind === 'holding') {
-    if (payload.asset_class === 'bond') return '034'
-    if (payload.asset_class === 'mutual_fund') return '036'
-    if (payload.asset_class === 'stock') return '039'
-  }
-  return ''
 }
 
 function amountFromUnmatched(payload) {
@@ -804,7 +888,11 @@ async function viewAudit(fileId) {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
   } catch (e) {
-    alert('Failed to load audit: ' + (e?.message || e))
+    showDialog({
+      title: 'Audit Load Failed',
+      message: 'Failed to load audit: ' + (e?.message || e),
+      type: 'alert'
+    })
   }
 }
 

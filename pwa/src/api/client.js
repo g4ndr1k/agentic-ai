@@ -346,6 +346,17 @@ export const api = {
   coretaxExportAudit: (fileId, options = {}) =>
     get(`/coretax/export/${encodeURIComponent(fileId)}/audit`, {}, { maxAgeMs: 0, ...options }),
 
+  // Matching console (Phase E)
+  matchingStats: (options = {}) => get('/matching/stats', {}, { maxAgeMs: 0, ...options }),
+  matchingMappings: (domain, params = {}, options = {}) =>
+    get(`/matching/${domain}/mappings`, params, { maxAgeMs: 0, ...options }),
+  matchingDeleteMapping: (domain, id) => del(`/matching/${domain}/mappings/${id}`),
+  matchingConfirmMapping: (domain, id) => post(`/matching/${domain}/mappings/${id}/confirm`),
+  matchingShadowDiffs: (params = {}, options = {}) =>
+    get('/matching/shadow-diffs', params, { maxAgeMs: 0, ...options }),
+  matchingInvariantLog: (params = {}, options = {}) =>
+    get('/matching/invariant-log', params, { maxAgeMs: 0, ...options }),
+
   wealthSummary: (p = {}, options = {}) => get('/wealth/summary', p, options),
   wealthHistory: (limit = 24, options = {}) => get('/wealth/history', { limit }, options),
   wealthExplanation: (p = {}, options = {}) => get('/wealth/explanation', p, options),

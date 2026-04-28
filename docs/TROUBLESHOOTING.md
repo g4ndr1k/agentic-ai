@@ -205,6 +205,52 @@ tail -120 logs/bridge.log
 - Do not put parser extraction logic in bridge job/status code.
 - Add focused parser tests when adding or changing detection.
 
+## Matching Engine Or Matching Console Looks Wrong
+
+### Symptoms
+
+- `/api/matching/stats` reports zero mappings for a domain that should have mappings.
+- Matching Console mapping confirm/delete returns unexpected errors.
+- `category_shadow_diff` grows after enabling categorization shadow mode.
+- Parser/dedup/categorization behavior changes after enabling an engine flag.
+
+### Likely Cause
+
+- The relevant domain flag is not set, so the legacy path is still being used.
+- Matching tables were not created in the active SQLite database.
+- A Tier-1 mapping disagrees with legacy behavior.
+- A malformed domain or field name reached dynamic SQL code outside the storage/API allow-list.
+
+### How To Diagnose
+
+```bash
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" http://127.0.0.1:8090/api/matching/stats | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/matching/invariant-log?limit=50" | python3 -m json.tool
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" "http://127.0.0.1:8090/api/matching/shadow-diffs?limit=50" | python3 -m json.tool
+
+sqlite3 data/finance.db ".tables matching_%"
+python3 -m pytest tests/matching -q
+```
+
+Check active flags in the environment that launches the API/importer:
+
+```bash
+env | rg 'PARSER_USE_ENGINE|DEDUP_USE_ENGINE|CATEGORIZATION_USE_ENGINE|MATCHING_ENABLED_'
+```
+
+### Fix
+
+- If behavior changed unexpectedly, disable the domain flag and rerun using the legacy path.
+- If tables are missing, open the DB through `finance.db.open_db()` or restart the API so migrations run.
+- For categorization rollout, use `CATEGORIZATION_USE_ENGINE=shadow` and inspect `/api/matching/shadow-diffs` before enabling `true`.
+- If a matching API operation on a missing mapping returns 500 instead of `404 mapping_not_found`, fix the endpoint rather than handling it in the UI.
+
+### Prevention
+
+- Keep domain adoption flag-gated until snapshot/shadow tests pass.
+- Add a fixture in `tests/matching/` for every matching behavior bug before fixing it.
+- Route dynamic domain/table access through `finance.matching.storage` so identifier validation is applied.
+
 ## Transactions Not Appearing In Assets -> Cash & Liquid
 
 ### Symptoms
@@ -349,6 +395,8 @@ PY
 - The target field is locked from a manual edit.
 - No learned mapping exists for the PWM row.
 - A learned mapping points to a `target_stable_key` that does not exist for the selected tax year.
+- A mapping exists but uses a stale or low-confidence fingerprint.
+- The reconcile snapshot date does not contain the PWM source row you expected.
 
 ### How To Diagnose
 
@@ -362,7 +410,61 @@ ORDER BY kode_harta, id;
 "
 
 sqlite3 data/finance.db "
-SELECT id, match_kind, match_value, target_stable_key, hits, last_used_tax_year
+SELECT id, match_kind, match_value, fingerprint_raw, target_stable_key,
+       confidence_level, confidence_score, source, hits, last_used_tax_year
+FROM coretax_mappings
+ORDER BY id;
+"
+
+sqlite3 data/finance.db "
+SELECT target_stable_key, source_kind, match_kind, match_value,
+       component_amount_idr, component_market_value_idr, is_current, reconcile_run_id
+FROM coretax_row_components
+WHERE tax_year = 2026
+ORDER BY target_stable_key, reconcile_run_id DESC;
+"
+```
+
+### Fix
+
+- Unlock the field in the CoreTax SPT view if the auto-reconcile value should replace it.
+- Use the Mapping tab to map the PWM item, create a row, accept a suggestion, or inspect stale/lifecycle mappings.
+- Delete and recreate stale mappings that point to a row from the wrong tax year.
+- Confirm or retarget weak mappings if the source fingerprint still represents the correct PWM item.
+- If the source appears only in a different snapshot date, rerun reconcile with the matching month range/snapshot.
+
+### Prevention
+
+- Treat locks as intentional. Do not bypass them in API changes.
+- Learned mappings should store and use `target_stable_key`.
+- Prefer explicit mapping decisions over enabling `CORETAX_LEGACY_HEURISTICS`.
+- Review `ORPHANED`, `STALE`, `UNUSED`, and `WEAK` lifecycle buckets before annual export.
+
+## CoreTax Mapping Suggestion Or Assignment Conflict
+
+### Symptoms
+
+- The Mapping tab shows preview conflicts.
+- `POST /api/coretax/{year}/mappings/assign` returns HTTP 409.
+- Bulk accept of mapping suggestions is blocked.
+
+### Likely Cause
+
+- The same source fingerprint appears twice in the accepted suggestion set.
+- A source fingerprint already maps to a different `target_stable_key`.
+- The target row no longer exists for the selected tax year.
+- A liability source is being mapped to an asset row, or an asset/cash source to a liability row.
+
+### How To Diagnose
+
+```bash
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"suggestions":[]}' \
+  "http://127.0.0.1:8090/api/coretax/2026/mappings/suggest/preview" | python3 -m json.tool
+
+sqlite3 data/finance.db "
+SELECT id, match_kind, match_value, fingerprint_raw, target_stable_key, source
 FROM coretax_mappings
 ORDER BY id;
 "
@@ -370,14 +472,10 @@ ORDER BY id;
 
 ### Fix
 
-- Unlock the field in the CoreTax SPT view if the auto-reconcile value should replace it.
-- Use Review & Manual Mapping or Create from Unmatched to create a learned mapping.
-- Delete and recreate stale mappings that point to a row from the wrong tax year.
-
-### Prevention
-
-- Treat locks as intentional. Do not bypass them in API changes.
-- Learned mappings should store and use `target_stable_key`.
+- Remove duplicate source fingerprints from the accepted suggestion set.
+- Retarget or delete the existing conflicting mapping before creating a new one.
+- Recreate the missing CoreTax target row for the selected tax year, then assign again.
+- Map liabilities only to liability rows and account/holding sources only to asset rows.
 
 ## Household Expense Settings Unavailable
 

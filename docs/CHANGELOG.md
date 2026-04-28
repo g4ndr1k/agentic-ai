@@ -2,6 +2,31 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-04-28 — Generic Matching Engine Foundation
+
+- Added `finance/matching/` as shared infrastructure for auditable mappings, confidence metadata, rejected suggestions, invariant logs, category shadow diffs, and per-domain storage tables.
+- Added domain adapters for parser routing, bank-import parser-variant deduplication, expense categorization shadow/cutover support, and CoreTax compatibility.
+- Added matching-console API surfaces under `/api/matching/*` for mapping stats, per-domain mappings, shadow diffs, and invariant logs.
+- Parser routing, dedup, and categorization engine adoption remain flag-gated so legacy behavior can be retained during shadow and rollout windows.
+- Hardened generic matching storage by validating dynamic SQL identifiers for domain/table/field names before interpolation.
+- Fixed matching mapping confirmation to return `404` for missing mappings instead of raising an internal error.
+- Fixed `update_mapping_fields()` so callers can distinguish missing rows from successful updates.
+- Added matching storage safety regression tests. Full suite: `139 passed`.
+
+## 2026-04-27 — CoreTax Mapping-First Reconciliation
+
+- Reordered the CoreTax SPT workflow to Import -> Review -> Mapping -> Reconcile -> Export.
+- Added stable PWM fingerprint derivation in `finance/coretax/fingerprint.py`, including hashed `account_number_norm`, normalized `isin`, `holding_signature`, and `liability_signature` keys.
+- Added mapping confidence and lifecycle metadata: `confidence_score`, derived `confidence_level`, `source`, `fingerprint_raw`, `last_used_at`, `years_used`, and `times_confirmed`.
+- Added `coretax_row_components` for many-to-one CoreTax row breakdowns. Re-runs mark older components `is_current=0` while preserving run history.
+- Added `coretax_rejected_suggestions` so explicitly rejected suggestions stop being proposed.
+- Reconcile now runs as a two-tier engine: explicit mappings first, then safe 1:1 heuristics for unique ISIN/account matches. Deprecated legacy heuristics default to off behind `CORETAX_LEGACY_HEURISTICS=true`.
+- Tier 2 safe matches auto-persist guarded `auto_safe` mappings and use the new mapping in the same run for `last_mapping_id`, `hits`, and confidence tracking.
+- Added backward-compatible migration for old mapping keys on first hit.
+- Added mapping endpoints for live unmapped PWM rows, grouped mappings, stale/lifecycle buckets, rename candidates, assignment with structured 409 conflicts, confirmation, suggestions, preview, rejection, components, component history, and run diffs.
+- Suggestion preview is snapshot-aware and reports conflicts only for duplicate source fingerprints, existing mapping target conflicts, missing target rows, or incompatible asset/liability kinds.
+- Expanded CoreTax tests to cover mapping migration, component history, confidence snapshot alignment, rejected suggestions, preview conflicts, and Tier 2 auto-safe first-run usage.
+
 ## 2026-04-26 — CoreTax Persistent Ledger
 
 - Replaced the one-shot `finance/coretax_export.py` generator with the persistent `finance/coretax/` package.
@@ -12,7 +37,7 @@ Human-readable project history. Reverse chronological order.
 - Cash reconcile writes only `current_amount_idr`; it never writes `market_value_idr`.
 - Added strict E/F year-header validation for uploaded prior-year templates. A workbook with `E=2025` and `F=2026` is only valid for `target_tax_year=2026`.
 - Replaced old `/api/coretax/templates`, `/api/coretax/generate`, and `/api/coretax/audit/{filename}` with the persistent-ledger API under `/api/coretax/*`.
-- Rewrote the PWA `/coretax` view into a 5-stage wizard: Import Previous SPT, Carry Forward Review, Reconcile from PWM, Review & Manual Mapping, and Export CoreTax XLSX.
+- Rewrote the PWA `/coretax` view into a 5-stage persistent-ledger wizard. This initial order was later superseded by the mapping-first flow recorded in the 2026-04-27 entry.
 - Replaced stale `tests/test_coretax_export.py` coverage with `tests/test_coretax.py`, covering import, carry-forward, lock guards, learned mappings, export formula rules, template capacity, and CHECK constraints.
 
 ## 2026-04-25 — CoreTax SPT Generator

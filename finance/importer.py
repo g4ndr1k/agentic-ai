@@ -50,6 +50,8 @@ from finance.categorizer import Categorizer, match_internal_transfers
 
 log = logging.getLogger(__name__)
 
+DEDUP_USE_ENGINE = os.environ.get("DEDUP_USE_ENGINE", "false").lower() == "true"
+
 
 def _identity_key(date: str, amount: float, institution: str, account: str, owner: str) -> tuple[str, float, str, str, str]:
     return (date, round(float(amount), 2), institution, account or "", owner)
@@ -228,6 +230,14 @@ def direct_import(
     cat_rows   = conn.execute("SELECT category FROM categories").fetchall()
     conn.close()
 
+    # ── 3b. Engine connection for dedup (Phase C) ─────────────────────────────
+    engine_conn = None
+    if DEDUP_USE_ENGINE and not overwrite:
+        from finance.db import open_db as _open_engine_db
+        from finance.matching.engine import reset_run_state
+        engine_conn = _open_engine_db(db_path)
+        reset_run_state()
+
     aliases    = [dict(r) for r in alias_rows]
     categories = [r[0] for r in cat_rows]
     categorizer.reload_aliases(aliases)
@@ -294,7 +304,26 @@ def direct_import(
         identity_matches = existing_by_identity.get(identity_key, [])
         if not overwrite and txn.hash not in existing_hashes and len(identity_matches) == 1:
             existing = identity_matches[0]
-            if _should_reconcile_parser_variant(existing.get("raw_description", ""), txn.raw_description):
+            if engine_conn is not None:
+                from finance.matching.engine import classify as _engine_classify
+                from finance.matching.domains.dedup import domain as _dedup_domain
+                _txn_row = {
+                    "date": txn.date, "amount": txn.amount,
+                    "institution": txn.institution, "account": txn.account or "",
+                    "owner": txn.owner, "raw_description": txn.raw_description,
+                }
+                _match = _engine_classify(
+                    _dedup_domain, engine_conn, _txn_row, run_id=label,
+                    prebuilt_indexes={"existing_by_identity": existing_by_identity},
+                )
+                should_reconcile = (
+                    _match is not None and _match.target == f"merge:{existing['hash']}"
+                )
+            else:
+                should_reconcile = _should_reconcile_parser_variant(
+                    existing.get("raw_description", ""), txn.raw_description
+                )
+            if should_reconcile:
                 reconciled_txns.append((existing["hash"], txn))
                 existing["raw_description"] = txn.raw_description
                 existing["merchant"] = txn.merchant
@@ -304,6 +333,10 @@ def direct_import(
                 reconciled += 1
                 continue
         new_txns.append(txn)
+
+    if engine_conn is not None:
+        engine_conn.close()
+        engine_conn = None
 
     total_valid = len(data_rows) - parse_errors
 

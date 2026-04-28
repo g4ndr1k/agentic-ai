@@ -20,6 +20,7 @@ read-only with respect to the database.
 from __future__ import annotations
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.request
@@ -30,6 +31,9 @@ from typing import Optional
 from finance.config import load_config
 
 log = logging.getLogger(__name__)
+
+# "false" | "shadow" | "true"
+CATEGORIZATION_USE_ENGINE = os.environ.get("CATEGORIZATION_USE_ENGINE", "false").lower()
 
 # Fallback category list used when the SQLite categories table is empty
 DEFAULT_CATEGORIES = [
@@ -224,22 +228,40 @@ class Categorizer:
         raw_description: str,
         owner: str = "",
         account: str = "",
+        conn=None,
     ) -> CategorizationResult:
+        """Run the 4-layer pipeline and return a CategorizationResult.
+
+        When conn is supplied and CATEGORIZATION_USE_ENGINE is active:
+          - "true": Tier-1 mapping hit → return cached result without running legacy.
+          - "shadow": legacy runs normally; any Tier-1 disagreement is logged to
+            category_shadow_diff (no effect on output).
+
+        Layers 1 and 2 → confidence="auto" (write directly, no user input needed).
+        Layers 3 and 4 → confidence="suggested"/"none" (surface in review queue).
         """
-        Run the 4-layer pipeline and return a CategorizationResult.
+        # ── Engine true mode: Tier-1 shortcut ────────────────────────────────
+        if CATEGORIZATION_USE_ENGINE == "true" and conn is not None:
+            cached = self._engine_tier1(conn, raw_description, owner, account)
+            if cached is not None:
+                return cached
 
-        Args:
-            raw_description: Verbatim transaction description from the statement.
-            owner:   Transaction owner (e.g. "Gandrik", "Helen") — used for
-                     account-aware alias filtering.
-            account: Account/card number — used for account-aware alias filtering.
+        # ── Legacy 4-layer pipeline ───────────────────────────────────────────
+        result = self._categorize_legacy(raw_description, owner=owner, account=account)
 
-        Layers 1 and 2 return confidence="auto" — the caller should write these
-        directly to the Transactions tab without user interaction.
+        # ── Shadow + engine true: persist / diff after legacy ─────────────────
+        if CATEGORIZATION_USE_ENGINE in ("shadow", "true") and conn is not None:
+            self._engine_post_legacy(conn, raw_description, owner, account, result)
 
-        Layers 3 and 4 return confidence="suggested"/"none" — the caller should
-        surface these in the PWA review queue for user confirmation.
-        """
+        return result
+
+    def _categorize_legacy(
+        self,
+        raw_description: str,
+        owner: str = "",
+        account: str = "",
+    ) -> CategorizationResult:
+        """4-layer pipeline without any engine hooks (safe to call from domain rules)."""
         desc = raw_description.strip()
         desc_tokens = alias_text_tokens(desc)
 
@@ -263,19 +285,90 @@ class Categorizer:
                 log.debug("L2 regex: %r → %s / %s", desc, merchant, category)
                 return CategorizationResult(merchant, category, layer=2, confidence="auto")
 
-        # ── Layer 3: AI suggestion (Ollama primary) ──────────
+        # ── Layer 3: AI suggestion (Ollama primary) ───────────────────────────
         suggestion = self._ollama_suggest(desc)
         if suggestion:
             merchant, category = suggestion
             log.debug("L3 ollama: %r → %s / %s", desc, merchant, category)
-            return CategorizationResult(
-                merchant, category, layer=3, confidence="suggested"
-            )
-        # No Ollama suggestion — fall through to review queue (Layer 4)
+            return CategorizationResult(merchant, category, layer=3, confidence="suggested")
 
         # ── Layer 4: review queue ─────────────────────────────────────────────
         log.debug("L4 review: %r → no suggestion", desc)
         return CategorizationResult(None, None, layer=4, confidence="none")
+
+    # ── Engine helpers ────────────────────────────────────────────────────────
+
+    def _engine_tier1(self, conn, raw_description: str, owner: str, account: str
+                      ) -> CategorizationResult | None:
+        """Return a cached CategorizationResult from a Tier-1 mapping, or None."""
+        try:
+            from finance.matching.engine import classify, reset_run_state
+            from finance.matching.domains.categorization import domain as cat_domain, target_to_parts
+            source_row = {"raw_description": raw_description, "owner": owner, "account": account}
+            match = classify(cat_domain, conn, source_row,
+                             run_id="cat_tier1", categorizer=self)
+            if match is not None and match.tier == 1:
+                merchant, category = target_to_parts(match.target)
+                return CategorizationResult(
+                    merchant or None, category or None, layer=1, confidence="auto"
+                )
+        except Exception as exc:
+            log.debug("Engine Tier-1 lookup failed: %s", exc)
+        return None
+
+    def _engine_post_legacy(self, conn, raw_description: str, owner: str, account: str,
+                            legacy_result: CategorizationResult) -> None:
+        """After legacy run: auto-persist layer 1/2 results; log shadow diffs."""
+        try:
+            from finance.matching.engine import classify, reset_run_state
+            from finance.matching.domains.categorization import domain as cat_domain, target_to_parts
+            from finance.matching.storage import get_mapping
+            source_row = {"raw_description": raw_description, "owner": owner, "account": account}
+
+            # Use classify() which handles both Tier-1 lookup and Tier-2 auto-persist
+            match = classify(cat_domain, conn, source_row,
+                             run_id="cat_post", categorizer=self)
+
+            # Shadow diff: compare Tier-1 mapping (if any) vs legacy result
+            if CATEGORIZATION_USE_ENGINE == "shadow" and match is not None and match.tier == 1:
+                engine_merchant, engine_category = target_to_parts(match.target)
+                leg_m = legacy_result.merchant or ""
+                leg_c = legacy_result.category or ""
+                if engine_merchant != leg_m or engine_category != leg_c:
+                    if engine_merchant != leg_m and engine_category != leg_c:
+                        diff_class = "both_diff"
+                    elif engine_merchant != leg_m:
+                        diff_class = "merchant_diff"
+                    else:
+                        diff_class = "category_diff"
+                    self._write_shadow_diff(
+                        conn, raw_description,
+                        leg_m, leg_c,
+                        engine_merchant, engine_category,
+                        diff_class,
+                    )
+        except Exception as exc:
+            log.debug("Engine post-legacy hook failed: %s", exc)
+
+    @staticmethod
+    def _write_shadow_diff(conn, raw_description: str,
+                           legacy_merchant: str, legacy_category: str,
+                           engine_merchant: str, engine_category: str,
+                           diff_class: str, run_id: str = "shadow") -> None:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            conn.execute(
+                """INSERT INTO category_shadow_diff
+                   (raw_description, legacy_merchant, legacy_category,
+                    engine_merchant, engine_category, diff_class, run_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (raw_description, legacy_merchant, legacy_category,
+                 engine_merchant, engine_category, diff_class, run_id, now),
+            )
+            conn.commit()
+        except Exception as exc:
+            log.debug("Shadow diff write failed: %s", exc)
 
     # ── Shared prompt builder ─────────────────────────────────────────────────
 

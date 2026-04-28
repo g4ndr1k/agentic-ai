@@ -12,6 +12,7 @@ const Wealth = () => import('../views/Wealth.vue')
 const Holdings = () => import('../views/Holdings.vue')
 const Audit = () => import('../views/Audit.vue')
 const CoreTaxSpt = () => import('../views/CoreTaxSpt.vue')
+const MatchingConsole = () => import('../views/MatchingConsole.vue')
 const Adjustment = () => import('../views/Adjustment.vue')
 const Goal = () => import('../views/Goal.vue')
 
@@ -29,6 +30,7 @@ export default createRouter({
     { path: '/adjustment', name: 'adjustment', component: Adjustment, meta: { title: 'Adjustment', keepAlive: true } },
     { path: '/audit', name: 'audit', component: Audit, meta: { title: 'Audit', keepAlive: true } },
     { path: '/coretax', name: 'coretax', component: CoreTaxSpt, meta: { title: 'CoreTax', keepAlive: true } },
+    { path: '/matching', name: 'matching', component: MatchingConsole, meta: { title: 'Matching', keepAlive: true } },
     { path: '/settings', name: 'settings', component: Settings, meta: { title: 'More' } },
     { path: '/group-drilldown', name: 'group-drilldown', component: GroupDrilldown, meta: { title: 'Group Detail' } },
     { path: '/category-drilldown', name: 'category-drilldown', component: CategoryDrilldown, meta: { title: 'Category Detail' } },

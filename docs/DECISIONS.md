@@ -2,6 +2,27 @@
 
 Lightweight ADR-style notes. Keep entries short and link to operational details instead of repeating them.
 
+## Use A Shared Matching Engine With Flag-Gated Domains
+
+### Decision
+
+Keep the generic matching engine under `finance/matching/` and adopt it per domain behind feature flags.
+
+### Context
+
+CoreTax, parser routing, bank-import deduplication, and transaction categorization all need similar concepts: stable source fingerprints, persistent mappings, confidence/lifecycle metadata, rejected suggestions, and an audit trail. They historically implemented those ideas separately.
+
+### Rationale
+
+A shared engine prevents drift between matching systems while allowing risky user-visible domains to remain on legacy behavior until shadow tests and rollout gates are green. Domain-specific code should live in `finance/matching/domains/`; generic mapping/component/rejection storage belongs in `finance/matching/storage.py`.
+
+### Consequences
+
+- Parser routing, dedup, and categorization keep legacy paths available while their engine paths are flag-gated.
+- Dynamic engine table access must validate domain and field identifiers before interpolating SQL.
+- Matching-console APIs operate on a fixed domain allow-list.
+- Larger plan items such as replay mode, persisted traces, drift automation, and long-horizon learning budgets should be implemented as engine features, not one-off domain code.
+
 ## Use Preflight Validation Before PDF Processing
 
 ### Decision
@@ -124,6 +145,30 @@ Re-running a generator from current PWM data can erase reviewed tax values. A le
 - Learned mappings resolve to `target_stable_key`, not only a code or description.
 - Prior-year imports must reject mismatched E/F tax-year headers.
 - XLSX export is a projection of the ledger, not the source of truth.
+
+## Use Mapping-First CoreTax Reconciliation
+
+### Decision
+
+CoreTax reconciliation runs after an explicit Mapping step. Mapping is the human decision layer; Reconcile is a deterministic execution layer.
+
+### Context
+
+CoreTax SPT rows often aggregate multiple PWM items into one tax row. Earlier reconcile behavior mixed learned mappings with fallback heuristics, including weak single-row or substring matches. That made first-time setup convenient but allowed silent target changes when PWM data or CoreTax rows changed.
+
+### Rationale
+
+Persistent mappings make annual reconciliation auditable and repeatable. Safe 1:1 heuristics are still allowed for first-run usability, but only exact unique ISIN and account-number matches can auto-persist as `auto_safe` mappings. Ambiguous cases belong in the Mapping tab as suggestions, not automatic reconcile decisions.
+
+### Consequences
+
+- PWA workflow is Import -> Review -> Mapping -> Reconcile -> Export.
+- Reconcile applies explicit mappings first and safe 1:1 heuristics second.
+- Deprecated legacy heuristics are off by default behind `CORETAX_LEGACY_HEURISTICS=true`.
+- Source keys are derived through `finance/coretax/fingerprint.py`; ad hoc hashes should not appear elsewhere.
+- Many-to-one is first-class through `coretax_row_components`.
+- Suggestion preview must report real conflicts without treating same-target many-to-one suggestions as conflicts.
+- Mapping lifecycle buckets (`STALE`, `WEAK`, `UNUSED`, `ORPHANED`) are part of the review workflow.
 
 ## Keep Operational Detail Out Of The Architecture Blueprint
 

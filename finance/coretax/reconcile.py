@@ -44,12 +44,104 @@ from finance.coretax.db import (
 )
 from finance.coretax.fingerprint import derive as fp_derive, confidence_hint, is_volatile
 from finance.coretax.pwm_universe import snapshot as pwm_snapshot
+from finance.coretax.taxonomy import ASSET_CLASS_TO_KODE
+from finance.coretax.utils import extract_account_number, extract_isin, normalize_account_number
 from finance.db import open_db
+
+
+# ── Backward compatibility: old-style mapping key lookup ────────────────────
+
+# Old key formats used before fingerprint migration:
+#   account_number  → just the normalized account (no institution hash)
+#   keterangan_norm → "inst|last4"
+#   isin            → normalized ISIN (same as new fingerprint)
+#   asset_signature → "class|inst|name|owner" (pipe-separated, NOT hashed)
+#   liability_signature → "type|name|owner" (pipe-separated, NOT hashed)
+
+LEGACY_KINDS = frozenset({"account_number", "keterangan_norm", "isin",
+                           "asset_signature", "liability_signature"})
+
+
+def _build_legacy_candidates(pwm: dict) -> list[tuple[str, str]]:
+    """Build old-style match candidates for backward compatibility."""
+    kind = pwm.get("source_kind", "")
+    cands = []
+    if kind == "account_balance":
+        acct = _norm(pwm.get("account", ""))
+        if acct:
+            cands.append(("account_number", acct))
+        inst = _norm(pwm.get("institution", ""))
+        if inst and acct:
+            last4 = acct[-4:] if len(acct) >= 4 else acct
+            cands.append(("keterangan_norm", f"{inst}|{last4}"))
+    elif kind == "holding":
+        isin = _norm(pwm.get("isin_or_code", ""))
+        if isin:
+            cands.append(("isin", isin))
+        asset_class = _norm(pwm.get("asset_class", ""))
+        inst = _norm(pwm.get("institution", ""))
+        asset_name = _norm(pwm.get("asset_name", ""))
+        owner = _norm(pwm.get("owner", ""))
+        cands.append(("asset_signature", f"{asset_class}|{inst}|{asset_name}|{owner}"))
+    elif kind == "liability":
+        liab_type = _norm(pwm.get("liability_type", ""))
+        liab_name = _norm(pwm.get("liability_name", ""))
+        owner = _norm(pwm.get("owner", ""))
+        cands.append(("liability_signature", f"{liab_type}|{liab_name}|{owner}"))
+    return cands
+
+
+def _try_legacy_lookup(pwm: dict, mapping_lookup: dict,
+                       row_by_key: dict) -> tuple[dict | None, dict | None, str]:
+    """Try old-style mapping keys for backward compatibility.
+
+    Returns (matched_row, matched_mapping, match_kind_used).
+    """
+    candidates = _build_legacy_candidates(pwm)
+    for mk, mv in candidates:
+        mapping = mapping_lookup.get((mk, mv))
+        if not mapping:
+            continue
+        target_key = mapping.get("target_stable_key")
+        if not target_key:
+            continue
+        row = row_by_key.get(target_key)
+        if row is not None:
+            return row, mapping, mk
+    return None, None, ""
+
+
+def _auto_migrate_mapping(conn, mapping: dict, fp, tax_year: int) -> int:
+    """Migrate an old-style mapping to the new fingerprint format.
+
+    Deletes the old mapping row and creates a new one with the fingerprint key.
+    Returns the new mapping ID.
+    """
+    from finance.coretax.db import assign_mapping, delete_mapping
+    # Delete the old mapping with the legacy key
+    old_id = mapping.get("id")
+    if old_id:
+        delete_mapping(conn, old_id)
+    # Create new mapping with the fingerprint key
+    new_id = assign_mapping(
+        conn, fp.match_kind, fp.match_value,
+        mapping.get("target_kode_harta", ""),
+        mapping.get("target_kind", "asset"),
+        mapping.get("target_stable_key", ""),
+        source="auto_safe",
+        confidence_score=float(mapping.get("confidence_score", 0.9)),
+        fingerprint_raw=fp.fingerprint_raw,
+        created_from_tax_year=mapping.get("created_from_tax_year") or tax_year,
+    )
+    return new_id
 
 
 # ── Feature flag ────────────────────────────────────────────────────────────
 
-LEGACY_HEURISTICS = os.environ.get("CORETAX_LEGACY_HEURISTICS", "true").lower() == "true"
+# Default: legacy heuristics OFF.  Set CORETAX_LEGACY_HEURISTICS=true to
+# re-enable the old keterangan-substring / single-row-in-kode fallbacks
+# during migration debugging only.
+LEGACY_HEURISTICS = os.environ.get("CORETAX_LEGACY_HEURISTICS", "false").lower() == "true"
 
 
 # ── Trace dataclass ─────────────────────────────────────────────────────────
@@ -126,12 +218,14 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
         kode = r.get("kode_harta") or ""
         kode_index.setdefault(kode, []).append(r)
         # Extract ISIN from keterangan
-        isin = _extract_isin(r)
-        if isin:
-            isin_index.setdefault(isin, []).append(r)
+        for field in ("keterangan", "notes_internal"):
+            isin = extract_isin(r.get(field))
+            if isin:
+                isin_index.setdefault(isin, []).append(r)
+                break
         # Extract account number from keterangan (kode 012 only)
         if kode == "012":
-            acct = _extract_account(r)
+            acct = extract_account_number(r.get("keterangan"))
             if acct:
                 account_index.setdefault(acct, []).append(r)
 
@@ -152,6 +246,7 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
     tier2_count = 0
     legacy_count = 0
     low_confidence_count = 0
+    used_mapping_ids: set[int] = set()  # Track mappings used in THIS run
 
     for pwm in pwm_items:
         fp = fp_derive(pwm)
@@ -176,9 +271,27 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
                     else:
                         tier = "tier1_mapping"
                         tier1_count += 1
+                        used_mapping_ids.add(mapping["id"])
 
-        # ── Tier 2: Safe heuristics ─────────────────────────────────────
-        if matched_row is None and not LEGACY_HEURISTICS:
+        # ── Tier 2: Safe heuristics (always runs after Tier 1) ──────────
+        if matched_row is None:
+            # Backward compat: try old-style mapping keys
+            matched_row, mapping, legacy_kind = _try_legacy_lookup(
+                pwm, mapping_lookup, row_by_key)
+            if matched_row:
+                tier = "tier1_mapping"  # still a mapping-based match
+                tier1_count += 1
+                # Auto-migrate to new fingerprint format
+                new_id = _auto_migrate_mapping(conn, mapping, fp, tax_year)
+                # Refresh lookup and get the new mapping
+                mappings = get_mappings(conn)
+                mapping_lookup = {(m["match_kind"], m["match_value"]): m for m in mappings}
+                # Replace mapping with the new fingerprint mapping
+                mapping = mapping_lookup.get((fp.match_kind, fp.match_value))
+                if mapping:
+                    used_mapping_ids.add(mapping["id"])
+
+        if matched_row is None:
             matched_row, rule = _tier2_match(
                 pwm, fp, source_kind, isin_index, account_index, kode_index, row_by_key)
             if matched_row:
@@ -190,7 +303,7 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
                                            target_to_fingerprints)
                 if _tier2_should_auto_persist(rule, "HIGH", existing, conflict):
                     from finance.coretax.db import assign_mapping
-                    assign_mapping(
+                    new_id = assign_mapping(
                         conn, fp.match_kind, fp.match_value,
                         matched_row.get("kode_harta", ""),
                         matched_row.get("kind", "asset"),
@@ -204,6 +317,9 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
                     # Refresh mapping lookup
                     mappings = get_mappings(conn)
                     mapping_lookup = {(m["match_kind"], m["match_value"]): m for m in mappings}
+                    mapping = mapping_lookup.get((fp.match_kind, fp.match_value))
+                    if mapping:
+                        used_mapping_ids.add(mapping["id"])
 
         # ── Legacy heuristics (deprecated) ──────────────────────────────
         if matched_row is None and LEGACY_HEURISTICS:
@@ -287,7 +403,7 @@ def run_reconcile(conn, tax_year: int, fs_start_month: str,
                                            affected_keys, components)
 
     # ── Confidence dynamics: update mapping scores ───────────────────────
-    _update_mapping_confidence_dynamics(conn, mappings, traces, tax_year)
+    _update_mapping_confidence_dynamics(conn, mappings, used_mapping_ids, tax_year, snapshot_date)
 
     conn.commit()
 
@@ -316,7 +432,7 @@ def _tier2_match(pwm: dict, fp, source_kind: str,
                 return matches[0], "isin_exact_unique"
 
     if source_kind == "account_balance":
-        acct = (pwm.get("account") or "").strip()
+        acct = normalize_account_number(pwm.get("account"))
         if acct:
             matches = account_index.get(acct, [])
             if len(matches) == 1:
@@ -340,7 +456,7 @@ def _legacy_match(pwm: dict, source_kind: str, kode_index: dict,
 
     if source_kind == "holding":
         asset_class = pwm.get("asset_class", "")
-        kode = {"bond": "034", "mutual_fund": "036", "stock": "039"}.get(asset_class)
+        kode = ASSET_CLASS_TO_KODE.get(asset_class)
         if not kode:
             return None
         rows = kode_index.get(kode, [])
@@ -456,39 +572,37 @@ def _get_confidence_level(mapping: dict | None, tier: str) -> str:
 
 
 def _update_mapping_confidence_dynamics(conn, mappings: list[dict],
-                                         traces: list, tax_year: int) -> None:
-    """Update confidence scores for all mappings based on this reconcile run."""
-    # Determine which mappings were used
-    used_mapping_ids = set()
-    for t in traces:
-        if isinstance(t, CoretaxRowTrace):
-            if t.status in ("filled", "locked_skipped") and t.tier == "tier1_mapping":
-                # Find the mapping that produced this match
-                pass  # We track via increment_mapping_hit already
+                                         used_mapping_ids: set[int],
+                                         tax_year: int,
+                                         snapshot_date: str | None = None) -> None:
+    """Update confidence scores for all mappings based on this reconcile run.
 
-    # For now, mark all mappings that weren't used as RunUnused
-    # (more precise tracking would require knowing which mappings were evaluated)
-    # This is a conservative approach — only penalize if fingerprint is still present
+    Only mappings in used_mapping_ids get RunUsed.  All others get RunUnused
+    (with the guardrail that decay only applies if the fingerprint is still
+    present in the current PWM universe).
+
+    Uses the reconcile's snapshot_date (not latest) to determine which
+    fingerprints are present, so decay is consistent with the run's data.
+    """
     from finance.coretax.pwm_universe import snapshot
-    pwm_items = snapshot(conn, tax_year)
+    pwm_items = snapshot(conn, tax_year, snapshot_date=snapshot_date)
     pwm_fingerprints = set()
     for item in pwm_items:
         fp = fp_derive(item)
         pwm_fingerprints.add((fp.match_kind, fp.match_value))
 
     for m in mappings:
+        mid = m.get("id")
         mk = m.get("match_kind", "")
         mv = m.get("match_value", "")
-        if m.get("hits", 0) > 0:
-            # Was used — apply RunUsed
+        if mid in used_mapping_ids:
             updates = apply_confidence(RunUsed(tax_year), m)
-            update_mapping_confidence(conn, m["id"], **updates)
+            update_mapping_confidence(conn, mid, **updates)
         else:
-            # Was not used — apply RunUnused only if fingerprint still present
             still_present = (mk, mv) in pwm_fingerprints
             updates = apply_confidence(
                 RunUnused(tax_year, fingerprint_still_present=still_present), m)
-            update_mapping_confidence(conn, m["id"], **updates)
+            update_mapping_confidence(conn, mid, **updates)
 
 
 # ── Conflict detection ───────────────────────────────────────────────────────
@@ -549,27 +663,6 @@ def _make_proposed_key(pwm: dict) -> str:
     if kind == "liability":
         return f"pwm:liability:{_norm(pwm.get('liability_type', ''))}:{_norm(pwm.get('liability_name', ''))}:{_norm(pwm.get('owner', ''))}"
     return ""
-
-
-# ── Row extraction helpers ───────────────────────────────────────────────────
-
-def _extract_isin(row: dict) -> str | None:
-    import re
-    for field in ("keterangan", "notes_internal"):
-        text = row.get(field) or ""
-        m = re.search(r"\b([A-Z]{2}[A-Z0-9]{10})\b", text)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _extract_account(row: dict) -> str | None:
-    import re
-    ket = row.get("keterangan") or ""
-    m = re.search(r"rek\s+(\S+)", ket.lower())
-    if m:
-        return m.group(1)
-    return None
 
 
 # ── Trace builder ────────────────────────────────────────────────────────────

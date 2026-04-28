@@ -528,6 +528,33 @@ def open_db(db_path: str) -> sqlite3.Connection:
         ensure_coretax_tables(conn)
         _set_schema_version(conn, 5)
         conn.commit()
+    # ── Generic matching engine tables (schema version 6) ─────────────────
+    # Creates matching_* global tables + matching_coretax_* domain tables
+    # + category_shadow_diff (Phase 0 shadow recording surface).
+    if ver < 6:
+        from finance.matching.storage import ensure_domain_tables, ensure_global_tables
+        ensure_global_tables(conn)
+        ensure_domain_tables(conn, "coretax")
+        _set_schema_version(conn, 6)
+        conn.commit()
+    # ── Parser routing domain tables (schema version 7, Phase B) ──────────
+    if ver < 7:
+        from finance.matching.storage import ensure_domain_tables
+        ensure_domain_tables(conn, "parser")
+        _set_schema_version(conn, 7)
+        conn.commit()
+    # ── Bank import dedup domain tables (schema version 8, Phase C) ────────
+    if ver < 8:
+        from finance.matching.storage import ensure_domain_tables
+        ensure_domain_tables(conn, "dedup")
+        _set_schema_version(conn, 8)
+        conn.commit()
+    # ── Expense categorization domain tables (schema version 9, Phase D) ───
+    if ver < 9:
+        from finance.matching.storage import ensure_domain_tables
+        ensure_domain_tables(conn, "categorization")
+        _set_schema_version(conn, 9)
+        conn.commit()
     # Prune sync_log entries older than 90 days
     conn.execute(
         "DELETE FROM sync_log WHERE synced_at < datetime('now', '-90 days')"

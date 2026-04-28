@@ -23,9 +23,12 @@ class Suggestion:
     confidence_score: float   # 0.0 - 1.0
     rule: str                 # e.g. "isin_exact_unique"
     reason: str               # human-readable, shown in tooltip
-    match_kind: str           # fingerprint kind
-    match_value: str          # fingerprint value
-    pwm_label: str            # display label for the PWM item
+    match_kind: str = ""      # fingerprint kind
+    match_value: str = ""     # fingerprint value
+    pwm_label: str = ""       # display label for the PWM item
+    target_kode_harta: str = ""  # target row's kode_harta
+    source_kind: str = ""     # account_balance | holding | liability
+    fingerprint_raw: str = "" # pre-hash canonical form
 
 
 def suggest_mappings_for_unmapped(conn, tax_year: int,
@@ -46,31 +49,34 @@ def suggest_mappings_for_unmapped(conn, tax_year: int,
         rejected = set()
 
     # Load coretax rows for this year
+    from collections import defaultdict
     from finance.coretax.db import get_rows_for_year
+    from finance.coretax.utils import extract_account_number, extract_isin, normalize_account_number
+    from finance.coretax.taxonomy import infer_kode_harta
     rows = get_rows_for_year(conn, tax_year)
     row_by_key = {r["stable_key"]: r for r in rows}
 
-    # Build indexes for fast lookup
-    isin_index: dict[str, list[dict]] = {}
-    account_index: dict[str, list[dict]] = {}
-    kode_index: dict[str, list[dict]] = {}
-    kode_owner_index: dict[tuple[str, str], list[dict]] = {}
+    # Build indexes for fast lookup (use defaultdict to avoid KeyError)
+    isin_index: dict[str, list[dict]] = defaultdict(list)
+    account_index: dict[str, list[dict]] = defaultdict(list)
+    kode_index: dict[str, list[dict]] = defaultdict(list)
+    kode_owner_index: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for r in rows:
         kode = r.get("kode_harta") or ""
         owner = (r.get("owner") or "").strip().lower()
-        ket = (r.get("keterangan") or "").strip().lower()
-        kode_index.setdefault(kode, []).append(r)
-        kode_owner_index.setdefault((kode, owner), []).append(r)
+        kode_index[kode].append(r)
+        kode_owner_index[(kode, owner)].append(r)
 
         # Extract ISIN from keterangan if present
-        # (CoreTax rows store ISIN in keterangan or notes)
-        isin = _extract_isin_from_row(r)
-        if isin:
-            isin_index[isin].append(r)
+        for field in ("keterangan", "notes_internal"):
+            isin = extract_isin(r.get(field))
+            if isin:
+                isin_index[isin.lower()].append(r)
+                break
 
         # Extract account number from keterangan
-        acct = _extract_account_from_row(r)
+        acct = extract_account_number(r.get("keterangan"))
         if acct:
             account_index[acct].append(r)
 
@@ -106,6 +112,12 @@ def suggest_mappings_for_unmapped(conn, tax_year: int,
             s.match_kind = mk
             s.match_value = mv
             s.pwm_label = label
+            # Enrich with fields the UI needs
+            target_row = row_by_key.get(s.target_stable_key)
+            if target_row:
+                s.target_kode_harta = target_row.get("kode_harta", "")
+            s.source_kind = source_kind
+            s.fingerprint_raw = raw
 
         all_suggestions.extend(suggestions)
 
@@ -137,7 +149,9 @@ def _suggest_account(raw: str, account_index: dict, row_by_key: dict) -> list[Su
     parts = raw.split(":")
     if len(parts) < 2:
         return []
-    account = parts[1]
+    account = normalize_account_number(parts[1])
+    if not account:
+        return []
     matches = account_index.get(account, [])
     if len(matches) == 1:
         row = matches[0]
@@ -159,7 +173,8 @@ def _suggest_signature(match_kind: str, match_value: str, raw: str,
     suggestions = []
 
     # Infer kode from source_kind + asset_class
-    kode = _infer_kode(source_kind, payload)
+    from finance.coretax.taxonomy import infer_kode_harta
+    kode = infer_kode_harta(source_kind, payload)
     owner = (payload.get("owner") or "").strip().lower()
 
     # Rule: keterangan_substring_unique (score 0.70)
@@ -205,41 +220,3 @@ def _suggest_signature(match_kind: str, match_value: str, raw: str,
             ))
 
     return suggestions
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _extract_isin_from_row(row: dict) -> str | None:
-    """Try to extract an ISIN from a coretax_row's keterangan or notes."""
-    import re
-    for field in ("keterangan", "notes_internal"):
-        text = row.get(field) or ""
-        # ISIN format: 2 letters + 10 alphanumeric chars
-        m = re.search(r"\b([A-Z]{2}[A-Z0-9]{10})\b", text)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _extract_account_from_row(row: dict) -> str | None:
-    """Try to extract an account number from a coretax_row's keterangan."""
-    import re
-    ket = row.get("keterangan") or ""
-    # Look for "rek <number>" pattern
-    m = re.search(r"rek\s+(\S+)", ket.lower())
-    if m:
-        return m.group(1)
-    return None
-
-
-def _infer_kode(source_kind: str, payload: dict) -> str:
-    """Infer kode_harta from source_kind and asset_class."""
-    if source_kind == "account_balance":
-        return "012"
-    if source_kind == "liability":
-        return "liability"
-    if source_kind == "holding":
-        ac = payload.get("asset_class", "")
-        return {"bond": "034", "mutual_fund": "036", "stock": "039"}.get(ac, "")
-    return ""

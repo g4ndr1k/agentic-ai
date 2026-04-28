@@ -1399,6 +1399,7 @@ class CoretaxSuggestRequest(BaseModel):
 
 class CoretaxSuggestPreviewRequest(BaseModel):
     suggestions: list[dict]  # List of accepted suggestions to preview
+    snapshot_date: str | None = None  # Optional: use specific snapshot for amounts
 
 
 class CoretaxSuggestRejectRequest(BaseModel):
@@ -3837,16 +3838,32 @@ def get_rename_candidates(year: int):
 def assign_mapping_endpoint(year: int, req: CoretaxAssignMappingRequest):
     """Create or update a mapping (single write path)."""
     require_writable()
+    from finance.coretax.db import MappingConflictError
     with _db() as conn:
-        mid = assign_mapping(
-            conn, req.match_kind, req.match_value,
-            req.target_kode_harta, req.target_kind, req.target_stable_key,
-            source=req.source,
-            confidence_score=req.confidence_score,
-            fingerprint_raw=req.fingerprint_raw,
-            target_keterangan_template=req.target_keterangan_template,
-            created_from_tax_year=req.created_from_tax_year or year,
-        )
+        try:
+            mid = assign_mapping(
+                conn, req.match_kind, req.match_value,
+                req.target_kode_harta, req.target_kind, req.target_stable_key,
+                source=req.source,
+                confidence_score=req.confidence_score,
+                fingerprint_raw=req.fingerprint_raw,
+                target_keterangan_template=req.target_keterangan_template,
+                created_from_tax_year=req.created_from_tax_year or year,
+                raise_on_conflict=True,
+            )
+        except MappingConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "type": "mapping_conflict",
+                    "match_kind": exc.match_kind,
+                    "match_value": exc.match_value,
+                    "target_stable_key": exc.target_stable_key,
+                    "existing_target": exc.existing_target,
+                    "existing_mapping_id": exc.existing_mapping_id,
+                    "message": exc.message,
+                },
+            ) from exc
         return {"id": mid}
 
 
@@ -3896,9 +3913,27 @@ def confirm_mapping(mapping_id: int):
 
 @app.get("/api/coretax/{year}/rows/{stable_key}/components", dependencies=[Depends(require_api_key)])
 def get_row_components(year: int, stable_key: str, run_id: Optional[int] = Query(None)):
-    """Get component breakdown for a target row."""
+    """Get component breakdown for a target row.
+
+    Query behavior:
+      - Without run_id: returns current components (is_current=1) for the latest run.
+      - With run_id: returns all components from that specific run (ignores current_only).
+
+    This distinction exists because:
+      - Current components show the latest state for a target row (what the UI typically needs).
+      - Run-specific components show historical state for diffing runs (used by "Compare runs" feature).
+    """
     with _db() as conn:
-        return {"items": list_row_components(conn, stable_key, year, run_id=run_id)}
+        items = list_row_components(conn, stable_key, year, run_id=run_id)
+        # Include query metadata so the UI knows what was returned
+        query_mode = "run_specific" if run_id else "current"
+        return {
+            "items": items,
+            "query_mode": query_mode,
+            "run_id": run_id,
+            "year": year,
+            "stable_key": stable_key,
+        }
 
 
 @app.get("/api/coretax/components/history", dependencies=[Depends(require_api_key)])
@@ -3970,18 +4005,184 @@ def suggest_mappings(year: int, req: CoretaxSuggestRequest):
 @app.post("/api/coretax/{year}/mappings/suggest/preview", dependencies=[Depends(require_api_key)])
 def suggest_preview(year: int, req: CoretaxSuggestPreviewRequest):
     """Preview what mappings would be created from accepted suggestions.
-    Returns the resulting mappings + diff WITHOUT persisting."""
-    preview_items = []
-    for s in req.suggestions:
-        preview_items.append({
-            "match_kind": s.get("match_kind"),
-            "match_value": s.get("match_value"),
-            "target_stable_key": s.get("target_stable_key"),
-            "confidence_score": s.get("confidence_score", 0.5),
-            "rule": s.get("rule"),
-            "pwm_label": s.get("pwm_label"),
-        })
-    return {"preview": preview_items, "count": len(preview_items)}
+
+    Returns the resulting mappings + row-level deltas WITHOUT persisting.
+    Computes: target row totals, conflicts, affected target summaries.
+
+    Conflict semantics — conflicts are:
+      1. Duplicate source fingerprint (same fingerprint appears twice in suggestions)
+      2. Existing mapping to different target (fingerprint already mapped elsewhere)
+      3. Missing target row (target_stable_key doesn't exist in coretax_rows)
+      4. Incompatible target kind (e.g. liability fingerprint → asset row)
+
+    Same-target suggestions are grouped as components, NOT conflicts (many-to-one is desired).
+    """
+    with _db() as conn:
+        # Load current coretax rows for the target year
+        rows = get_rows_for_year(conn, year)
+        row_by_key = {r["stable_key"]: r for r in rows}
+
+        # Load current mappings to detect existing mapping conflicts
+        existing_mappings = get_mappings(conn, tax_year=year)
+        existing_by_fingerprint: dict[tuple[str, str], dict] = {}
+        for m in existing_mappings:
+            existing_by_fingerprint[(m["match_kind"], m["match_value"])] = m
+
+        # Load PWM data to compute what amounts would flow
+        from finance.coretax.pwm_universe import snapshot
+        pwm_items = snapshot(conn, year, snapshot_date=req.snapshot_date)
+        pwm_by_fingerprint: dict[tuple[str, str], dict] = {}
+        for item in pwm_items:
+            from finance.coretax.fingerprint import derive as fp_derive
+            fp = fp_derive(item)
+            pwm_by_fingerprint[(fp.match_kind, fp.match_value)] = item
+
+        # Process each suggestion
+        preview_items = []
+        target_deltas: dict[str, dict] = {}  # stable_key → {added_amount, added_mv, components}
+        conflicts = []
+        seen_fingerprints: set[tuple[str, str]] = set()  # Track duplicates within suggestions
+
+        for s in req.suggestions:
+            mk = s.get("match_kind", "")
+            mv = s.get("match_value", "")
+            target_key = s.get("target_stable_key", "")
+            conf_score = s.get("confidence_score", 0.5)
+            rule = s.get("rule", "")
+            source_kind = s.get("source_kind", "")
+
+            # ── Conflict detection ──────────────────────────────────────────
+            # 1. Duplicate source fingerprint in suggestions
+            fingerprint = (mk, mv)
+            if fingerprint in seen_fingerprints:
+                conflicts.append({
+                    "type": "duplicate_fingerprint",
+                    "match_kind": mk,
+                    "match_value": mv,
+                    "target_stable_key": target_key,
+                    "message": f"Duplicate fingerprint {mk}:{mv[:16]}… in suggestions",
+                })
+                continue  # Skip this duplicate
+            seen_fingerprints.add(fingerprint)
+
+            # 2. Existing mapping to different target
+            if fingerprint in existing_by_fingerprint:
+                existing_mapping = existing_by_fingerprint[fingerprint]
+                if existing_mapping["target_stable_key"] != target_key:
+                    conflicts.append({
+                        "type": "existing_mapping_conflict",
+                        "match_kind": mk,
+                        "match_value": mv,
+                        "target_stable_key": target_key,
+                        "existing_target": existing_mapping["target_stable_key"],
+                        "existing_mapping_id": existing_mapping["id"],
+                        "message": f"Fingerprint {mk}:{mv[:16]}… already maps to {existing_mapping['target_stable_key']}, not {target_key}",
+                    })
+                    continue  # Skip — existing mapping must be resolved first
+
+            # 3. Missing target row
+            if target_key not in row_by_key:
+                conflicts.append({
+                    "type": "missing_target",
+                    "match_kind": mk,
+                    "match_value": mv,
+                    "target_stable_key": target_key,
+                    "message": f"Target row {target_key} not found in coretax_rows for {year}",
+                })
+                continue  # Skip — target row must exist
+
+            # 4. Incompatible target kind
+            target_row = row_by_key[target_key]
+            target_kind = target_row.get("kind", "")
+            if source_kind == "liability" and target_kind != "liability":
+                conflicts.append({
+                    "type": "incompatible_kind",
+                    "match_kind": mk,
+                    "match_value": mv,
+                    "target_stable_key": target_key,
+                    "source_kind": source_kind,
+                    "target_kind": target_kind,
+                    "message": f"Cannot map liability to {target_kind} row {target_key}",
+                })
+                continue  # Skip — kind mismatch
+            if source_kind in ("account_balance", "holding") and target_kind == "liability":
+                conflicts.append({
+                    "type": "incompatible_kind",
+                    "match_kind": mk,
+                    "match_value": mv,
+                    "target_stable_key": target_key,
+                    "source_kind": source_kind,
+                    "target_kind": target_kind,
+                    "message": f"Cannot map {source_kind} to liability row {target_key}",
+                })
+                continue  # Skip — kind mismatch
+
+            # ── No conflict — this suggestion is valid ──────────────────────
+            target_kode = target_row.get("kode_harta", "")
+            target_desc = target_row.get("keterangan", "")
+
+            # Find the PWM item for this fingerprint
+            pwm_item = pwm_by_fingerprint.get(fingerprint)
+            amount = 0.0
+            mv_amount = 0.0
+            if pwm_item:
+                if source_kind == "account_balance":
+                    amount = float(pwm_item.get("value", 0))
+                elif source_kind == "holding":
+                    amount = float(pwm_item.get("cost_basis_idr", 0))
+                    mv_amount = float(pwm_item.get("market_value_idr", 0))
+                elif source_kind == "liability":
+                    amount = float(pwm_item.get("balance_idr", 0))
+
+            # Compute what the new total would be
+            current_amount = float(target_row.get("current_amount_idr", 0) or 0)
+            current_mv = float(target_row.get("market_value_idr", 0) or 0)
+
+            # Accumulate deltas per target
+            if target_key not in target_deltas:
+                target_deltas[target_key] = {
+                    "target_stable_key": target_key,
+                    "target_kode_harta": target_kode,
+                    "target_keterangan": target_desc,
+                    "current_amount": current_amount,
+                    "current_mv": current_mv,
+                    "added_amount": 0.0,
+                    "added_mv": 0.0,
+                    "new_total_amount": current_amount,
+                    "new_total_mv": current_mv,
+                    "component_count": 0,
+                    "rules": [],  # List of rules contributing to this target
+                }
+            td = target_deltas[target_key]
+            td["added_amount"] += amount
+            td["added_mv"] += mv_amount
+            td["new_total_amount"] += amount
+            td["new_total_mv"] += mv_amount
+            td["component_count"] += 1
+            if rule not in td["rules"]:
+                td["rules"].append(rule)
+
+            preview_items.append({
+                "match_kind": mk,
+                "match_value": mv,
+                "target_stable_key": target_key,
+                "target_kode_harta": target_kode,
+                "confidence_score": conf_score,
+                "rule": rule,
+                "pwm_label": s.get("pwm_label", ""),
+                "source_kind": source_kind,
+                "fingerprint_raw": s.get("fingerprint_raw", ""),
+                "amount_delta": amount,
+                "mv_delta": mv_amount,
+            })
+
+        return {
+            "preview": preview_items,
+            "count": len(preview_items),
+            "target_deltas": list(target_deltas.values()),
+            "conflicts": conflicts,
+            "has_conflicts": len(conflicts) > 0,
+        }
 
 
 @app.post("/api/coretax/{year}/mappings/suggest/reject", dependencies=[Depends(require_api_key)])
@@ -5133,6 +5334,178 @@ async def ai_query(body: _AiQueryRequest):
         raise HTTPException(422, f"No usable filters in response: {raw[:200]}")
 
     return filtered
+
+
+# ── /api/matching/* — Unified Matching Console (Phase E) ─────────────────────
+
+_MATCHING_DOMAINS = ("coretax", "parser", "dedup", "categorization")
+
+
+def _validate_domain(domain: str) -> str:
+    if domain not in _MATCHING_DOMAINS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown domain {domain!r}. Valid: {list(_MATCHING_DOMAINS)}",
+        )
+    return domain
+
+
+@app.get("/api/matching/stats", dependencies=[Depends(require_api_key)])
+def matching_stats():
+    """Cross-domain stats: mapping counts, source breakdown, shadow diff count."""
+    from finance.matching.storage import ensure_domain_tables, ensure_global_tables
+    with _db() as conn:
+        ensure_global_tables(conn)
+        domains = []
+        for d in _MATCHING_DOMAINS:
+            try:
+                ensure_domain_tables(conn, d)
+                prefix = f"matching_{d}"
+                total = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {prefix}_mappings"
+                ).fetchone()["c"]
+                auto = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {prefix}_mappings WHERE source='auto_safe'"
+                ).fetchone()["c"]
+                manual = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM {prefix}_mappings WHERE source='manual'"
+                ).fetchone()["c"]
+                last_row = conn.execute(
+                    f"SELECT updated_at FROM {prefix}_mappings ORDER BY updated_at DESC LIMIT 1"
+                ).fetchone()
+                domains.append({
+                    "domain": d,
+                    "total": total,
+                    "auto": auto,
+                    "manual": manual,
+                    "other": total - auto - manual,
+                    "last_updated": last_row["updated_at"] if last_row else None,
+                })
+            except Exception:
+                domains.append({"domain": d, "total": 0, "auto": 0, "manual": 0,
+                                 "other": 0, "last_updated": None})
+
+        try:
+            shadow_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM category_shadow_diff"
+            ).fetchone()["c"]
+        except Exception:
+            shadow_count = 0
+
+        return {
+            "domains": domains,
+            "total_mappings": sum(d["total"] for d in domains),
+            "shadow_diff_count": shadow_count,
+        }
+
+
+@app.get("/api/matching/{domain}/mappings", dependencies=[Depends(require_api_key)])
+def list_matching_mappings(
+    domain: str,
+    limit: int = Query(50, ge=1, le=500),
+    cursor: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+):
+    """List mappings for a domain with optional source filter and cursor pagination."""
+    _validate_domain(domain)
+    from finance.matching.storage import ensure_domain_tables, list_mappings as _list_mappings
+    with _db() as conn:
+        ensure_domain_tables(conn, domain)
+        result = _list_mappings(conn, domain, limit=limit, cursor=cursor)
+        if source:
+            result["items"] = [m for m in result["items"] if m.get("source") == source]
+        return result
+
+
+@app.delete("/api/matching/{domain}/mappings/{mapping_id}",
+            dependencies=[Depends(require_api_key)])
+def delete_matching_mapping(domain: str, mapping_id: int):
+    """Delete a single mapping by id."""
+    _validate_domain(domain)
+    require_writable()
+    from finance.matching.storage import delete_mapping as _delete_mapping
+    with _db() as conn:
+        if not _delete_mapping(conn, domain, mapping_id):
+            raise HTTPException(status_code=404, detail="mapping_not_found")
+        return {"ok": True}
+
+
+@app.post("/api/matching/{domain}/mappings/{mapping_id}/confirm",
+          dependencies=[Depends(require_api_key)])
+def confirm_matching_mapping(domain: str, mapping_id: int):
+    """Increment times_confirmed and update last_used_at for a mapping."""
+    _validate_domain(domain)
+    require_writable()
+    from finance.matching.storage import update_mapping_fields as _update_fields, _utcnow
+    with _db() as conn:
+        row = conn.execute(
+            f"SELECT times_confirmed FROM matching_{domain}_mappings WHERE id=?",
+            (mapping_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="mapping_not_found")
+        ok = _update_fields(
+            conn, domain, mapping_id,
+            times_confirmed=int(row["times_confirmed"]) + 1,
+            last_used_at=_utcnow(),
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="mapping_not_found")
+        return {"ok": True}
+
+
+@app.get("/api/matching/shadow-diffs", dependencies=[Depends(require_api_key)])
+def list_shadow_diffs(
+    limit: int = Query(50, ge=1, le=500),
+    diff_class: Optional[str] = Query(None),
+):
+    """List category_shadow_diff rows (disagreements between legacy and engine)."""
+    with _db() as conn:
+        try:
+            where = ""
+            params: list = [limit]
+            if diff_class:
+                where = "WHERE diff_class = ?"
+                params = [diff_class, limit]
+            rows = conn.execute(
+                f"SELECT * FROM category_shadow_diff {where} "
+                f"ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+            total = conn.execute(
+                "SELECT COUNT(*) AS c FROM category_shadow_diff"
+            ).fetchone()["c"]
+            return {"items": [dict(r) for r in rows], "total": total}
+        except Exception:
+            return {"items": [], "total": 0}
+
+
+@app.get("/api/matching/invariant-log", dependencies=[Depends(require_api_key)])
+def list_invariant_log(
+    limit: int = Query(50, ge=1, le=500),
+    severity: Optional[str] = Query(None),
+    domain: Optional[str] = Query(None),
+):
+    """Recent entries from matching_invariant_log."""
+    with _db() as conn:
+        try:
+            clauses = []
+            params: list = []
+            if severity:
+                clauses.append("severity = ?")
+                params.append(severity.upper())
+            if domain:
+                clauses.append("domain = ?")
+                params.append(domain)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT * FROM matching_invariant_log {where} ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+            return {"items": [dict(r) for r in rows]}
+        except Exception:
+            return {"items": []}
 
 
 # ── PWA static files (must be last — mounted after all /api/* routes) ─────────

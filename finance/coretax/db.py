@@ -17,6 +17,32 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+
+class MappingConflictError(Exception):
+    """Raised when assign_mapping encounters a conflict with an existing mapping.
+
+    Attributes:
+        match_kind: The fingerprint kind being assigned
+        match_value: The fingerprint value being assigned
+        target_stable_key: The requested target stable key
+        existing_target: The existing mapping's target stable key
+        existing_mapping_id: The ID of the existing conflicting mapping
+        message: Human-readable description of the conflict
+    """
+    def __init__(self, match_kind: str, match_value: str,
+                 target_stable_key: str, existing_target: str,
+                 existing_mapping_id: int, message: str | None = None):
+        self.match_kind = match_kind
+        self.match_value = match_value
+        self.target_stable_key = target_stable_key
+        self.existing_target = existing_target
+        self.existing_mapping_id = existing_mapping_id
+        self.message = message or (
+            f"Mapping conflict: ({match_kind}, {match_value[:16]}…) already maps to "
+            f"{existing_target}, not {target_stable_key}"
+        )
+        super().__init__(self.message)
+
 # ── Schema DDL ────────────────────────────────────────────────────────────────
 
 CORETAX_SCHEMA = """
@@ -147,10 +173,12 @@ CREATE TABLE IF NOT EXISTS coretax_row_components (
     component_market_value_idr REAL,
     pwm_label                 TEXT NOT NULL,
     confidence_level          TEXT NOT NULL,
+    is_current                INTEGER NOT NULL DEFAULT 1,
     created_at                TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_row_components_target ON coretax_row_components(target_stable_key, tax_year);
 CREATE INDEX IF NOT EXISTS idx_row_components_run ON coretax_row_components(reconcile_run_id);
+CREATE INDEX IF NOT EXISTS idx_row_components_current ON coretax_row_components(target_stable_key, tax_year, is_current);
 
 CREATE TABLE IF NOT EXISTS coretax_rejected_suggestions (
     id                          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,6 +225,9 @@ def ensure_coretax_tables(conn) -> None:
     _maybe_add_col(conn, cols, "coretax_mappings", "last_used_at", "TEXT")
     _maybe_add_col(conn, cols, "coretax_mappings", "years_used", "INTEGER NOT NULL DEFAULT 0")
     _maybe_add_col(conn, cols, "coretax_mappings", "times_confirmed", "INTEGER NOT NULL DEFAULT 0")
+    # Phase: add is_current column to coretax_row_components
+    comp_cols = {r[1] for r in conn.execute("PRAGMA table_info(coretax_row_components)").fetchall()}
+    _maybe_add_col(conn, comp_cols, "coretax_row_components", "is_current", "INTEGER NOT NULL DEFAULT 1")
     # Seed asset codes (INSERT OR IGNORE is idempotent)
     conn.executemany(
         "INSERT OR IGNORE INTO coretax_asset_codes (kode, label, kind, default_carry_forward) VALUES (?, ?, ?, ?)",
@@ -542,9 +573,12 @@ def assign_mapping(conn, match_kind: str, match_value: str,
                    confidence_level: str | None = None,
                    fingerprint_raw: str | None = None,
                    target_keterangan_template: str | None = None,
-                   created_from_tax_year: int | None = None) -> int:
+                   created_from_tax_year: int | None = None,
+                   raise_on_conflict: bool = False) -> int:
     """Insert or update a mapping.  Single write path for all mapping operations.
 
+    If raise_on_conflict=True and an existing mapping points to a different
+    target_stable_key, raises ValueError instead of silently overwriting.
     Returns the mapping id.
     """
     if confidence_level is None:
@@ -552,10 +586,19 @@ def assign_mapping(conn, match_kind: str, match_value: str,
         confidence_level = derive_level(confidence_score)
     now = _utcnow()
     existing = conn.execute(
-        "SELECT id FROM coretax_mappings WHERE match_kind = ? AND match_value = ?",
+        "SELECT id, target_stable_key FROM coretax_mappings WHERE match_kind = ? AND match_value = ?",
         (match_kind, match_value),
     ).fetchone()
     if existing:
+        # Conflict check: existing mapping points to a different target
+        if raise_on_conflict and existing["target_stable_key"] != target_stable_key:
+            raise MappingConflictError(
+                match_kind=match_kind,
+                match_value=match_value,
+                target_stable_key=target_stable_key,
+                existing_target=existing["target_stable_key"],
+                existing_mapping_id=existing["id"],
+            )
         conn.execute(
             """UPDATE coretax_mappings SET
                target_kode_harta=?, target_kind=?, target_stable_key=?,
@@ -650,11 +693,20 @@ def find_lifecycle_mappings(conn, tax_year: int) -> dict:
     Returns { STALE: [...], WEAK: [...], UNUSED: [...], ORPHANED: [...] }.
     """
     from finance.coretax.confidence import MEDIUM_THRESHOLD, STALE_YEAR_THRESHOLD
+    from finance.coretax.fingerprint import derive as fp_derive
+    from finance.coretax.pwm_universe import snapshot
 
     all_mappings = conn.execute("SELECT * FROM coretax_mappings ORDER BY id").fetchall()
     row_keys = {r["stable_key"] for r in conn.execute(
         "SELECT DISTINCT stable_key FROM coretax_rows WHERE tax_year = ?", (tax_year,)
     ).fetchall()}
+
+    # Build set of current PWM fingerprints for ORPHANED detection
+    pwm_items = snapshot(conn, tax_year)
+    pwm_fingerprints = set()
+    for item in pwm_items:
+        fp = fp_derive(item)
+        pwm_fingerprints.add((fp.match_kind, fp.match_value))
 
     buckets: dict[str, list[dict]] = {"STALE": [], "WEAK": [], "UNUSED": [], "ORPHANED": []}
 
@@ -662,14 +714,21 @@ def find_lifecycle_mappings(conn, tax_year: int) -> dict:
         m = dict(m)
         target_key = m.get("target_stable_key")
         score = float(m.get("confidence_score", 1.0))
-        years_used = int(m.get("years_used", 0))
         last_used_year = m.get("last_used_tax_year")
         created_year = m.get("created_from_tax_year")
+        mk = m.get("match_kind", "")
+        mv = m.get("match_value", "")
 
         # STALE: target row doesn't exist for this tax_year
         if target_key and target_key not in row_keys:
             m["lifecycle_bucket"] = "STALE"
             buckets["STALE"].append(m)
+            continue
+
+        # ORPHANED: fingerprint no longer in PWM universe (asset sold / account closed)
+        if (mk, mv) not in pwm_fingerprints:
+            m["lifecycle_bucket"] = "ORPHANED"
+            buckets["ORPHANED"].append(m)
             continue
 
         # WEAK: confidence_score decayed below MEDIUM_THRESHOLD
@@ -784,22 +843,24 @@ def replace_row_components_for_targets(conn, run_id: int, tax_year: int,
     """Replace component rows for the given targets in the given run.
 
     This is the single write path for component breakdowns from reconcile.
-    Deletes existing components for (run_id, target_stable_key) pairs,
-    then inserts the new ones.
+    Marks prior components for (target_stable_key, tax_year) as is_current=0
+    across ALL runs, then inserts the new ones with is_current=1.
+    This preserves full run history while making current components queryable.
     """
     now = _utcnow()
     for key in target_stable_keys:
         conn.execute(
-            "DELETE FROM coretax_row_components WHERE reconcile_run_id = ? AND target_stable_key = ?",
-            (run_id, key),
+            "UPDATE coretax_row_components SET is_current = 0 WHERE target_stable_key = ? AND tax_year = ? AND is_current = 1",
+            (key, tax_year),
         )
     for comp in components:
         conn.execute(
             """INSERT INTO coretax_row_components
                (reconcile_run_id, tax_year, target_stable_key, source_kind,
                 match_kind, match_value, component_amount_idr,
-                component_market_value_idr, pwm_label, confidence_level, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                component_market_value_idr, pwm_label, confidence_level,
+                is_current, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
             (run_id, tax_year, comp["target_stable_key"], comp["source_kind"],
              comp["match_kind"], comp["match_value"],
              comp.get("component_amount_idr"),
@@ -810,14 +871,25 @@ def replace_row_components_for_targets(conn, run_id: int, tax_year: int,
 
 
 def list_row_components(conn, target_stable_key: str, tax_year: int,
-                        run_id: int | None = None) -> list[dict]:
-    """List component breakdown for a target row."""
+                        run_id: int | None = None, current_only: bool = True) -> list[dict]:
+    """List component breakdown for a target row.
+
+    By default returns only current components (is_current=1).
+    Pass current_only=False to see all historical components.
+    """
     if run_id:
         rows = conn.execute(
             """SELECT * FROM coretax_row_components
                WHERE target_stable_key = ? AND tax_year = ? AND reconcile_run_id = ?
                ORDER BY id""",
             (target_stable_key, tax_year, run_id),
+        ).fetchall()
+    elif current_only:
+        rows = conn.execute(
+            """SELECT * FROM coretax_row_components
+               WHERE target_stable_key = ? AND tax_year = ? AND is_current = 1
+               ORDER BY reconcile_run_id DESC, id""",
+            (target_stable_key, tax_year),
         ).fetchall()
     else:
         rows = conn.execute(
@@ -892,6 +964,7 @@ def compute_unmapped_pwm(conn, tax_year: int, snapshot_date: str | None = None) 
     """
     from finance.coretax.fingerprint import derive
     from finance.coretax.pwm_universe import snapshot
+    from finance.coretax.taxonomy import infer_kode_harta
 
     pwm_items = snapshot(conn, tax_year, snapshot_date)
     mappings = get_mappings(conn)
@@ -907,6 +980,7 @@ def compute_unmapped_pwm(conn, tax_year: int, snapshot_date: str | None = None) 
                 "match_kind": fp.match_kind,
                 "match_value": fp.match_value,
                 "fingerprint_raw": fp.fingerprint_raw,
+                "suggested_kode_harta": infer_kode_harta(item["source_kind"], item),
                 "payload": item,
                 "pwm_label": _pwm_label(item),
             })

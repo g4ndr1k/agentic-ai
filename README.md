@@ -10,9 +10,10 @@ The system is local-first: the bridge runs on macOS for host-only capabilities, 
 |---|---|
 | Mail alerts | Polls financial mail, classifies through registered providers, and sends iMessage alerts. |
 | PDF processing | Processes local bank PDFs from `data/pdf_inbox` / `data/pdf_unlocked` through bridge jobs. |
-| Finance import | Imports `ALL_TRANSACTIONS.xlsx` into SQLite with hash-based deduplication. |
+| Finance import | Imports `ALL_TRANSACTIONS.xlsx` into SQLite with hash-based deduplication and guarded parser-variant reconciliation. |
 | Wealth tracking | Stores balances, holdings, liabilities, and net worth snapshots. |
-| CoreTax SPT | Persistent tax-version ledger: import prior-year SPT XLSX, carry forward manual decisions, auto-reconcile refreshable rows from live wealth data, learn mappings across years, export to CoreTax XLSX template. |
+| CoreTax SPT | Persistent tax-version ledger: import prior-year SPT XLSX, carry forward manual decisions, map PWM sources before reconcile, auto-reconcile refreshable rows from live wealth data, preserve component history, export to CoreTax XLSX template. |
+| Matching engine | Shared `finance/matching/` infrastructure for auditable mappings, confidence, rejected suggestions, shadow diffs, and matching-console APIs. |
 | PWA | Vue 3 dashboard for transactions, wealth, assets, CoreTax SPT wizard, review queue, audit, and settings. |
 | NAS services | Optional read-only finance API/PWA replica plus LAN-only Household Expense PWA. |
 
@@ -44,7 +45,8 @@ For first-time setup, secrets, LaunchAgents, PDF workflows, and maintenance comm
 | `bridge/` | Host bridge: mail, iMessage, PDF processing, bridge API. |
 | `agent/` | Dockerized mail alert worker and classifier providers. |
 | `finance/` | FastAPI backend, importer, categorizer, SQLite schema, backups. |
-| `finance/coretax/` | CoreTax SPT ledger: import parser, carry-forward, reconciler, exporter. |
+| `finance/coretax/` | CoreTax SPT ledger: import parser, carry-forward, fingerprint mapping, suggestion engine, reconciler, exporter. |
+| `finance/matching/` | Generic matching engine, storage helpers, domain adapters for CoreTax, parser routing, dedup, and categorization. |
 | `pwa/` | Vue 3 PWA frontend. |
 | `household-expense/` | LAN-only household expense satellite app for NAS. |
 | `parsers/` | Bank-specific PDF parsers. |
@@ -68,7 +70,8 @@ For first-time setup, secrets, LaunchAgents, PDF workflows, and maintenance comm
 - Stage 1 mail alerting: active
 - Stage 2 finance import and PWA: active
 - Stage 3 wealth management: active
-- CoreTax SPT ledger and wizard: active
+- CoreTax SPT mapping-first ledger and wizard: active
+- Generic matching engine foundation: active; parser/dedup/categorization engine paths are flag-gated while legacy paths remain available
 - PDF preflight and per-file status lifecycle: active
 - NAS read-only replica: configured for deployments that enable NAS sync
 - Household Expense PWA: active as a LAN-only NAS satellite app

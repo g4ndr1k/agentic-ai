@@ -1,0 +1,107 @@
+[
+  {
+    "id": "permata_cc_001",
+    "description": "Permata credit card — bilingual title",
+    "page1_text": "Rekening Tagihan\nCredit Card Billing\nPT Bank Permata Tbk\nNomor Kartu: 4234 5678 XXXX 9012",
+    "page2_text": "",
+    "expected_parser": "permata_cc"
+  },
+  {
+    "id": "permata_rdn_001",
+    "description": "Permata RDN securities account",
+    "page1_text": "Permata\nRekening Koran\nRDN INVESTOR\nNomor Rekening: 0701234567",
+    "page2_text": "",
+    "expected_parser": "permata_rdn"
+  },
+  {
+    "id": "permata_savings_001",
+    "description": "Permata savings — non-RDN",
+    "page1_text": "Permata\nRekening Koran\nNomor Rekening: 0701234567",
+    "page2_text": "",
+    "expected_parser": "permata_savings"
+  },
+  {
+    "id": "bca_cc_001",
+    "description": "BCA credit card — uses REKENING KARTU KREDIT (full title)",
+    "page1_text": "Bank Central Asia\nREKENING KARTU KREDIT\nNomor Kartu: 4321 XXXX XXXX 9876",
+    "page2_text": "",
+    "expected_parser": "bca_cc"
+  },
+  {
+    "id": "bca_rdn_001",
+    "description": "BCA Tapres / RDN",
+    "page1_text": "REKENING TAPRES\nBank Central Asia\nNomor Rekening: 1234567890",
+    "page2_text": "",
+    "expected_parser": "bca_rdn"
+  },
+  {
+    "id": "bca_savings_001",
+    "description": "BCA savings / Tahapan",
+    "page1_text": "Bank Central Asia\nTAHAPAN BCA\nNomor Rekening: 1234567890",
+    "page2_text": "",
+    "expected_parser": "bca_savings"
+  },
+  {
+    "id": "maybank_cc_001",
+    "description": "Maybank credit card",
+    "page1_text": "Maybank\nKartu Kredit\nNomor Kartu: 5123 XXXX XXXX 4567",
+    "page2_text": "",
+    "expected_parser": "maybank_cc"
+  },
+  {
+    "id": "maybank_consol_001",
+    "description": "Maybank consolidated portfolio",
+    "page1_text": "Maybank\nALOKASI ASET\nNasabah: John Doe",
+    "page2_text": "RINGKASAN PORTOFOLIO\nMaybank PORTFOLIO",
+    "expected_parser": "maybank_consol"
+  },
+  {
+    "id": "cimb_cc_001",
+    "description": "CIMB Niaga credit card",
+    "page1_text": "CIMB Niaga\nTgl. Statement: 31 Jan 2025",
+    "page2_text": "",
+    "expected_parser": "cimb_niaga_cc"
+  },
+  {
+    "id": "cimb_consol_001",
+    "description": "CIMB Niaga consolidated statement",
+    "page1_text": "CIMB Niaga\nCOMBINE STATEMENT\nNasabah: Jane Doe",
+    "page2_text": "",
+    "expected_parser": "cimb_niaga_consol"
+  },
+  {
+    "id": "ipot_portfolio_001",
+    "description": "IPOT portfolio statement",
+    "page1_text": "PT INDO PREMIER SEKURITAS\nClient Portofolio\nNomor Akun: IVS123456",
+    "page2_text": "",
+    "expected_parser": "ipot_portfolio"
+  },
+  {
+    "id": "ipot_statement_001",
+    "description": "IPOT client statement",
+    "page1_text": "PT INDO PREMIER SEKURITAS\nClient Statement\nNomor Akun: IVS123456",
+    "page2_text": "",
+    "expected_parser": "ipot_statement"
+  },
+  {
+    "id": "bni_sek_legacy_001",
+    "description": "BNI Sekuritas legacy format — requires PORTFOLIO STATEMENT + BNI Sekuritas",
+    "page1_text": "CONSOLIDATE ACCOUNT STATEMENT\nCASH SUMMARY\nPORTFOLIO STATEMENT\nBNI Sekuritas",
+    "page2_text": "",
+    "expected_parser": "bni_sekuritas_legacy"
+  },
+  {
+    "id": "bni_sek_001",
+    "description": "BNI Sekuritas new format",
+    "page1_text": "BNI Sekuritas\nCLIENT STATEMENT\nNomor Akun: A123456",
+    "page2_text": "",
+    "expected_parser": "bni_sekuritas"
+  },
+  {
+    "id": "unknown_001",
+    "description": "Unknown / unrecognized statement",
+    "page1_text": "Some Random Bank\nAccount Statement 2024",
+    "page2_text": "",
+    "expected_parser": null
+  }
+]
