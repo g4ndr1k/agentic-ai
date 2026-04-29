@@ -18,18 +18,41 @@ export default function App() {
   return (
     <ApiProvider>
       <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-        {/* Draggable Title Bar */}
-        <div 
-          className="h-12 bg-gray-950 flex items-center pl-20 pr-6 border-b border-gray-900/50"
+        <header
+          className="sticky top-0 z-50 bg-gray-950/95 backdrop-blur border-b border-gray-900/80"
           style={{ WebkitAppRegion: 'drag' } as any}
         >
-          <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-gray-500">
-            Email Intelligence Hub
-          </span>
-        </div>
+          <div className="min-h-14 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pl-20 pr-6 py-2">
+            <span className="text-[10px] uppercase tracking-[0.3em] font-bold text-gray-500 whitespace-nowrap">
+              Email Intelligence Hub
+            </span>
+            <nav
+              className="flex min-w-0 items-center gap-6 overflow-x-auto"
+              style={{ WebkitAppRegion: 'no-drag' } as any}
+              aria-label="App navigation"
+            >
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`relative pb-1 text-sm font-medium transition-colors ${
+                    activeTab === tab.id
+                      ? 'text-white'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {tab.label}
+                  {activeTab === tab.id && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-white rounded-full" />
+                  )}
+                </button>
+              ))}
+            </nav>
+          </div>
+        </header>
 
         {/* Main content */}
-        <div className="flex-1 overflow-auto p-6 pt-2">
+        <main className="flex-1 p-6">
           {activeTab === 'dashboard' && <Dashboard />}
           {activeTab === 'emails' && (
             <PlaceholderTab title="Emails" />
@@ -38,30 +61,7 @@ export default function App() {
             <PlaceholderTab title="Drafts" />
           )}
           {activeTab === 'settings' && <Settings />}
-        </div>
-
-        {/* Tab bar */}
-        <div 
-          className="border-t border-gray-800 px-6 py-3 flex gap-6 bg-gray-950"
-          style={{ WebkitAppRegion: 'no-drag' } as any}
-        >
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`relative pb-1 text-sm font-medium transition-colors ${
-                activeTab === tab.id
-                  ? 'text-white'
-                  : 'text-gray-500 hover:text-gray-300'
-              }`}
-            >
-              {tab.label}
-              {activeTab === tab.id && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-white rounded-full" />
-              )}
-            </button>
-          ))}
-        </div>
+        </main>
       </div>
     </ApiProvider>
   );
