@@ -9,19 +9,23 @@ import {
   RulePreviewResult,
   useApi,
 } from '../api/mail';
+import {
+  PHASE_4A_SAFE_ACTIONS,
+  accountOptionLabel,
+  accountScopeLabel,
+  activeRuleAccounts,
+  defaultRuleAccountId,
+  hasPriorityConflict,
+  nextPriorityForScope,
+  reorderPayloadForScope,
+  rulesInScope,
+} from './ruleUiHelpers';
 
 function normalizeAppPassword(value: string) {
   return value.replace(/\s+/g, '');
 }
 
-const SAFE_ACTIONS = [
-  'mark_pending_alert',
-  'skip_ai_inference',
-  'add_to_needs_reply',
-  'route_to_pdf_pipeline',
-  'notify_dashboard',
-  'stop_processing',
-] as const;
+const SAFE_ACTIONS = PHASE_4A_SAFE_ACTIONS;
 
 const OPERATORS = [
   'equals',
@@ -60,8 +64,8 @@ const emptyAction = (): MailRuleAction => ({
   stop_processing: false,
 });
 
-const newRuleDraft = (priority: number): MailRuleInput => ({
-  account_id: null,
+const newRuleDraft = (priority: number, accountId: string | null): MailRuleInput => ({
+  account_id: accountId,
   name: 'New rule',
   priority,
   enabled: true,
@@ -106,17 +110,27 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [rules, setRules] = useState<MailRule[]>([]);
   const [selectedRuleId, setSelectedRuleId] = useState<number | 'new' | null>(null);
-  const [ruleDraft, setRuleDraft] = useState<MailRuleInput>(newRuleDraft(10));
+  const [ruleDraft, setRuleDraft] = useState<MailRuleInput>(newRuleDraft(10, null));
   const [ruleStatus, setRuleStatus] = useState<string | null>(null);
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState(JSON.stringify(samplePreview, null, 2));
   const [previewResult, setPreviewResult] = useState<RulePreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<MailProcessingEvent[]>([]);
+  const activeAccounts = activeRuleAccounts(accounts);
 
   useEffect(() => {
     refreshRulesAndAudit();
   }, []);
+
+  useEffect(() => {
+    if ((selectedRuleId === null || selectedRuleId === 'new') && ruleDraft.account_id === null) {
+      const accountId = defaultRuleAccountId(accounts);
+      if (accountId !== null) {
+        setRuleDraft((draft) => ({ ...draft, account_id: accountId }));
+      }
+    }
+  }, [accounts, selectedRuleId, ruleDraft.account_id]);
 
   const refreshRulesAndAudit = async () => {
     setRuleError(null);
@@ -169,9 +183,9 @@ export default function Settings() {
   };
 
   const startNewRule = () => {
-    const maxPriority = rules.reduce((max, rule) => Math.max(max, rule.priority), 0);
+    const accountId = defaultRuleAccountId(accounts, ruleDraft.account_id);
     setSelectedRuleId('new');
-    setRuleDraft(newRuleDraft(maxPriority + 10));
+    setRuleDraft(newRuleDraft(nextPriorityForScope(rules, accountId), accountId));
     setRuleStatus(null);
     setRuleError(null);
   };
@@ -179,6 +193,12 @@ export default function Settings() {
   const saveRule = async () => {
     setRuleStatus('Saving rule...');
     setRuleError(null);
+    const ignoreRuleId = typeof selectedRuleId === 'number' ? selectedRuleId : undefined;
+    if (hasPriorityConflict(rules, ruleDraft.account_id, ruleDraft.priority, ignoreRuleId)) {
+      setRuleStatus(null);
+      setRuleError('Priority already exists within the selected account scope.');
+      return;
+    }
     try {
       if (selectedRuleId === 'new' || selectedRuleId === null) {
         const created = await createRule(ruleDraft);
@@ -201,7 +221,8 @@ export default function Settings() {
       await deleteRule(ruleId);
       if (selectedRuleId === ruleId) {
         setSelectedRuleId(null);
-        setRuleDraft(newRuleDraft(10));
+        const accountId = defaultRuleAccountId(accounts);
+        setRuleDraft(newRuleDraft(nextPriorityForScope(rules, accountId), accountId));
       }
       await refreshRulesAndAudit();
     } catch (e: any) {
@@ -210,17 +231,10 @@ export default function Settings() {
   };
 
   const moveRule = async (ruleId: number, direction: -1 | 1) => {
-    const ordered = [...rules].sort((a, b) => a.priority - b.priority || a.rule_id - b.rule_id);
-    const idx = ordered.findIndex((rule) => rule.rule_id === ruleId);
-    const swapIdx = idx + direction;
-    if (idx < 0 || swapIdx < 0 || swapIdx >= ordered.length) return;
-    const swapped = [...ordered];
-    [swapped[idx], swapped[swapIdx]] = [swapped[swapIdx], swapped[idx]];
+    const payload = reorderPayloadForScope(rules, ruleId, direction);
+    if (payload.length === 0) return;
     try {
-      await reorderRules(swapped.map((rule, index) => ({
-        rule_id: rule.rule_id,
-        priority: (index + 1) * 10,
-      })));
+      await reorderRules(payload);
       await refreshRulesAndAudit();
     } catch (e: any) {
       setRuleError(e.message);
@@ -453,7 +467,7 @@ export default function Settings() {
                           <div>
                             <div className="font-medium text-gray-200">{rule.name}</div>
                             <div className="text-xs text-gray-500 mt-1">
-                              Priority {rule.priority} · {rule.match_type} · {rule.conditions.length} conditions · {rule.actions.length} actions
+                              {accountScopeLabel(rule.account_id, accounts)} · Priority {rule.priority} · {rule.match_type} · {rule.conditions.length} conditions · {rule.actions.length} actions
                             </div>
                           </div>
                           <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
@@ -466,14 +480,14 @@ export default function Settings() {
                       <div className="flex items-center gap-2 mt-3">
                         <button
                           onClick={() => moveRule(rule.rule_id, -1)}
-                          disabled={index === 0}
+                          disabled={rulesInScope(rules, rule.account_id).findIndex((r) => r.rule_id === rule.rule_id) === 0}
                           className="px-2 py-1 text-xs rounded bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
                         >
                           Up
                         </button>
                         <button
                           onClick={() => moveRule(rule.rule_id, 1)}
-                          disabled={index === ordered.length - 1}
+                          disabled={rulesInScope(rules, rule.account_id).findIndex((r) => r.rule_id === rule.rule_id) === rulesInScope(rules, rule.account_id).length - 1}
                           className="px-2 py-1 text-xs rounded bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-40"
                         >
                           Down
@@ -505,7 +519,7 @@ export default function Settings() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                 <label className="md:col-span-2">
                   <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Name</span>
                   <input
@@ -513,6 +527,31 @@ export default function Settings() {
                     onChange={(e) => setRuleDraft({ ...ruleDraft, name: e.target.value })}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
+                </label>
+                <label className="md:col-span-2">
+                  <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Account Scope</span>
+                  <select
+                    value={ruleDraft.account_id ?? '__global__'}
+                    onChange={(e) => {
+                      const accountId = e.target.value === '__global__' ? null : e.target.value;
+                      const priority = accountId === ruleDraft.account_id
+                        ? ruleDraft.priority
+                        : nextPriorityForScope(rules, accountId);
+                      setRuleDraft({
+                        ...ruleDraft,
+                        account_id: accountId,
+                        priority,
+                      });
+                    }}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    {activeAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {accountOptionLabel(account)}
+                      </option>
+                    ))}
+                    <option value="__global__">All accounts / global rule</option>
+                  </select>
                 </label>
                 <label>
                   <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Priority</span>
@@ -535,6 +574,9 @@ export default function Settings() {
                   </select>
                 </label>
               </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Priority is unique within the selected account scope.
+              </p>
 
               <label className="flex items-center gap-2 mt-4 text-sm text-gray-300">
                 <input

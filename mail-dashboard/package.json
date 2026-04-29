@@ -7,6 +7,7 @@
     "dev": "concurrently -k -n vite,electron -c cyan,yellow \"vite --port 5174\" \"wait-on http://localhost:5174 && electron .\"",
     "build": "vite build && tsc -p tsconfig.electron.json",
     "build:electron": "tsc -p tsconfig.electron.json",
+    "test:rules-ui": "node --test --experimental-strip-types tests/ruleUiHelpers.test.ts",
     "preview": "vite preview",
     "dist": "npm run build && electron-builder"
   },

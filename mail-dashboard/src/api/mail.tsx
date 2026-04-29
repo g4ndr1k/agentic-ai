@@ -46,7 +46,7 @@ interface RecentEmail {
   source: string;
 }
 
-interface AccountHealth {
+export interface AccountHealth {
   id: string;
   name: string;
   email: string;
