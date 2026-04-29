@@ -15,7 +15,7 @@ The system is local-first: the bridge runs on macOS for host-only capabilities, 
 | CoreTax SPT | Persistent tax-version ledger: import prior-year SPT XLSX, carry forward manual decisions, map PWM sources before reconcile, auto-reconcile refreshable rows from live wealth data, preserve component history, export to CoreTax XLSX template. |
 | Matching engine | Shared `finance/matching/` infrastructure for auditable mappings, confidence, rejected suggestions, shadow diffs, and matching-console APIs. |
 | PWA | Vue 3 dashboard for transactions, wealth, assets, CoreTax SPT wizard, review queue, audit, and settings. |
-| Mail dashboard | Electron + React menu-bar app under `mail-dashboard/` that reads the mail-agent API on `127.0.0.1:8080/api/mail/*`. |
+| Mail dashboard | Electron + React menu-bar app under `mail-dashboard/` that reads dashboard mail APIs on `127.0.0.1:8090/api/mail/*`; worker health/debug remains on `127.0.0.1:8080`. |
 | NAS services | Optional read-only finance API/PWA replica plus LAN-only Household Expense PWA. |
 
 ## Quick Start
@@ -67,16 +67,18 @@ For first-time setup, secrets, LaunchAgents, PDF workflows, and maintenance comm
 | Document | Purpose |
 |---|---|
 | [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | Stable architecture, contracts, flows, and component responsibilities. |
+| [docs/MAIL_AGENT.md](docs/MAIL_AGENT.md) | Detailed mail-agent, dashboard, IMAP, rules, credential, and troubleshooting reference. |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Running, maintaining, validating, and backing up the system. |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom-driven diagnosis and fixes. |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Human-readable recent change history. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Lightweight design decisions and rationale. |
+| [docs/ch-hp-worklow.md](docs/ch-hp-worklow.md) | Specialized homepage workflow reference. |
 
 ## Status
 
 - Stage 1 mail alerting: active
 - Stage 1 IMAP intake and attachment routing: implemented; enabled when `[mail.imap].accounts` contains real accounts, otherwise the bridge mail source remains the fallback
-- Native mail dashboard: implemented and buildable; talks to the mail-agent API on local port `8080`
+- Native mail dashboard: implemented and buildable; talks to dashboard mail APIs on local port `8090`
 - Stage 2 finance import and PWA: active
 - Stage 3 wealth management: active
 - CoreTax SPT mapping-first ledger and wizard: active

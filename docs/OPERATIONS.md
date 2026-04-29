@@ -40,19 +40,18 @@ The finance image now also hosts the native mail-dashboard account-management ro
 
 ### Mail Agent
 
-The mail agent runs as the `mail-agent` Docker service and exposes a local API on `127.0.0.1:8080`.
+The mail agent runs as the `mail-agent` Docker service. Worker health/debug is on `127.0.0.1:8080`; dashboard-facing APIs are mounted by `finance-api` at `127.0.0.1:8090/api/mail/*`. Detailed mail-agent operations live in [MAIL_AGENT.md](MAIL_AGENT.md).
 
 ```bash
+docker compose up --build -d mail-agent
 docker compose logs -f mail-agent
 python3 scripts/mailagent_status.py --no-run
 python3 scripts/mailagent_status.py
+python3 scripts/mailagent_preflight.py
 ```
 
 `POST /api/mail/run` queues a scan cycle; it does not run mail processing inside the dashboard process.
-
-IMAP intake is enabled only when `[mail.imap].accounts` in `config/settings.toml` contains real accounts. Placeholder accounts such as `YOUR_EMAIL@gmail.com` are ignored so the bridge mail source remains the fallback until credentials are configured.
-
-For Gmail, host-native tools prefer macOS Keychain using service `agentic-ai-mail-imap` and account equal to the email address. Docker mail-agent runtime reads the file fallback at `/app/secrets/imap.toml`, mounted from local `secrets/imap.toml`. Outlook remains OAuth-only; do not configure Basic Auth.
+Mail-agent runtime state, rules, audit events, needs-reply rows, and future AI queues live in `data/agent.db`, not `data/finance.db`.
 
 ### Mail Dashboard
 
@@ -63,33 +62,7 @@ npm run build
 npm run dev
 ```
 
-The dashboard is an Electron menu-bar app. Summary, recent, and account-management calls go through `http://127.0.0.1:8090/api/mail/*`, with the finance API mounting `agent.app.api_mail`. The Python agent keeps processing even when the dashboard is closed.
-
-Supported mail settings actions:
-
-- `GET /api/mail/accounts`
-- `POST /api/mail/accounts/test`
-- `POST /api/mail/accounts`
-- `PATCH /api/mail/accounts/{account_id}`
-- `PATCH /api/mail/accounts/{account_id}/enabled`
-- `DELETE /api/mail/accounts/{account_id}`
-- `POST /api/mail/accounts/{account_id}/reactivate`
-- `POST /api/mail/config/reload`
-
-Gmail notes:
-
-- Paste the App Password exactly as Google shows it; the UI and backend now strip spaces and non-breaking spaces automatically.
-- Keychain storage uses service `agentic-ai-mail-imap` and account equal to the Gmail address.
-- Docker runtime credential source is local `secrets/imap.toml`, mounted read-only as `/app/secrets/imap.toml`.
-- Expected Docker TOML shape:
-  ```toml
-  [[accounts]]
-  email = "user@gmail.com"
-  app_password = "xxxx xxxx xxxx xxxx"
-  ```
-- File permissions: `chmod 600 secrets/imap.toml`.
-- Git safety: `secrets/` and `secrets/imap.toml` are gitignored. Never commit this file.
-- Placeholder accounts such as `YOUR_EMAIL@gmail.com` must not be left in the live list; they are ignored by the runtime and filtered out of the dashboard API.
+The dashboard is an Electron menu-bar app. It is a viewer/control surface only; mail processing continues when the dashboard is closed. For account setup, Gmail App Password handling, safe rule actions, and rules UI details, see [MAIL_AGENT.md](MAIL_AGENT.md).
 
 ### PWA
 
@@ -165,7 +138,7 @@ Status meanings:
 
 ## IMAP PDF Attachment Routing
 
-IMAP PDF attachments are handled by the Docker mail agent, not the Electron renderer. The agent posts PDF bytes to bridge `/pdf/unlock`, validates or falls back to a safe filename, then routes files under `/mnt/mailagent/pdf/<category>/`.
+IMAP PDF attachments are handled by the Docker mail agent, not the Electron renderer. Detailed routing and safety checks are documented in [MAIL_AGENT.md](MAIL_AGENT.md).
 
 The Docker bind mount must map the host NAS path:
 
@@ -174,8 +147,6 @@ mail-agent:
   volumes:
     - /Volumes/Synology/mailagent:/mnt/mailagent
 ```
-
-Before writing any PDF, `agent/app/pdf_router.py` checks `/mnt/mailagent/.mailagent_mount` against the configured `[mail_agent.pdf].mount_sentinel_uuid` and performs a write/delete probe. If the sentinel is missing or Docker cannot mount `/Volumes/Synology/mailagent`, attachment jobs stay pending and the mail-agent container may fail to start until the NAS mount is restored or Docker Desktop is allowed to share `/Volumes`.
 
 Current mount recovery checklist:
 

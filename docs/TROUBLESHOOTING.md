@@ -81,12 +81,7 @@ If `secrets/bridge.token` is a directory, remove the stale directory and re-expo
 
 - `docker compose up --build -d` builds images but `mail-agent` fails to start.
 - `docker compose ps` shows `finance-api` only.
-- Docker reports an error like:
-
-```text
-error while creating mount source path '/host_mnt/Volumes/Synology/mailagent':
-mkdir /host_mnt/Volumes/Synology: permission denied
-```
+- Docker reports a mount error for `/Volumes/Synology/mailagent` or `/host_mnt/Volumes/Synology/mailagent`.
 
 ### Likely Cause
 
@@ -107,17 +102,13 @@ docker compose logs --tail=80 mail-agent
 
 - Mount the Synology share so `/Volumes/Synology/mailagent` exists.
 - In Docker Desktop, allow file sharing for `/Volumes` or the specific Synology mount path.
-- Recreate only the mail-agent once the mount is visible:
 
 ```bash
 docker compose up --build -d mail-agent
 python3 scripts/mailagent_status.py --no-run
 ```
 
-### Prevention
-
-- Keep `/Volumes/Synology/mailagent/.mailagent_mount` present with the UUID configured in `[mail_agent.pdf].mount_sentinel_uuid`.
-- Check the mail-agent mount before deployments that touch Python agent code.
+For sentinel and attachment-routing details, see [MAIL_AGENT.md](MAIL_AGENT.md).
 
 ## Mail Dashboard Shows Connection Error
 
@@ -125,13 +116,13 @@ python3 scripts/mailagent_status.py --no-run
 
 - Electron dashboard opens, but shows a connection error.
 - `Run Now` does nothing visible.
-- `python3 scripts/mailagent_status.py --no-run` returns connection refused.
+- `python3 scripts/mailagent_status.py --no-run` fails.
 
 ### Likely Cause
 
-- `finance-api` did not mount `/api/mail/*`, so the request fell through to the PWA HTML route.
+- `finance-api` did not mount `/api/mail/*`.
 - `finance-api` is missing mail-account dependencies such as `tomlkit` or `keyring`.
-- `mail-agent` is not running or port `8080` is not bound for the worker-side trigger/health path.
+- `mail-agent` is not running or port `8080` is not bound for worker health/debug.
 - The NAS bind mount prevented the container from starting.
 - API key mismatch when `FINANCE_API_KEY` is configured.
 
@@ -146,20 +137,14 @@ python3 scripts/mailagent_status.py --no-run
 
 ### Fix
 
-- Rebuild `finance-api` if the logs show `Failed to mount /api/mail router`.
-- Start the mail-agent container after fixing any mount error.
-- Export the same API key used by the container before launching the dashboard dev app:
-
 ```bash
+docker compose up --build -d finance-api mail-agent
 export VITE_FINANCE_API_KEY="$FINANCE_API_KEY"
 cd mail-dashboard
 npm run dev
 ```
 
-### Prevention
-
-- Treat the dashboard as a viewer/control surface only; processing reliability belongs to Docker `mail-agent` plus the host bridge.
-- Keep the finance image installing `finance/requirements.txt`, not a hand-maintained dependency subset.
+Dashboard APIs are under `127.0.0.1:8090/api/mail/*`; mail-agent health/debug is on `127.0.0.1:8080`. See [MAIL_AGENT.md](MAIL_AGENT.md) for the detailed API boundary.
 
 ## Gmail Account Tests Fail With ASCII Or Whitespace Errors
 
@@ -179,6 +164,8 @@ IMAP Connection failed: 'ascii' codec can't encode character '\xa0'
 
 - Paste the App Password normally; current code strips whitespace automatically.
 - If the running container/app is stale, rebuild `finance-api` and restart the dashboard so the normalization patch is active.
+
+See [MAIL_AGENT.md](MAIL_AGENT.md) for Gmail credential handling.
 
 ## Account Saves But Does Not Appear In IMAP Accounts
 
@@ -202,6 +189,8 @@ python3 -c "import tomllib; tomllib.load(open('config/settings.toml','rb')); pri
 - Repair `[mail.imap].accounts` so each entry is a valid inline table.
 - Rebuild/restart `finance-api` after fixing the writer code.
 
+See [MAIL_AGENT.md](MAIL_AGENT.md) for the expected account configuration shape.
+
 ## Saving Mail Settings Fails With `settings.tmp -> settings.toml` Busy
 
 ### Symptoms
@@ -220,6 +209,8 @@ python3 -c "import tomllib; tomllib.load(open('config/settings.toml','rb')); pri
 
 - Use the current build, which falls back to an in-place fsynced write when atomic rename is blocked.
 - Rebuild `finance-api` and retry the save.
+
+See [MAIL_AGENT.md](MAIL_AGENT.md) for mail-dashboard settings details.
 
 ## NAS Deploy Or Sync Fails
 

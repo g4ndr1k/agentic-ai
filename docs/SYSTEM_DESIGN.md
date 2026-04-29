@@ -49,11 +49,8 @@ Bank PDFs
 | `bridge/server.py` | Host HTTP bridge, bearer auth, route dispatch, bridge startup wiring. |
 | `bridge/pdf_handler.py` | PDF job queue, local PDF processing, preflight, status lifecycle, registry updates. |
 | `bridge/pdf_unlock.py` | Password-protected PDF unlock helpers. |
-| `agent/app/classifier.py` | Mail classifier orchestration using registered providers. |
-| `agent/app/imap_source.py` | Agent-side IMAP intake with UID/UIDVALIDITY state, size guards, and attachment extraction metadata. |
-| `agent/app/net_guard.py` | Mail-agent preflight guard for outbound network, bridge health, IMAP reachability, and NAS advisory status. |
-| `agent/app/pdf_router.py` | IMAP PDF attachment unlock, filename validation, NAS mount sentinel validation, collision handling, and routing. |
-| `agent/app/api_mail.py` | Mail dashboard account/query router mounted by `finance/api.py` under `/api/mail/*`. |
+| `agent/` | Dockerized mail worker, IMAP intake, deterministic rule evaluation, classifier providers, attachment routing, and local health/debug API. |
+| `agent/app/api_mail.py` | Dashboard-facing mail API router mounted by `finance/api.py` under `/api/mail/*`. |
 | `agent/app/providers/` | Provider implementations and `PROVIDERS` registry. |
 | `parsers/router.py` | Bank and statement type detection, parser dispatch. |
 | `parsers/*.py` | Bank-specific PDF extraction logic. |
@@ -75,27 +72,11 @@ Bank PDFs
 
 ## Mail Agent Responsibilities
 
-The mail agent runs in Docker and serves its own local health API on `127.0.0.1:8080`. The native dashboard account/query API is mounted by the finance service on `127.0.0.1:8090/api/mail/*`. When `[mail.imap].accounts` contains real account entries, the mail agent polls IMAP directly through `agent/app/imap_source.py`; placeholder accounts such as `YOUR_EMAIL@gmail.com` are ignored and the legacy bridge mail source remains the fallback.
+The mail agent runs in Docker and handles IMAP intake, bridge fallback, deterministic Phase 4A rule evaluation, classifier providers, iMessage/PDF bridge calls, and attachment routing. It serves worker health/debug on `127.0.0.1:8080`; the native dashboard uses the finance API mount at `127.0.0.1:8090/api/mail/*`.
 
-The IMAP path separates message and attachment lifecycles:
+Mail-agent runtime state, including Phase 4A rules, rule actions, audit events, needs-reply rows, and future AI queues, belongs in `data/agent.db`. `data/finance.db` remains reserved for finance/PWM data.
 
-```text
-Message:    fetched -> classified -> recorded -> IMAP checkpoint
-Attachment: pending -> unlocked -> renamed -> routed
-                         -> pending_review / failed_retryable / failed
-```
-
-The IMAP checkpoint is advanced by the orchestrator only after the message result is persisted and attachment rows have been created or processed. Downstream PDF failures do not force the mailbox to re-fetch the same email.
-
-Runtime mode is server-side:
-
-| Mode | Fetch/classify | iMessage | PDF route | Email mutation |
-|---|---:|---:|---:|---:|
-| `observe` | yes | no | no | no |
-| `draft_only` | yes | yes | yes | no |
-| `live` | yes | yes | yes | yes |
-
-Invalid or missing mode falls back to `draft_only`, or `observe` if configured as the safe default. Blocked actions are recorded as `mode_blocked` events.
+For detailed mail-agent architecture, API boundaries, rules, credential handling, safe actions, and troubleshooting, see [MAIL_AGENT.md](MAIL_AGENT.md).
 
 ## Bridge, API, And PWA Responsibilities
 
@@ -277,22 +258,11 @@ Bridge:
 | `GET` | `/pdf/jobs` | List recent PDF jobs. |
 | `POST` | `/pdf/unlock` | Authenticated multipart PDF unlock. Returns unlocked bytes with `X-Was-Encrypted`, `X-Password-Used-Index`, and `X-Page-Count` headers. |
 
-Mail agent API:
+Mail agent:
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/` | Internal stats snapshot. |
-| `GET` | `/api/mail/summary` | Dashboard KPIs, source split, classification counts, action counts, mode. Requires `X-Api-Key` when configured. |
-| `GET` | `/api/mail/recent?limit=20` | Recent processed messages. |
-| `GET` | `/api/mail/accounts` | Config-backed IMAP account list merged with runtime health, excluding placeholder accounts. |
-| `POST` | `/api/mail/accounts/test` | Gmail IMAP login test; strips pasted whitespace from App Passwords before auth. |
-| `POST` | `/api/mail/accounts` | Create account, persist settings, and store credential. |
-| `PATCH` | `/api/mail/accounts/{account_id}` | Update account metadata; re-tests new passwords before save. |
-| `PATCH` | `/api/mail/accounts/{account_id}/enabled` | Soft-enable or disable polling. |
-| `DELETE` | `/api/mail/accounts/{account_id}` | Soft-delete account; optional secret purge. |
-| `POST` | `/api/mail/accounts/{account_id}/reactivate` | Re-enable a soft-deleted account. |
-| `POST` | `/api/mail/config/reload` | Mark agent config reload pending. |
-| `POST` | `/api/mail/run` | Queue an out-of-band scan cycle. |
+- Worker health/debug is on `127.0.0.1:8080`.
+- Dashboard-facing APIs are mounted by the finance API under `127.0.0.1:8090/api/mail/*`.
+- Detailed endpoint contracts live in [MAIL_AGENT.md](MAIL_AGENT.md).
 
 Finance API:
 
