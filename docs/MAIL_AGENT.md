@@ -468,6 +468,7 @@ Default config:
 enabled = true
 require_approval_for_ai_actions = true
 approval_expiry_hours = 72
+started_stale_after_minutes = 30
 allow_bulk_approve = false
 ```
 
@@ -492,6 +493,26 @@ POST /api/mail/approvals/{approval_id}/expire
 ```
 
 Execution support in this phase is limited to safe mailbox action attempts through the existing gated mutation path plus `add_to_needs_reply`. Unsupported approved actions are marked `blocked` and audited.
+
+Approval detail responses include derived `execution_state`, `expires_at`, `approved_at`, `execution_started_at`, `execution_finished_at`, `blocked_reason`, `execution_error`, `gate_result`, `audit_event_ids`, and chronological `events`. The operator-facing states are `not_requested`, `started`, `executed`, `blocked`, `failed`, `expired`, `rejected`, and `stuck`.
+
+`stuck` is read-only detection for approvals that reached `execution_status='started'` but did not finish before `started_stale_after_minutes`. The optional mark-failed endpoint is valid only for stale started approvals and records an audit event without retrying execution.
+
+Phase 4D.3 adds read-only preview fields to list and detail responses: `preview_title`, `preview_summary`, `message_context`, `trigger_context`, `rule_context`, `risk_level`, `risk_reasons`, `reversibility`, `operator_guidance`, `would_execute_now`, `would_be_blocked_now`, and `current_gate_preview`. These fields are for operator review only. They do not approve, reserve, start, retry, or execute an action.
+
+The Control Center should be read before approval: confirm why the item appeared, what trigger/rule matched, which sender/subject/account/folder/UID is affected, what action/target/value is proposed, and whether the current gate says dry-run, blocked by config, unsupported, terminal, stale/manual-review, or statically ready. `capability='unknown'` is expected when preview cannot know IMAP capabilities cheaply without a live mailbox transaction.
+
+Phase 4D.4 adds lifecycle hygiene:
+
+```text
+GET  /api/mail/approvals/cleanup/preview
+POST /api/mail/approvals/cleanup
+POST /api/mail/approvals/{approval_id}/archive
+POST /api/mail/approvals/{approval_id}/unarchive
+GET  /api/mail/approvals/export?format=json
+```
+
+Cleanup is disabled by default. The preview is read-only. Explicit cleanup may expire old pending approvals and archive old terminal approvals, but started/stuck approvals are excluded and hard delete is not used in this phase. Archive hides terminal approvals from the active Control Center; audit history remains retained and exportable. JSON export includes sanitized approval/message context and optional events, not raw email bodies or secrets.
 
 ---
 

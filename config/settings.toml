@@ -36,7 +36,13 @@ dry_run_default = true
 enabled = true
 require_approval_for_ai_actions = true
 approval_expiry_hours = 72
+default_expiry_minutes = 1440
+started_stale_after_minutes = 30
 allow_bulk_approve = false
+auto_expire_pending_after_hours = 24
+archive_terminal_after_days = 30
+retain_audit_days = 365
+cleanup_enabled = false
 
 [imessage]
 primary_recipient = "emanuel.adrianto@icloud.com"

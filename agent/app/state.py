@@ -327,12 +327,14 @@ class AgentState:
                 ai_confidence REAL,
                 status TEXT NOT NULL,
                 requested_at TEXT NOT NULL,
-                decided_at TEXT,
-                decided_by TEXT,
-                decision_note TEXT,
-                executed_at TEXT,
-                execution_status TEXT,
+	                decided_at TEXT,
+	                decided_by TEXT,
+	                decision_note TEXT,
+	                execution_started_at TEXT,
+	                executed_at TEXT,
+	                execution_status TEXT,
                 execution_result_json TEXT,
+                archived_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CHECK(status IN (
@@ -389,6 +391,10 @@ class AgentState:
         self._add_column_if_missing(
             "mail_ai_trigger_rules", "cooldown_seconds",
             "INTEGER NOT NULL DEFAULT 3600")
+        self._add_column_if_missing(
+            "mail_action_approvals", "execution_started_at", "TEXT")
+        self._add_column_if_missing(
+            "mail_action_approvals", "archived_at", "TEXT")
         with self._connect() as conn:
             conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_ai_triggers_trigger_id
@@ -931,6 +937,18 @@ class AgentState:
 
     # ── Phase 4D.1 operator approvals ─────────────────────────────────────
 
+    def _approval_column_sql(self) -> str:
+        return """
+            approval_id, source_type, source_id, message_key,
+            account_id, folder, uidvalidity, imap_uid, subject,
+            sender, received_at, proposed_action_type,
+            proposed_target, proposed_value_json, reason,
+            ai_category, ai_urgency_score, ai_confidence, status,
+            requested_at, decided_at, decided_by, decision_note,
+            execution_started_at, executed_at, execution_status,
+            execution_result_json, archived_at, created_at, updated_at
+        """
+
     def create_action_approval(
             self, *, source_type: str, source_id: str | None,
             message: dict, action: dict, reason: str | None = None,
@@ -992,8 +1010,8 @@ class AgentState:
                         :requested_at, :created_at, :updated_at)
             """, payload)
             inserted = conn.execute("SELECT changes()").fetchone()[0] == 1
-            row = conn.execute("""
-                SELECT * FROM mail_action_approvals
+            row = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
                 WHERE source_type = ?
                   AND COALESCE(source_id, '') = COALESCE(?, '')
                   AND COALESCE(message_key, '') = COALESCE(?, '')
@@ -1023,8 +1041,8 @@ class AgentState:
         ).isoformat()
         now = self._now()
         with self._connect() as conn:
-            rows = conn.execute("""
-                SELECT * FROM mail_action_approvals
+            rows = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
                 WHERE status = 'pending' AND requested_at < ?
             """, (cutoff,)).fetchall()
             for row in rows:
@@ -1047,6 +1065,7 @@ class AgentState:
     def list_action_approvals(
             self, *, status: str | None = "pending",
             source_type: str | None = None, limit: int = 50,
+            offset: int = 0, include_archived: bool = False,
             expiry_hours: int = 72) -> list[dict]:
         self.expire_pending_approvals(expiry_hours)
         clauses = []
@@ -1057,22 +1076,24 @@ class AgentState:
         if source_type:
             clauses.append("source_type = ?")
             params.append(source_type)
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(f"""
-                SELECT * FROM mail_action_approvals
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
                 {where}
                 ORDER BY requested_at DESC
-                LIMIT ?
-            """, (*params, int(limit))).fetchall()
+                LIMIT ? OFFSET ?
+            """, (*params, int(limit), int(offset))).fetchall()
         return [self._approval_from_row(row) for row in rows]
 
     def get_action_approval(self, approval_id: str) -> dict | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM mail_action_approvals WHERE approval_id = ?",
-                (approval_id,),
-            ).fetchone()
+            row = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
+                WHERE approval_id = ?
+            """, (approval_id,)).fetchone()
         return self._approval_from_row(row) if row else None
 
     def approve_action_approval(
@@ -1116,12 +1137,14 @@ class AgentState:
         with self._connect() as conn:
             conn.execute("""
                 UPDATE mail_action_approvals
-                SET execution_status = 'started', updated_at = ?
+                SET execution_status = 'started',
+                    execution_started_at = ?,
+                    updated_at = ?
                 WHERE approval_id = ?
                   AND status = 'approved'
                   AND execution_status IS NULL
                   AND executed_at IS NULL
-            """, (now, approval_id))
+            """, (now, now, approval_id))
             changed = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()
         approval = self.get_action_approval(approval_id)
@@ -1168,6 +1191,285 @@ class AgentState:
         self.write_approval_event(
             updated, event, execution_status, result or {})
         return updated
+
+    def mark_stale_started_approval_failed(
+            self, approval_id: str, *, stale_after_minutes: int = 30,
+            decided_by: str = "operator",
+            reason: str = "Execution started but did not finish") -> dict:
+        approval = self.get_action_approval(approval_id)
+        if not approval:
+            raise KeyError("Approval not found")
+        if not self.approval_is_stale_started(
+                approval, stale_after_minutes=stale_after_minutes):
+            raise ValueError("Only stale started approvals can be marked failed")
+        now = self._now()
+        result = {
+            "error": reason,
+            "marked_failed_by": decided_by,
+            "stale_after_minutes": stale_after_minutes,
+            "execution_started_at": approval.get("execution_started_at"),
+            "no_retry_attempted": True,
+        }
+        with self._connect() as conn:
+            conn.execute("""
+                UPDATE mail_action_approvals
+                SET status = 'failed',
+                    executed_at = ?,
+                    execution_status = 'failed',
+                    execution_result_json = ?,
+                    updated_at = ?
+                WHERE approval_id = ?
+                  AND status = 'approved'
+                  AND execution_status = 'started'
+            """, (
+                now,
+                json.dumps(result, sort_keys=True),
+                now,
+                approval_id,
+            ))
+            changed = conn.execute("SELECT changes()").fetchone()[0]
+            conn.commit()
+        if changed != 1:
+            raise ValueError("Only stale started approvals can be marked failed")
+        updated = self.get_action_approval(approval_id)
+        self.write_approval_event(
+            updated,
+            "approval_marked_failed",
+            "failed",
+            result,
+        )
+        return updated
+
+    def approval_is_terminal(self, approval: dict) -> bool:
+        return approval.get("status") in {
+            "executed", "blocked", "failed", "rejected", "expired",
+        }
+
+    def archive_action_approval(
+            self, approval_id: str, *, decided_by: str = "operator") -> dict:
+        approval = self.get_action_approval(approval_id)
+        if not approval:
+            raise KeyError("Approval not found")
+        if not self.approval_is_terminal(approval):
+            raise ValueError("Only terminal approvals can be archived")
+        if approval.get("execution_status") == "started":
+            raise ValueError("Started approvals cannot be archived")
+        now = self._now()
+        with self._connect() as conn:
+            conn.execute("""
+                UPDATE mail_action_approvals
+                SET archived_at = COALESCE(archived_at, ?), updated_at = ?
+                WHERE approval_id = ?
+                  AND status IN ('executed','blocked','failed','rejected','expired')
+                  AND COALESCE(execution_status, '') != 'started'
+            """, (now, now, approval_id))
+            changed = conn.execute("SELECT changes()").fetchone()[0]
+            conn.commit()
+        if changed != 1:
+            raise ValueError("Only terminal approvals can be archived")
+        updated = self.get_action_approval(approval_id)
+        self.write_approval_event(
+            updated, "approval_archived", "archived",
+            {"archived_by": decided_by})
+        return updated
+
+    def unarchive_action_approval(
+            self, approval_id: str, *, decided_by: str = "operator") -> dict:
+        approval = self.get_action_approval(approval_id)
+        if not approval:
+            raise KeyError("Approval not found")
+        if not approval.get("archived_at"):
+            return approval
+        now = self._now()
+        with self._connect() as conn:
+            conn.execute("""
+                UPDATE mail_action_approvals
+                SET archived_at = NULL, updated_at = ?
+                WHERE approval_id = ?
+            """, (now, approval_id))
+            changed = conn.execute("SELECT changes()").fetchone()[0]
+            conn.commit()
+        if changed != 1:
+            raise ValueError("Approval could not be unarchived")
+        updated = self.get_action_approval(approval_id)
+        self.write_approval_event(
+            updated, "approval_unarchived", "active",
+            {"unarchived_by": decided_by})
+        return updated
+
+    def approval_cleanup_candidates(
+            self, *, expire_after_hours: int,
+            archive_after_days: int, retain_audit_days: int,
+            limit_examples: int = 5) -> dict:
+        now = datetime.now(timezone.utc)
+        expire_cutoff = (now - timedelta(hours=expire_after_hours)).isoformat()
+        archive_cutoff = (now - timedelta(days=archive_after_days)).isoformat()
+        retain_cutoff = (now - timedelta(days=retain_audit_days)).isoformat()
+        terminal = "'executed','blocked','failed','rejected','expired'"
+        with self._connect() as conn:
+            expire_rows = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
+                WHERE status = 'pending'
+                  AND requested_at < ?
+                  AND execution_status IS NULL
+                ORDER BY requested_at ASC
+            """, (expire_cutoff,)).fetchall()
+            archive_rows = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
+                WHERE status IN ({terminal})
+                  AND archived_at IS NULL
+                  AND COALESCE(executed_at, decided_at, requested_at) < ?
+                  AND COALESCE(execution_status, '') != 'started'
+                ORDER BY COALESCE(executed_at, decided_at, requested_at) ASC
+            """, (archive_cutoff,)).fetchall()
+            hard_delete_rows = conn.execute(f"""
+                SELECT {self._approval_column_sql()} FROM mail_action_approvals
+                WHERE status IN ({terminal})
+                  AND archived_at IS NOT NULL
+                  AND archived_at < ?
+                  AND COALESCE(execution_status, '') != 'started'
+                ORDER BY archived_at ASC
+            """, (retain_cutoff,)).fetchall()
+            stuck_count = conn.execute("""
+                SELECT COUNT(*) FROM mail_action_approvals
+                WHERE status = 'approved' AND execution_status = 'started'
+            """).fetchone()[0]
+        expire = [self._approval_from_row(row) for row in expire_rows]
+        archive = [self._approval_from_row(row) for row in archive_rows]
+        hard_delete = [self._approval_from_row(row) for row in hard_delete_rows]
+        return {
+            "expire_pending": expire,
+            "archive_terminal": archive,
+            "hard_delete": hard_delete,
+            "stuck_or_started_count": int(stuck_count),
+            "examples": {
+                "expire_pending": expire[:limit_examples],
+                "archive_terminal": archive[:limit_examples],
+                "hard_delete": hard_delete[:limit_examples],
+            },
+        }
+
+    def cleanup_action_approvals(
+            self, *, expire_after_hours: int, archive_after_days: int,
+            retain_audit_days: int, hard_delete: bool = False) -> dict:
+        candidates = self.approval_cleanup_candidates(
+            expire_after_hours=expire_after_hours,
+            archive_after_days=archive_after_days,
+            retain_audit_days=retain_audit_days,
+        )
+        now = self._now()
+        expired_ids = [a["approval_id"] for a in candidates["expire_pending"]]
+        archived_ids = [a["approval_id"] for a in candidates["archive_terminal"]]
+        hard_deleted_ids = (
+            [a["approval_id"] for a in candidates["hard_delete"]]
+            if hard_delete else []
+        )
+        with self._connect() as conn:
+            for approval_id in expired_ids:
+                conn.execute("""
+                    UPDATE mail_action_approvals
+                    SET status = 'expired', updated_at = ?
+                    WHERE approval_id = ?
+                      AND status = 'pending'
+                      AND execution_status IS NULL
+                """, (now, approval_id))
+            for approval_id in archived_ids:
+                conn.execute("""
+                    UPDATE mail_action_approvals
+                    SET archived_at = COALESCE(archived_at, ?), updated_at = ?
+                    WHERE approval_id = ?
+                      AND status IN ('executed','blocked','failed','rejected','expired')
+                      AND COALESCE(execution_status, '') != 'started'
+                """, (now, now, approval_id))
+            if hard_delete:
+                for approval_id in hard_deleted_ids:
+                    conn.execute("""
+                        DELETE FROM mail_action_approvals
+                        WHERE approval_id = ?
+                          AND status IN ('executed','blocked','failed','rejected','expired')
+                          AND archived_at IS NOT NULL
+                          AND COALESCE(execution_status, '') != 'started'
+                    """, (approval_id,))
+            conn.commit()
+        for approval in candidates["expire_pending"]:
+            approval["status"] = "expired"
+            self.write_approval_event(
+                approval, "approval_cleanup_expired", "expired",
+                {"cleanup": True, "auto_expire_pending_after_hours": expire_after_hours})
+        for approval in candidates["archive_terminal"]:
+            approval["archived_at"] = now
+            self.write_approval_event(
+                approval, "approval_cleanup_archived", "archived",
+                {"cleanup": True, "archive_terminal_after_days": archive_after_days})
+        return {
+            "expired_ids": expired_ids,
+            "archived_ids": archived_ids,
+            "hard_deleted_ids": hard_deleted_ids,
+            "stuck_or_started_count": candidates["stuck_or_started_count"],
+        }
+
+    def approval_is_stale_started(
+            self, approval: dict, *, stale_after_minutes: int = 30) -> bool:
+        if approval.get("status") != "approved":
+            return False
+        if approval.get("execution_status") != "started":
+            return False
+        started_at = approval.get("execution_started_at")
+        if not started_at:
+            return False
+        try:
+            started = datetime.fromisoformat(started_at)
+        except ValueError:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - started
+        return age >= timedelta(minutes=stale_after_minutes)
+
+    def approval_events(self, approval: dict) -> list[dict]:
+        approval_id = approval.get("approval_id")
+        message_key = approval.get("message_key")
+        source_id = approval.get("source_id")
+        params = [
+            f'%"approval_id": "{approval_id}"%',
+            message_key or approval_id,
+        ]
+        clauses = [
+            "details_json LIKE ?",
+            "message_id = ?",
+        ]
+        if message_key and source_id:
+            clauses.append(
+                "(event_type = 'ai_trigger_matched' AND message_id = ? "
+                "AND details_json LIKE ?)"
+            )
+            params.extend([message_key, f'%"trigger_id": "{source_id}"%'])
+        with self._connect() as conn:
+            rows = conn.execute(f"""
+                SELECT id, message_id, account_id, bridge_id, rule_id,
+                       action_type, event_type, outcome, details_json,
+                       created_at
+                FROM mail_processing_events
+                WHERE {" OR ".join(clauses)}
+                ORDER BY id ASC
+            """, params).fetchall()
+        keys = [
+            "id", "message_id", "account_id", "bridge_id", "rule_id",
+            "action_type", "event_type", "outcome", "details_json",
+            "created_at",
+        ]
+        events = []
+        seen = set()
+        for row in rows:
+            event = dict(zip(keys, row))
+            if event["id"] in seen:
+                continue
+            seen.add(event["id"])
+            details = json.loads(event["details_json"] or "{}")
+            event["details"] = details
+            event.pop("details_json", None)
+            events.append(event)
+        return events
 
     def write_approval_event(
             self, approval: dict, event_type: str, outcome: str,
@@ -1236,10 +1538,10 @@ class AgentState:
             "sender", "received_at", "proposed_action_type",
             "proposed_target", "proposed_value_json", "reason",
             "ai_category", "ai_urgency_score", "ai_confidence", "status",
-            "requested_at", "decided_at", "decided_by", "decision_note",
-            "executed_at", "execution_status", "execution_result_json",
-            "created_at", "updated_at",
-        ]
+	            "requested_at", "decided_at", "decided_by", "decision_note",
+	            "execution_started_at", "executed_at", "execution_status",
+	            "execution_result_json", "archived_at", "created_at", "updated_at",
+	        ]
         payload = dict(zip(keys, row))
         payload["proposed_value"] = (
             json.loads(payload["proposed_value_json"])

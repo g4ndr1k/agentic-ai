@@ -714,3 +714,9 @@ Phase 4C.3A AI triggers are also preview-only by design. A matched AI trigger sh
 Phase 4D.1 adds Control Center approvals, but approval is still not execution. A matched AI trigger should create a pending `mail_action_approvals` row in `data/agent.db`; the operator must approve it and then explicitly run an execution attempt. If the result is `blocked`, inspect the execution status before treating it as a failure: common expected values are `mode_blocked`, `mutation_disabled`, `dry_run`, `unsupported`, and UIDVALIDITY/capability failures from the IMAP layer.
 
 There is no bulk approval path. Unsupported actions such as `send_imessage`, reply, forward, delete, expunge, unsubscribe, and webhooks should remain blocked even after approval.
+
+If an approval shows `execution_state='stuck'`, the API detected `execution_status='started'` older than `[mail.approvals].started_stale_after_minutes` without a terminal result. This is intentionally read-only detection; it does not retry. Review `/api/mail/approvals/{approval_id}` and `/api/mail/approvals/{approval_id}/events`, check container logs for the same timestamp, then use the Control Center **Mark failed after review** action if the worker did not finish. That endpoint writes an audit event and does not execute or retry the action.
+
+Phase 4D.3 approval preview may show `capability='unknown'` when static gates are otherwise ready. That means the preview did not open a live IMAP transaction just to inspect mailbox capability. It is expected for read-only preview; the actual gated execution attempt still performs the normal UIDVALIDITY and capability checks before any mutation.
+
+If a terminal approval is missing from the active Control Center, check History mode with **Include archived** enabled or query `/api/mail/approvals?include_archived=true`. Archive only hides terminal rows from the active view; it does not delete the approval or its audit events.

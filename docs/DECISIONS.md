@@ -230,3 +230,65 @@ Approval keeps the human operator in the path while preserving the existing safe
 - Bulk approval is intentionally absent.
 - Rejected, expired, already executed, blocked, or failed approval rows are terminal for execution.
 - Unsupported actions such as `send_imessage`, reply, forward, delete, expunge, unsubscribe, and webhooks remain blocked even after approval.
+
+## Detect Stuck Approval Execution Without Retrying
+
+### Decision
+
+Phase 4D.2 marks stale approval attempts as `stuck` in API responses when `execution_status='started'` is older than `[mail.approvals].started_stale_after_minutes`. The system does not automatically retry stuck approvals.
+
+### Context
+
+Phase 4D.1 deliberately made execution-start conditional so a crash after start cannot lead to a duplicate mailbox mutation. That created a recoverability question for rows that start but never receive a terminal result.
+
+### Rationale
+
+Stuck detection gives the operator visibility without weakening the one-attempt safety boundary. A manual mark-failed path can close the audit trail after review, but it does not execute or retry anything.
+
+### Consequences
+
+- Stale started approvals are surfaced as `execution_state='stuck'`.
+- Operators must review logs/audit before marking a stuck item failed.
+- Automatic retry remains out of scope.
+
+## Approval Preview Is Read-Only
+
+### Decision
+
+Phase 4D.3 approval previews are derived API fields only. Listing or viewing an approval may explain the message, trigger/rule source, proposed action, risk level, reversibility, and current gate result, but it must not reserve, start, retry, approve, execute, or write execution audit events.
+
+### Context
+
+Operators need enough context to decide safely before approving an AI-triggered action. The preview must answer what would happen under current config without weakening the Phase 4D one-attempt boundary.
+
+### Rationale
+
+The preview uses stored approval/message metadata, existing audit event details, and static config gates. It does not open long IMAP transactions for capability checks; if capability cannot be known cheaply, the API reports `capability='unknown'` and explains why.
+
+### Consequences
+
+- `GET /api/mail/approvals` and `GET /api/mail/approvals/{approval_id}` can be called repeatedly without changing approval state.
+- Preview never sets `execution_status='started'`.
+- Preview never creates execution audit events.
+- Capability-unknown is an expected preview result, not a failure.
+
+## Approval Cleanup Is Explicit And Conservative
+
+### Decision
+
+Phase 4D.4 cleanup is an operator-initiated lifecycle operation with a read-only preview first. Cleanup may expire old pending approvals and archive old terminal approvals, but it must not approve, execute, retry, or resolve stuck items automatically.
+
+### Context
+
+Approval history needs to stay reviewable without leaving the active Control Center cluttered forever. The system also needs exportable audit data before any live mutation work is considered.
+
+### Rationale
+
+Archiving hides terminal approvals from the active view without deleting audit records. Cleanup is disabled by default and can be run only through an explicit endpoint or operator action. Hard delete is intentionally not used in Phase 4D.4.
+
+### Consequences
+
+- Pending approvals can be expired by cleanup only when older than the configured window.
+- Started/stuck approvals are reported and excluded.
+- Terminal approvals can be archived/unarchived one at a time or archived by explicit cleanup.
+- Export returns sanitized approval records and optional events, not raw email bodies or secrets.

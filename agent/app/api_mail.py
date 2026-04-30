@@ -9,6 +9,7 @@ import logging
 import hmac
 import imaplib
 import json
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -25,6 +26,7 @@ from .rules import (
     validate_operator,
     _execute_action,
     _execute_mutation_action,
+    _mutation_preview_metadata,
 )
 from .imap_source import probe_capabilities
 from .config_manager import (
@@ -195,6 +197,12 @@ class MutationPreview(BaseModel):
     value_json: Optional[Any] = None
     dry_run: Optional[bool] = None
 
+class ApprovalCleanupRequest(BaseModel):
+    force: bool = False
+
+class ApprovalArchiveRequest(BaseModel):
+    decided_by: Optional[str] = Field("operator", max_length=200)
+
 class AiSettingsPatch(BaseModel):
     enabled: Optional[bool] = None
     provider: Optional[str] = None
@@ -235,6 +243,13 @@ class AiTriggerPreview(BaseModel):
 
 class ApprovalDecision(BaseModel):
     decision_note: Optional[str] = Field(None, max_length=1000)
+    decided_by: Optional[str] = Field("operator", max_length=200)
+
+class ApprovalMarkFailed(BaseModel):
+    reason: Optional[str] = Field(
+        "Execution started but did not finish",
+        max_length=1000,
+    )
     decided_by: Optional[str] = Field("operator", max_length=200)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -365,12 +380,435 @@ def _classification_for_trigger_preview(
 
 def _approval_settings(settings: dict) -> dict[str, Any]:
     cfg = settings.get("mail", {}).get("approvals", {})
+    expiry_hours = int(cfg.get("approval_expiry_hours", 72))
     return {
         "enabled": bool(cfg.get("enabled", True)),
         "require_approval_for_ai_actions": True,
-        "approval_expiry_hours": int(cfg.get("approval_expiry_hours", 72)),
+        "approval_expiry_hours": expiry_hours,
+        "default_expiry_minutes": int(
+            cfg.get("default_expiry_minutes", expiry_hours * 60)),
+        "started_stale_after_minutes": int(
+            cfg.get("started_stale_after_minutes", 30)),
         "allow_bulk_approve": False,
+        "auto_expire_pending_after_hours": int(
+            cfg.get("auto_expire_pending_after_hours", 24)),
+        "archive_terminal_after_days": int(
+            cfg.get("archive_terminal_after_days", 30)),
+        "retain_audit_days": int(cfg.get("retain_audit_days", 365)),
+        "cleanup_enabled": bool(cfg.get("cleanup_enabled", False)),
     }
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+def _iso_add_hours(value: str | None, hours: int) -> str | None:
+    dt = _parse_dt(value)
+    if not dt:
+        return None
+    return (dt + timedelta(hours=hours)).isoformat()
+
+def _approval_gate_result(approval: dict) -> dict[str, Any] | None:
+    result = approval.get("execution_result") or {}
+    nested = result.get("result") if isinstance(result, dict) else None
+    if isinstance(nested, dict):
+        return nested
+    if isinstance(result, dict) and result.get("status"):
+        return result
+    return None
+
+def _approval_blocked_reason(approval: dict) -> str | None:
+    result = approval.get("execution_result") or {}
+    if not isinstance(result, dict):
+        return None
+    if result.get("reason"):
+        return str(result["reason"])
+    nested = result.get("result")
+    if isinstance(nested, dict):
+        return (
+            nested.get("reason")
+            or nested.get("gate_status")
+            or nested.get("status")
+        )
+    if approval.get("status") == "blocked":
+        return approval.get("execution_status")
+    return None
+
+def _approval_execution_error(approval: dict) -> str | None:
+    result = approval.get("execution_result") or {}
+    if not isinstance(result, dict):
+        return None
+    if result.get("error"):
+        return str(result["error"])
+    nested = result.get("result")
+    if isinstance(nested, dict) and nested.get("error"):
+        return str(nested["error"])
+    return None
+
+def _approval_execution_state(
+        state: AgentState, approval: dict, stale_minutes: int) -> str:
+    status = approval.get("status")
+    execution_status = approval.get("execution_status")
+    if status == "rejected":
+        return "rejected"
+    if status == "expired":
+        return "expired"
+    if status == "executed":
+        return "executed"
+    if status == "blocked":
+        return "blocked"
+    if status == "failed":
+        return "failed"
+    if execution_status == "started":
+        return (
+            "stuck"
+            if state.approval_is_stale_started(
+                approval, stale_after_minutes=stale_minutes)
+            else "started"
+        )
+    return "not_requested"
+
+_PHASE_BLOCKED_ACTIONS = {
+    "send_imessage",
+    "reply",
+    "auto_reply",
+    "forward",
+    "delete",
+    "expunge",
+    "unsubscribe",
+    "webhook",
+    "external_webhook",
+    "notify_dashboard",
+}
+
+_DANGEROUS_ACTIONS = {
+    "delete",
+    "expunge",
+    "reply",
+    "auto_reply",
+    "forward",
+    "webhook",
+    "external_webhook",
+    "unsubscribe",
+    "send_imessage",
+}
+
+def _safe_preview_text(value: Any, limit: int = 160) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).replace("\x00", "").split())
+    if len(text) > limit:
+        return text[:limit - 1].rstrip() + "..."
+    return text
+
+def _approval_message_context(approval: dict) -> dict[str, Any]:
+    return {
+        "sender": _safe_preview_text(approval.get("sender"), 160),
+        "subject": _safe_preview_text(approval.get("subject"), 180),
+        "received_at": approval.get("received_at"),
+        "account_id": approval.get("account_id"),
+        "account_label": approval.get("account_id"),
+        "folder": approval.get("folder"),
+        "imap_uid": approval.get("imap_uid"),
+        "uidvalidity": approval.get("uidvalidity"),
+        "classification_category": approval.get("ai_category"),
+        "ai_summary": _safe_preview_text(approval.get("reason"), 240),
+        "urgency_score": approval.get("ai_urgency_score"),
+        "confidence": approval.get("ai_confidence"),
+    }
+
+def _approval_trigger_context(
+        approval: dict, events: list[dict] | None = None) -> dict[str, Any] | None:
+    if approval.get("source_type") != "ai_trigger":
+        return None
+    details = None
+    for event in events or []:
+        if event.get("event_type") != "ai_trigger_matched":
+            continue
+        candidate = event.get("details") or {}
+        if candidate.get("trigger_id") == approval.get("source_id"):
+            details = candidate
+            break
+    planned_actions = details.get("planned_actions") if details else None
+    matched_conditions = details.get("matched_conditions") if details else None
+    return {
+        "trigger_id": approval.get("source_id"),
+        "trigger_name": (
+            details.get("trigger_name") if details else approval.get("source_id")),
+        "matched_category": (
+            details.get("category") if details else approval.get("ai_category")),
+        "urgency_score": (
+            details.get("urgency_score") if details else approval.get("ai_urgency_score")),
+        "confidence": (
+            details.get("confidence") if details else approval.get("ai_confidence")),
+        "planned_action": {
+            "action_type": approval.get("proposed_action_type"),
+            "target": approval.get("proposed_target"),
+            "value": approval.get("proposed_value"),
+        },
+        "planned_actions": planned_actions,
+        "matched_conditions": matched_conditions,
+        "reason": _safe_preview_text(
+            details.get("reason") if details else approval.get("reason"), 240),
+        "dry_run": details.get("dry_run") if details else True,
+    }
+
+def _approval_rule_context(approval: dict) -> dict[str, Any] | None:
+    if approval.get("source_type") not in {"rule", "rule_preview"}:
+        return None
+    return {
+        "rule_id": approval.get("source_id"),
+        "rule_name": approval.get("source_id"),
+        "matched_conditions": None,
+        "planned_action": {
+            "action_type": approval.get("proposed_action_type"),
+            "target": approval.get("proposed_target"),
+            "value": approval.get("proposed_value"),
+        },
+        "stop_processing": None,
+        "skip_ai": None,
+    }
+
+def _approval_current_gate_preview(
+        state: AgentState, approval: dict, settings: dict,
+        execution_state: str, expires_at: str | None) -> dict[str, Any]:
+    action_type = str(approval.get("proposed_action_type") or "")
+    approval_cfg = _approval_settings(settings)
+    notes: list[str] = []
+    base = {
+        "would_execute_now": False,
+        "would_be_blocked_now": True,
+        "gate": "blocked",
+        "reason": "Approval cannot execute in its current state.",
+        "capability": "not_applicable",
+        "notes": notes,
+    }
+    if not approval_cfg["enabled"]:
+        return {
+            **base,
+            "gate": "approval_disabled",
+            "reason": "[mail.approvals].enabled=false",
+            "notes": ["Approval queue is disabled by config."],
+        }
+    if execution_state == "stuck":
+        return {
+            **base,
+            "gate": "manual_review_required",
+            "reason": "execution_status='started' is stale",
+            "notes": ["Do not retry automatically. Mark failed only after review."],
+        }
+    if approval.get("execution_status") == "started":
+        return {
+            **base,
+            "gate": "execution_started",
+            "reason": "A gated attempt is already marked started.",
+            "notes": ["Wait for a terminal audit event before taking action."],
+        }
+    status = approval.get("status")
+    if status == "rejected":
+        return {**base, "gate": "rejected", "reason": "Approval was rejected."}
+    if status == "expired" or (
+            status == "pending" and _parse_dt(expires_at)
+            and _parse_dt(expires_at) < datetime.now(timezone.utc)):
+        return {**base, "gate": "expired", "reason": "Approval is expired."}
+    if status in {"executed", "blocked", "failed"}:
+        return {
+            **base,
+            "gate": "terminal",
+            "reason": f"Approval already reached terminal status '{status}'.",
+        }
+    if status not in {"pending", "approved"}:
+        return {**base, "gate": "invalid_status", "reason": f"Unsupported approval status: {status}"}
+    if action_type in _PHASE_BLOCKED_ACTIONS or action_type not in ACTIVE_ACTIONS:
+        return {
+            **base,
+            "gate": "unsupported",
+            "reason": f"{action_type} remains blocked in Phase 4D.",
+            "notes": ["Unsupported action remains blocked even after approval."],
+        }
+    if action_type == "add_to_needs_reply":
+        return {
+            **base,
+            "would_execute_now": True,
+            "would_be_blocked_now": False,
+            "gate": "ready",
+            "reason": "Approval would authorize one gated needs-reply queue update.",
+            "capability": "not_applicable",
+            "notes": ["This does not mutate the mailbox."],
+        }
+    if action_type not in MUTATION_ACTIONS:
+        return {
+            **base,
+            "gate": "unsupported",
+            "reason": f"Unsupported approval action: {action_type}",
+            "notes": ["No execution path is available for this action."],
+        }
+
+    cfg = settings.get("mail", {}).get("imap_mutations", {})
+    message = _approval_message(approval)
+    action = _approval_action(approval)
+    preview = _mutation_preview_metadata(
+        message,
+        action,
+        {
+            "mode": _resolve_mode(settings),
+            "config": cfg,
+            "dry_run": bool(cfg.get("dry_run_default", True)),
+        },
+    )
+    gate = str(preview.get("gate_status") or "blocked")
+    reason = str(preview.get("reason") or gate)
+    capability = "unknown" if gate == "ready" else "not_checked"
+    notes = []
+    if gate == "ready":
+        notes.append(
+            "Static gates allow an attempt, but IMAP capability is not probed for preview.")
+    else:
+        notes.append("Approval would authorize an attempt, but current config would block mutation.")
+    if gate == "dry_run":
+        notes.append("No mailbox change would occur under current settings.")
+    return {
+        "would_execute_now": bool(preview.get("would_execute")),
+        "would_be_blocked_now": not bool(preview.get("would_execute")),
+        "gate": gate,
+        "reason": reason,
+        "capability": capability,
+        "notes": notes,
+        "mode": _resolve_mode(settings),
+        "mutation_enabled": bool(cfg.get("enabled", False)),
+        "dry_run_default": bool(cfg.get("dry_run_default", True)),
+    }
+
+def _approval_risk(
+        approval: dict, gate_preview: dict[str, Any]) -> tuple[str, list[str], str]:
+    action_type = str(approval.get("proposed_action_type") or "")
+    reasons: list[str] = []
+    if action_type in _DANGEROUS_ACTIONS:
+        level = "dangerous_blocked"
+        reasons.append(f"{action_type} can create irreversible or external effects.")
+    elif action_type in _PHASE_BLOCKED_ACTIONS or action_type not in ACTIVE_ACTIONS:
+        level = "unsupported_blocked"
+        reasons.append(f"{action_type} is unsupported in the approval executor.")
+    elif action_type == "move_to_folder":
+        level = "caution"
+        reasons.append("Moving mail changes folder placement and may be disruptive.")
+    elif action_type in {"mark_read", "mark_unread", "mark_flagged", "unmark_flagged", "add_label"}:
+        level = "safe_reversible"
+        reasons.append("This action is usually reversible, but still requires the configured gate.")
+    elif action_type == "add_to_needs_reply":
+        level = "safe_readonly"
+        reasons.append("This updates the local needs-reply queue and does not mutate the mailbox.")
+    else:
+        level = "caution"
+        reasons.append("Review the proposed action before approval.")
+    if gate_preview.get("would_be_blocked_now"):
+        reasons.append(f"Current gate preview blocks execution: {gate_preview.get('reason')}")
+    if gate_preview.get("capability") == "unknown":
+        reasons.append("Mailbox capability is unknown because preview does not open IMAP transactions.")
+    reversibility = {
+        "safe_readonly": "No mailbox mutation.",
+        "safe_reversible": "Generally reversible in the mailbox UI.",
+        "caution": "May require manual mailbox correction.",
+        "dangerous_blocked": "Potentially irreversible or external; blocked.",
+        "unsupported_blocked": "Unsupported by this phase; blocked.",
+    }[level]
+    return level, reasons, reversibility
+
+def _approval_preview_fields(
+        state: AgentState, approval: dict, settings: dict,
+        execution_state: str, expires_at: str | None,
+        events: list[dict] | None = None) -> dict[str, Any]:
+    action_type = str(approval.get("proposed_action_type") or "")
+    target = approval.get("proposed_target")
+    message_context = _approval_message_context(approval)
+    trigger_context = _approval_trigger_context(approval, events)
+    rule_context = _approval_rule_context(approval)
+    gate_preview = _approval_current_gate_preview(
+        state, approval, settings, execution_state, expires_at)
+    risk_level, risk_reasons, reversibility = _approval_risk(
+        approval, gate_preview)
+    subject = message_context.get("subject") or approval.get("message_key") or "message"
+    action_label = action_type.replace("_", " ")
+    target_text = f" to {target}" if target else ""
+    guidance = "Review message context before approving. Approval allows one gated attempt."
+    if gate_preview.get("gate") == "dry_run":
+        guidance = "No mailbox change would occur under current settings."
+    elif gate_preview.get("would_be_blocked_now"):
+        guidance = "Current config would block mailbox mutation."
+    elif gate_preview.get("capability") == "unknown":
+        guidance = "Review account, folder, UID, and capability risk before approving."
+    return {
+        "preview_title": f"{action_label}{target_text}: {subject}",
+        "preview_summary": (
+            f"Preview before approval: {action_label}{target_text} "
+            f"for {message_context.get('folder') or 'unknown folder'} "
+            f"UID {message_context.get('imap_uid') or 'unknown'}."
+        ),
+        "risk_level": risk_level,
+        "risk_reasons": risk_reasons,
+        "operator_guidance": guidance,
+        "reversibility": reversibility,
+        "would_execute_now": gate_preview["would_execute_now"],
+        "would_be_blocked_now": gate_preview["would_be_blocked_now"],
+        "current_gate_preview": gate_preview,
+        "message_context": message_context,
+        "trigger_context": trigger_context,
+        "rule_context": rule_context,
+    }
+
+def _approval_response(
+        state: AgentState, approval: dict, settings: dict, *,
+        include_events: bool = False) -> dict[str, Any]:
+    approval_cfg = _approval_settings(settings)
+    stale_minutes = approval_cfg["started_stale_after_minutes"]
+    events = state.approval_events(approval) if include_events else []
+    event_ids = [event["id"] for event in events]
+    execution_state = _approval_execution_state(
+        state, approval, stale_minutes)
+    expires_at = _iso_add_hours(
+        approval.get("requested_at"),
+        approval_cfg["approval_expiry_hours"],
+    )
+    result = {
+        **approval,
+        "action_type": approval.get("proposed_action_type"),
+        "target": approval.get("proposed_target"),
+        "message_id": approval.get("message_key"),
+        "trigger_id": (
+            approval.get("source_id")
+            if approval.get("source_type") == "ai_trigger" else None),
+        "rule_id": None,
+        "expires_at": expires_at,
+        "approved_at": (
+            approval.get("decided_at")
+            if approval.get("decided_at")
+            and approval.get("status") != "rejected" else None),
+        "rejected_at": (
+            approval.get("decided_at")
+            if approval.get("status") == "rejected" else None),
+        "execution_finished_at": approval.get("executed_at"),
+        "execution_state": execution_state,
+        "is_stuck": execution_state == "stuck",
+        "stale_after_minutes": stale_minutes,
+        "blocked_reason": _approval_blocked_reason(approval),
+        "execution_error": _approval_execution_error(approval),
+        "gate_result": _approval_gate_result(approval),
+        "audit_event_ids": event_ids,
+        "is_archived": bool(approval.get("archived_at")),
+    }
+    result.update(_approval_preview_fields(
+        state, approval, settings, execution_state, expires_at, events))
+    if include_events:
+        result["events"] = events
+        result["audit_event_ids"] = event_ids
+    return result
 
 def _approval_message(approval: dict) -> dict[str, Any]:
     return {
@@ -401,6 +839,102 @@ def _approval_rule(approval: dict) -> dict[str, Any]:
         "rule_id": None,
         "name": f"approval:{approval['approval_id']}",
     }
+
+_APPROVAL_STATUSES = {
+    "pending", "approved", "rejected", "expired",
+    "executed", "failed", "blocked",
+}
+
+_APPROVAL_EXECUTION_STATES = {
+    "not_requested", "started", "executed", "blocked", "failed",
+    "expired", "rejected", "stuck",
+}
+
+_APPROVAL_RISK_LEVELS = {
+    "safe_readonly", "safe_reversible", "caution",
+    "dangerous_blocked", "unsupported_blocked",
+}
+
+def _approval_example(approval: dict) -> dict[str, Any]:
+    return {
+        "approval_id": approval.get("approval_id"),
+        "status": approval.get("status"),
+        "action_type": approval.get("proposed_action_type"),
+        "subject": _safe_preview_text(approval.get("subject"), 120),
+        "account_id": approval.get("account_id"),
+        "folder": approval.get("folder"),
+        "requested_at": approval.get("requested_at"),
+        "archived_at": approval.get("archived_at"),
+    }
+
+def _approval_cleanup_preview(
+        state: AgentState, settings: dict) -> dict[str, Any]:
+    cfg = _approval_settings(settings)
+    candidates = state.approval_cleanup_candidates(
+        expire_after_hours=cfg["auto_expire_pending_after_hours"],
+        archive_after_days=cfg["archive_terminal_after_days"],
+        retain_audit_days=cfg["retain_audit_days"],
+    )
+    return {
+        "cleanup_enabled": cfg["cleanup_enabled"],
+        "would_expire_pending": len(candidates["expire_pending"]),
+        "would_archive_terminal": len(candidates["archive_terminal"]),
+        "would_hard_delete": 0,
+        "stuck_or_started_excluded": candidates["stuck_or_started_count"],
+        "auto_expire_pending_after_hours": cfg["auto_expire_pending_after_hours"],
+        "retain_audit_days": cfg["retain_audit_days"],
+        "archive_terminal_after_days": cfg["archive_terminal_after_days"],
+        "examples": {
+            "expire_pending": [
+                _approval_example(a)
+                for a in candidates["examples"]["expire_pending"]
+            ],
+            "archive_terminal": [
+                _approval_example(a)
+                for a in candidates["examples"]["archive_terminal"]
+            ],
+            "hard_delete": [],
+        },
+        "notes": [
+            "Cleanup is disabled by default." if not cfg["cleanup_enabled"] else "Cleanup is enabled.",
+            "Cleanup preview is read-only.",
+            "Started/stuck approvals are never auto-cleaned.",
+            "Hard delete is disabled in Phase 4D.4.",
+        ],
+    }
+
+def _validate_approval_filters(
+        status: str | None, execution_state: str | None,
+        risk_level: str | None) -> None:
+    if status and status not in _APPROVAL_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval status: {status}",
+        )
+    if execution_state and execution_state not in _APPROVAL_EXECUTION_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval execution_state: {execution_state}",
+        )
+    if risk_level and risk_level not in _APPROVAL_RISK_LEVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid approval risk_level: {risk_level}",
+        )
+
+def _date_in_range(
+        value: str | None, created_from: str | None,
+        created_to: str | None) -> bool:
+    dt = _parse_dt(value)
+    if not dt:
+        return True
+    from_dt = _parse_dt(created_from)
+    to_dt = _parse_dt(created_to)
+    if from_dt and dt < from_dt:
+        return False
+    if to_dt and dt > to_dt:
+        return False
+    return True
 
 def _mutation_executor(settings: dict):
     def execute(action_type: str, message: dict, target, *, dry_run: bool):
@@ -1062,27 +1596,204 @@ async def get_message_ai_triggers(message_id: str):
 @router.get("/approvals", dependencies=[Depends(require_api_key)])
 async def list_approvals(
         status: Optional[str] = Query("pending", max_length=50),
+        execution_state: Optional[str] = Query(None, max_length=50),
+        include_archived: bool = Query(False),
+        risk_level: Optional[str] = Query(None, max_length=50),
         source_type: Optional[str] = Query(None, max_length=50),
-        limit: int = Query(50, ge=1, le=200)):
+        limit: int = Query(50, ge=1, le=1000),
+        offset: int = Query(0, ge=0)):
+    _validate_approval_filters(status, execution_state, risk_level)
     state = _ensure_state()
     settings = _get_settings()
     approval_cfg = _approval_settings(settings)
-    return state.list_action_approvals(
+    approvals = state.list_action_approvals(
         status=status,
         source_type=source_type,
         limit=limit,
+        offset=offset,
+        include_archived=include_archived,
         expiry_hours=approval_cfg["approval_expiry_hours"],
     )
+    rows = [
+        _approval_response(state, approval, settings)
+        for approval in approvals
+    ]
+    if execution_state:
+        rows = [
+            row for row in rows
+            if row.get("execution_state") == execution_state
+        ]
+    if risk_level:
+        rows = [
+            row for row in rows
+            if row.get("risk_level") == risk_level
+        ]
+    return rows
+
+@router.get(
+    "/approvals/cleanup/preview",
+    dependencies=[Depends(require_api_key)],
+)
+async def preview_approval_cleanup():
+    return _approval_cleanup_preview(_ensure_state(), _get_settings())
+
+@router.post(
+    "/approvals/cleanup",
+    dependencies=[Depends(require_api_key)],
+)
+async def cleanup_approvals(data: ApprovalCleanupRequest):
+    state = _ensure_state()
+    settings = _get_settings()
+    cfg = _approval_settings(settings)
+    preview = _approval_cleanup_preview(state, settings)
+    if not cfg["cleanup_enabled"] and not data.force:
+        return {
+            **preview,
+            "cleanup_ran": False,
+            "disabled": True,
+            "expired_ids": [],
+            "archived_ids": [],
+            "hard_deleted_ids": [],
+            "notes": preview["notes"] + [
+                "POST again with force=true for an explicit manual cleanup run."
+            ],
+        }
+    result = state.cleanup_action_approvals(
+        expire_after_hours=cfg["auto_expire_pending_after_hours"],
+        archive_after_days=cfg["archive_terminal_after_days"],
+        retain_audit_days=cfg["retain_audit_days"],
+        hard_delete=False,
+    )
+    return {
+        "cleanup_ran": True,
+        "forced": data.force and not cfg["cleanup_enabled"],
+        "expired_count": len(result["expired_ids"]),
+        "archived_count": len(result["archived_ids"]),
+        "hard_deleted_count": 0,
+        **result,
+        "notes": [
+            "Cleanup executed explicit status/archive transitions only.",
+            "Started/stuck approvals were excluded.",
+            "Hard delete is disabled in Phase 4D.4.",
+        ],
+    }
+
+@router.get(
+    "/approvals/export",
+    dependencies=[Depends(require_api_key)],
+)
+async def export_approvals(
+        format: str = Query("json", pattern="^json$"),
+        status: Optional[str] = Query(None, max_length=50),
+        execution_state: Optional[str] = Query(None, max_length=50),
+        created_from: Optional[str] = Query(None, max_length=80),
+        created_to: Optional[str] = Query(None, max_length=80),
+        include_archived: bool = Query(False),
+        include_events: bool = Query(True),
+        limit: int = Query(500, ge=1, le=1000),
+        offset: int = Query(0, ge=0)):
+    _validate_approval_filters(status, execution_state, None)
+    state = _ensure_state()
+    settings = _get_settings()
+    approval_cfg = _approval_settings(settings)
+    approvals = state.list_action_approvals(
+        status=status,
+        limit=limit,
+        offset=offset,
+        include_archived=include_archived,
+        expiry_hours=approval_cfg["approval_expiry_hours"],
+    )
+    exported = []
+    for approval in approvals:
+        if not _date_in_range(
+                approval.get("created_at") or approval.get("requested_at"),
+                created_from, created_to):
+            continue
+        row = _approval_response(
+            state, approval, settings, include_events=include_events)
+        if execution_state and row.get("execution_state") != execution_state:
+            continue
+        item = {"approval": row}
+        if include_events:
+            item["events"] = row.get("events", [])
+        exported.append(item)
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "format": format,
+        "filters": {
+            "status": status,
+            "execution_state": execution_state,
+            "created_from": created_from,
+            "created_to": created_to,
+            "include_archived": include_archived,
+            "include_events": include_events,
+            "limit": limit,
+            "offset": offset,
+        },
+        "count": len(exported),
+        "approvals": exported,
+    }
 
 @router.get(
     "/approvals/{approval_id}",
     dependencies=[Depends(require_api_key)],
 )
 async def get_approval(approval_id: str):
-    approval = _ensure_state().get_action_approval(approval_id)
+    state = _ensure_state()
+    approval = state.get_action_approval(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
-    return approval
+    return _approval_response(
+        state, approval, _get_settings(), include_events=True)
+
+@router.post(
+    "/approvals/{approval_id}/archive",
+    dependencies=[Depends(require_api_key)],
+)
+async def archive_approval(
+        approval_id: str, data: ApprovalArchiveRequest | None = None):
+    state = _ensure_state()
+    try:
+        approval = state.archive_action_approval(
+            approval_id,
+            decided_by=(data.decided_by if data else None) or "operator",
+        )
+        return _approval_response(
+            state, approval, _get_settings(), include_events=True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+@router.post(
+    "/approvals/{approval_id}/unarchive",
+    dependencies=[Depends(require_api_key)],
+)
+async def unarchive_approval(
+        approval_id: str, data: ApprovalArchiveRequest | None = None):
+    state = _ensure_state()
+    try:
+        approval = state.unarchive_action_approval(
+            approval_id,
+            decided_by=(data.decided_by if data else None) or "operator",
+        )
+        return _approval_response(
+            state, approval, _get_settings(), include_events=True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+@router.get(
+    "/approvals/{approval_id}/events",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_approval_events(approval_id: str):
+    state = _ensure_state()
+    approval = state.get_action_approval(approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    return state.approval_events(approval)
 
 @router.post(
     "/approvals/{approval_id}/approve",
@@ -1093,11 +1804,12 @@ async def approve_approval(approval_id: str, data: ApprovalDecision):
     approval_cfg = _approval_settings(_get_settings())
     state.expire_pending_approvals(approval_cfg["approval_expiry_hours"])
     try:
-        return state.approve_action_approval(
+        approval = state.approve_action_approval(
             approval_id,
             decided_by=data.decided_by or "operator",
             decision_note=data.decision_note,
         )
+        return _approval_response(state, approval, _get_settings())
     except KeyError:
         raise HTTPException(status_code=404, detail="Approval not found")
     except ValueError as exc:
@@ -1112,11 +1824,12 @@ async def reject_approval(approval_id: str, data: ApprovalDecision):
     approval_cfg = _approval_settings(_get_settings())
     state.expire_pending_approvals(approval_cfg["approval_expiry_hours"])
     try:
-        return state.reject_action_approval(
+        approval = state.reject_action_approval(
             approval_id,
             decided_by=data.decided_by or "operator",
             decision_note=data.decision_note,
         )
+        return _approval_response(state, approval, _get_settings())
     except KeyError:
         raise HTTPException(status_code=404, detail="Approval not found")
     except ValueError as exc:
@@ -1127,8 +1840,10 @@ async def reject_approval(approval_id: str, data: ApprovalDecision):
     dependencies=[Depends(require_api_key)],
 )
 async def expire_approval(approval_id: str):
+    state = _ensure_state()
     try:
-        return _ensure_state().expire_action_approval(approval_id)
+        approval = state.expire_action_approval(approval_id)
+        return _approval_response(state, approval, _get_settings())
     except KeyError:
         raise HTTPException(status_code=404, detail="Approval not found")
     except ValueError as exc:
@@ -1143,12 +1858,14 @@ async def execute_approval(approval_id: str):
     try:
         approval = state.mark_approval_execution_started(approval_id)
         result = _execute_approved_action(state, approval)
-        return state.finish_action_approval_execution(
+        approval = state.finish_action_approval_execution(
             approval_id,
             status=result["status"],
             execution_status=result["execution_status"],
             result=result,
         )
+        return _approval_response(
+            state, approval, _get_settings(), include_events=True)
     except KeyError:
         raise HTTPException(status_code=404, detail="Approval not found")
     except ValueError as exc:
@@ -1156,13 +1873,36 @@ async def execute_approval(approval_id: str):
     except Exception as exc:
         approval = state.get_action_approval(approval_id)
         if approval and approval.get("status") == "approved":
-            return state.finish_action_approval_execution(
+            failed = state.finish_action_approval_execution(
                 approval_id,
                 status="failed",
                 execution_status="failed",
                 result={"error": str(exc)[:500]},
             )
+            return _approval_response(
+                state, failed, _get_settings(), include_events=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post(
+    "/approvals/{approval_id}/mark-failed",
+    dependencies=[Depends(require_api_key)],
+)
+async def mark_approval_failed(approval_id: str, data: ApprovalMarkFailed):
+    state = _ensure_state()
+    approval_cfg = _approval_settings(_get_settings())
+    try:
+        approval = state.mark_stale_started_approval_failed(
+            approval_id,
+            stale_after_minutes=approval_cfg["started_stale_after_minutes"],
+            decided_by=data.decided_by or "operator",
+            reason=data.reason or "Execution started but did not finish",
+        )
+        return _approval_response(
+            state, approval, _get_settings(), include_events=True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 @router.post(
     "/messages/{message_id}/reprocess",

@@ -213,7 +213,10 @@ export interface MailActionApproval {
   received_at: string | null;
   proposed_action_type: string;
   proposed_target: string | null;
+  action_type?: string;
+  target?: string | null;
   proposed_value: any;
+  proposed_value_json?: string | null;
   reason: string | null;
   ai_category: string | null;
   ai_urgency_score: number | null;
@@ -223,11 +226,97 @@ export interface MailActionApproval {
   decided_at: string | null;
   decided_by: string | null;
   decision_note: string | null;
+  execution_started_at?: string | null;
   executed_at: string | null;
+  archived_at?: string | null;
+  is_archived?: boolean;
+  execution_finished_at?: string | null;
   execution_status: string | null;
+  execution_state?: 'not_requested' | 'started' | 'executed' | 'blocked' | 'failed' | 'expired' | 'rejected' | 'stuck';
+  execution_error?: string | null;
+  blocked_reason?: string | null;
+  gate_result?: any;
+  preview_title?: string;
+  preview_summary?: string;
+  risk_level?: 'safe_readonly' | 'safe_reversible' | 'caution' | 'dangerous_blocked' | 'unsupported_blocked';
+  risk_reasons?: string[];
+  operator_guidance?: string;
+  reversibility?: string;
+  would_execute_now?: boolean;
+  would_be_blocked_now?: boolean;
+  current_gate_preview?: {
+    would_execute_now: boolean;
+    would_be_blocked_now: boolean;
+    gate: string;
+    reason: string;
+    capability: string;
+    notes: string[];
+    mode?: string;
+    mutation_enabled?: boolean;
+    dry_run_default?: boolean;
+  };
+  message_context?: {
+    sender?: string | null;
+    subject?: string | null;
+    received_at?: string | null;
+    account_id?: string | null;
+    account_label?: string | null;
+    folder?: string | null;
+    imap_uid?: number | null;
+    uidvalidity?: string | number | null;
+    classification_category?: string | null;
+    ai_summary?: string | null;
+    urgency_score?: number | null;
+    confidence?: number | null;
+  };
+  trigger_context?: any;
+  rule_context?: any;
+  expires_at?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  message_id?: string | null;
+  trigger_id?: string | null;
+  rule_id?: string | null;
+  audit_event_ids?: number[];
+  events?: MailApprovalEvent[];
   execution_result: any;
   created_at: string;
   updated_at: string;
+}
+
+export interface MailApprovalEvent {
+  id: number;
+  message_id: string | null;
+  account_id: string | null;
+  bridge_id: string | null;
+  rule_id: number | null;
+  action_type: string | null;
+  event_type: string;
+  outcome: string;
+  details: any;
+  created_at: string;
+}
+
+export interface ApprovalCleanupPreview {
+  cleanup_enabled: boolean;
+  would_expire_pending: number;
+  would_archive_terminal: number;
+  would_hard_delete: number;
+  stuck_or_started_excluded: number;
+  auto_expire_pending_after_hours: number;
+  retain_audit_days: number;
+  archive_terminal_after_days: number;
+  examples: any;
+  notes: string[];
+}
+
+export interface ApprovalListOptions {
+  status?: string;
+  execution_state?: string;
+  include_archived?: boolean;
+  risk_level?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export type MailRuleInput = Omit<MailRule, 'rule_id' | 'created_at' | 'updated_at'>;
@@ -261,11 +350,18 @@ interface ApiContextType {
   updateAiTrigger: (triggerId: string, data: Partial<AiTriggerInput>) => Promise<AiTrigger>;
   deleteAiTrigger: (triggerId: string) => Promise<any>;
   previewAiTriggers: (classification: Partial<AiClassification>) => Promise<AiTriggerPreviewResult>;
-  listApprovals: (status?: string, limit?: number) => Promise<MailActionApproval[]>;
+  listApprovals: (options?: ApprovalListOptions | string, limit?: number) => Promise<MailActionApproval[]>;
+  getApproval: (approvalId: string) => Promise<MailActionApproval>;
   approveApproval: (approvalId: string, decision_note?: string) => Promise<MailActionApproval>;
   rejectApproval: (approvalId: string, decision_note?: string) => Promise<MailActionApproval>;
   executeApproval: (approvalId: string) => Promise<MailActionApproval>;
   expireApproval: (approvalId: string) => Promise<MailActionApproval>;
+  markApprovalFailed: (approvalId: string, reason?: string) => Promise<MailActionApproval>;
+  previewApprovalCleanup: () => Promise<ApprovalCleanupPreview>;
+  cleanupApprovals: (force?: boolean) => Promise<any>;
+  archiveApproval: (approvalId: string) => Promise<MailActionApproval>;
+  unarchiveApproval: (approvalId: string) => Promise<MailActionApproval>;
+  exportApprovals: (options?: ApprovalListOptions & { include_events?: boolean }) => Promise<any>;
 }
 
 const ApiContext = createContext<ApiContextType | null>(null);
@@ -517,10 +613,19 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     });
   }, [fetchWithAuth]);
 
-  const listApprovals = useCallback(async (status = 'pending', limit = 50) => {
-    const params = new URLSearchParams({ limit: String(limit) });
-    if (status) params.set('status', status);
+  const listApprovals = useCallback(async (options: ApprovalListOptions | string = { status: 'pending' }, limit = 50) => {
+    const opts: ApprovalListOptions = typeof options === 'string' ? { status: options, limit } : options;
+    const params = new URLSearchParams({ limit: String(opts.limit ?? 50) });
+    if (opts.status) params.set('status', opts.status);
+    if (opts.execution_state) params.set('execution_state', opts.execution_state);
+    if (opts.include_archived) params.set('include_archived', 'true');
+    if (opts.risk_level) params.set('risk_level', opts.risk_level);
+    if (opts.offset) params.set('offset', String(opts.offset));
     return fetchWithAuth(`/api/mail/approvals?${params.toString()}`);
+  }, [fetchWithAuth]);
+
+  const getApproval = useCallback(async (approvalId: string) => {
+    return fetchWithAuth(`/api/mail/approvals/${encodeURIComponent(approvalId)}`);
   }, [fetchWithAuth]);
 
   const approveApproval = useCallback(async (approvalId: string, decision_note = '') => {
@@ -551,6 +656,55 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     });
   }, [fetchWithAuth]);
 
+  const markApprovalFailed = useCallback(async (approvalId: string, reason = 'Execution started but did not finish') => {
+    return fetchWithAuth(`/api/mail/approvals/${encodeURIComponent(approvalId)}/mark-failed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+  }, [fetchWithAuth]);
+
+  const previewApprovalCleanup = useCallback(async () => {
+    return fetchWithAuth('/api/mail/approvals/cleanup/preview');
+  }, [fetchWithAuth]);
+
+  const cleanupApprovals = useCallback(async (force = false) => {
+    return fetchWithAuth('/api/mail/approvals/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    });
+  }, [fetchWithAuth]);
+
+  const archiveApproval = useCallback(async (approvalId: string) => {
+    return fetchWithAuth(`/api/mail/approvals/${encodeURIComponent(approvalId)}/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decided_by: 'operator' }),
+    });
+  }, [fetchWithAuth]);
+
+  const unarchiveApproval = useCallback(async (approvalId: string) => {
+    return fetchWithAuth(`/api/mail/approvals/${encodeURIComponent(approvalId)}/unarchive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decided_by: 'operator' }),
+    });
+  }, [fetchWithAuth]);
+
+  const exportApprovals = useCallback(async (options: ApprovalListOptions & { include_events?: boolean } = {}) => {
+    const params = new URLSearchParams({
+      format: 'json',
+      include_events: String(options.include_events ?? true),
+      limit: String(options.limit ?? 500),
+    });
+    if (options.status) params.set('status', options.status);
+    if (options.execution_state) params.set('execution_state', options.execution_state);
+    if (options.include_archived) params.set('include_archived', 'true');
+    if (options.offset) params.set('offset', String(options.offset));
+    return fetchWithAuth(`/api/mail/approvals/export?${params.toString()}`);
+  }, [fetchWithAuth]);
+
   useEffect(() => {
     refresh();
     const interval = setInterval(refresh, 30000);
@@ -566,8 +720,10 @@ export function ApiProvider({ children }: { children: ReactNode }) {
         previewRules, listProcessingEvents, getAiSettings, updateAiSettings,
         testAi, reprocessMessage, listAiTriggers, createAiTrigger,
         updateAiTrigger, deleteAiTrigger, previewAiTriggers,
-        listApprovals, approveApproval, rejectApproval, executeApproval,
-        expireApproval
+        listApprovals, getApproval, approveApproval, rejectApproval,
+        executeApproval, expireApproval, markApprovalFailed,
+        previewApprovalCleanup, cleanupApprovals, archiveApproval,
+        unarchiveApproval, exportApprovals
       }}
     >
       {children}

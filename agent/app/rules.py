@@ -483,7 +483,11 @@ def _execute_mutation_action(
             details={**audit_base, "status": status,
                      "gate_status": status,
                      "error": str(exc)[:500]})
-        return {"event_written": events_written + 1, "status": status}
+        return {
+            "event_written": events_written + 1,
+            "status": status,
+            "error": str(exc)[:500],
+        }
 
 
 def _write_processing_event(

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -16,11 +17,12 @@ def _settings(tmp_path: Path, *, mode="draft_only", mutations_enabled=False, dry
 mode = "{mode}"
 safe_default = "draft_only"
 
-[mail.approvals]
-enabled = true
-require_approval_for_ai_actions = true
-approval_expiry_hours = 72
-allow_bulk_approve = false
+	[mail.approvals]
+	enabled = true
+	require_approval_for_ai_actions = true
+	approval_expiry_hours = 72
+	started_stale_after_minutes = 30
+	allow_bulk_approve = false
 
 [mail.imap_mutations]
 enabled = {str(mutations_enabled).lower()}
@@ -114,6 +116,39 @@ def _events(state: AgentState):
         ).fetchall()
 
 
+def _set_execution_started_at(state: AgentState, approval_id: str, started_at: str):
+    with state._connect() as conn:
+        conn.execute("""
+            UPDATE mail_action_approvals
+            SET execution_started_at = ?
+            WHERE approval_id = ?
+        """, (started_at, approval_id))
+        conn.commit()
+
+
+def _set_approval_times(
+        state: AgentState, approval_id: str, when: str,
+        *, archived_at: str | None = None):
+    with state._connect() as conn:
+        conn.execute("""
+            UPDATE mail_action_approvals
+            SET requested_at = ?,
+                created_at = ?,
+                updated_at = ?,
+                decided_at = CASE WHEN decided_at IS NULL THEN NULL ELSE ? END,
+                executed_at = CASE WHEN executed_at IS NULL THEN NULL ELSE ? END,
+                archived_at = COALESCE(?, archived_at)
+            WHERE approval_id = ?
+        """, (when, when, when, when, when, archived_at, approval_id))
+        conn.commit()
+
+
+def _age_approval(state: AgentState, approval_id: str, *, days=0, hours=0):
+    old = (datetime.now(timezone.utc) - timedelta(days=days, hours=hours)).isoformat()
+    _set_approval_times(state, approval_id, old)
+    return old
+
+
 def _create_approval(
         state: AgentState, *, action_type="mark_read", message_key="m1",
         source_id="trigger", target=None):
@@ -133,6 +168,37 @@ def _create_approval(
     return _approval_id(state)
 
 
+def _terminal_approval(client, state, *, status="rejected", message_key="terminal"):
+    approval_id = _create_approval(state, message_key=message_key, source_id=message_key)
+    if status == "rejected":
+        client.post(
+            f"/api/mail/approvals/{approval_id}/reject",
+            headers={"X-Api-Key": "secret"},
+            json={},
+        )
+    elif status == "expired":
+        client.post(
+            f"/api/mail/approvals/{approval_id}/expire",
+            headers={"X-Api-Key": "secret"},
+        )
+    elif status == "executed":
+        client.post(
+            f"/api/mail/approvals/{approval_id}/approve",
+            headers={"X-Api-Key": "secret"},
+            json={},
+        )
+        state.mark_approval_execution_started(approval_id)
+        state.finish_action_approval_execution(
+            approval_id,
+            status="executed",
+            execution_status="completed",
+            result={"status": "executed"},
+        )
+    else:
+        raise ValueError(status)
+    return approval_id
+
+
 def test_ai_trigger_creates_approval_item_instead_of_executing(tmp_path, monkeypatch):
     client, state = _client(tmp_path, monkeypatch)
     state.create_ai_trigger(_trigger_payload())
@@ -149,6 +215,12 @@ def test_ai_trigger_creates_approval_item_instead_of_executing(tmp_path, monkeyp
     assert body[0]["source_type"] == "ai_trigger"
     assert body[0]["proposed_action_type"] == "move_to_folder"
     assert body[0]["status"] == "pending"
+    assert body[0]["preview_title"]
+    assert body[0]["preview_summary"]
+    assert body[0]["risk_level"] == "caution"
+    assert body[0]["would_be_blocked_now"] is True
+    assert body[0]["current_gate_preview"]["gate"] == "mode_blocked"
+    assert body[0]["message_context"]["folder"] == "INBOX"
     assert [event[0] for event in _events(state)] == [
         "ai_trigger_matched",
         "approval_created",
@@ -487,6 +559,7 @@ def test_api_auth_and_invalid_ids_are_structured(tmp_path, monkeypatch):
     _create_approval(state)
 
     no_auth = client.get("/api/mail/approvals?status=pending")
+    detail_no_auth = client.get(f"/api/mail/approvals/{_approval_id(state)}")
     invalid = client.post(
         "/api/mail/approvals/not-found/approve",
         headers={"X-Api-Key": "secret"},
@@ -502,11 +575,399 @@ def test_api_auth_and_invalid_ids_are_structured(tmp_path, monkeypatch):
     )
 
     assert no_auth.status_code in {401, 403}
+    assert detail_no_auth.status_code in {401, 403}
     assert invalid.status_code == 404
     assert invalid.json()["detail"] == "Approval not found"
     assert invalid_execute.status_code == 404
     assert empty.status_code == 200
     assert empty.json() == []
+
+
+def test_approval_detail_includes_result_and_timeline(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    state.create_ai_trigger(_trigger_payload(
+        actions=[{"action_type": "add_to_needs_reply", "value": {"note": "review"}}]
+    ))
+    state.complete_ai_item(_queue_message(state), _classification())
+    approval_id = _approval_id(state)
+    client.post(
+        f"/api/mail/approvals/{approval_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={"decision_note": "Looks correct"},
+    )
+    executed = client.post(
+        f"/api/mail/approvals/{approval_id}/execute",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert executed.status_code == 200, executed.text
+    detail = client.get(
+        f"/api/mail/approvals/{approval_id}",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    body = detail.json()
+    assert detail.status_code == 200
+    assert body["approval_id"] == approval_id
+    assert body["action_type"] == "add_to_needs_reply"
+    assert body["message_id"] == "mkey:mkey42"
+    assert body["trigger_id"]
+    assert body["approved_at"]
+    assert body["execution_started_at"]
+    assert body["execution_finished_at"]
+    assert body["execution_state"] == "executed"
+    assert body["execution_result"]["result"]["event_written"] is True
+    assert body["proposed_value"] == {"note": "review"}
+    assert body["message_context"] == {
+        "sender": "billing@example.com",
+        "subject": "Payment due",
+        "received_at": "2026-04-30T00:00:00+00:00",
+        "account_id": "acct",
+        "account_label": "acct",
+        "folder": "INBOX",
+        "imap_uid": 42,
+        "uidvalidity": "7",
+        "classification_category": "payment_due",
+        "ai_summary": "Phase 4C.3A preview-only",
+        "urgency_score": 8,
+        "confidence": 0.9,
+    }
+    assert body["trigger_context"]["trigger_name"] == "Urgent payment"
+    assert body["trigger_context"]["matched_category"] == "payment_due"
+    assert body["trigger_context"]["planned_action"]["action_type"] == "add_to_needs_reply"
+    assert body["rule_context"] is None
+    assert body["current_gate_preview"]["gate"] == "terminal"
+    assert body["audit_event_ids"] == [event["id"] for event in body["events"]]
+    assert [event["id"] for event in body["events"]] == sorted(
+        event["id"] for event in body["events"])
+    assert "body_text" not in str(body)
+    assert "Payment due tomorrow." not in str(body)
+    assert "secret" not in str(body).lower()
+
+
+def test_pending_preview_is_read_only_and_explains_dry_run_block(tmp_path, monkeypatch):
+    client, state = _client(
+        tmp_path, monkeypatch, mode="live", mutations_enabled=True, dry_run=True
+    )
+    approval_id = _create_approval(state, action_type="mark_read")
+    before = _events(state)
+
+    detail = client.get(
+        f"/api/mail/approvals/{approval_id}",
+        headers={"X-Api-Key": "secret"},
+    )
+    after = state.get_action_approval(approval_id)
+
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["status"] == "pending"
+    assert body["execution_status"] is None
+    assert after["status"] == "pending"
+    assert after["execution_status"] is None
+    assert _events(state) == before
+    assert body["current_gate_preview"]["gate"] == "dry_run"
+    assert body["current_gate_preview"]["reason"] == "mail.imap_mutations.dry_run_default=true"
+    assert body["would_execute_now"] is False
+    assert body["would_be_blocked_now"] is True
+    assert body["risk_level"] == "safe_reversible"
+
+
+def test_preview_explains_imap_mutation_disabled_block(tmp_path, monkeypatch):
+    client, state = _client(
+        tmp_path, monkeypatch, mode="live", mutations_enabled=False, dry_run=False
+    )
+    approval_id = _create_approval(state, action_type="mark_read")
+
+    body = client.get(
+        f"/api/mail/approvals/{approval_id}",
+        headers={"X-Api-Key": "secret"},
+    ).json()
+
+    assert body["current_gate_preview"]["gate"] == "mutation_disabled"
+    assert body["current_gate_preview"]["reason"] == "mail.imap_mutations.enabled=false"
+    assert body["would_be_blocked_now"] is True
+
+
+def test_preview_explains_ready_static_gate_with_unknown_capability(tmp_path, monkeypatch):
+    client, state = _client(
+        tmp_path, monkeypatch, mode="live", mutations_enabled=True, dry_run=False
+    )
+    approval_id = _create_approval(state, action_type="mark_read")
+
+    body = client.get(
+        f"/api/mail/approvals/{approval_id}",
+        headers={"X-Api-Key": "secret"},
+    ).json()
+
+    assert body["current_gate_preview"]["gate"] == "ready"
+    assert body["current_gate_preview"]["capability"] == "unknown"
+    assert body["would_execute_now"] is True
+    assert body["risk_reasons"][-1] == (
+        "Mailbox capability is unknown because preview does not open IMAP transactions.")
+
+
+def test_preview_blocks_unsupported_and_dangerous_aliases(tmp_path, monkeypatch):
+    for action_type, expected_risk in [
+        ("delete", "dangerous_blocked"),
+        ("expunge", "dangerous_blocked"),
+        ("reply", "dangerous_blocked"),
+        ("forward", "dangerous_blocked"),
+        ("webhook", "dangerous_blocked"),
+        ("send_imessage", "dangerous_blocked"),
+        ("unknown_action", "unsupported_blocked"),
+    ]:
+        client, state = _client(tmp_path / action_type, monkeypatch, mode="live", mutations_enabled=True, dry_run=False)
+        approval_id = _create_approval(state, action_type=action_type, message_key=action_type, source_id=action_type)
+
+        body = client.get(
+            f"/api/mail/approvals/{approval_id}",
+            headers={"X-Api-Key": "secret"},
+        ).json()
+
+        assert body["current_gate_preview"]["gate"] == "unsupported"
+        assert body["would_execute_now"] is False
+        assert body["would_be_blocked_now"] is True
+        assert body["risk_level"] == expected_risk
+
+
+def test_terminal_and_stale_preview_states_cannot_execute_now(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    rejected_id = _create_approval(state, message_key="rejected", source_id="rejected")
+    client.post(f"/api/mail/approvals/{rejected_id}/reject", headers={"X-Api-Key": "secret"}, json={})
+    expired_id = _create_approval(state, message_key="expired", source_id="expired")
+    client.post(f"/api/mail/approvals/{expired_id}/expire", headers={"X-Api-Key": "secret"})
+    executed_id = _create_approval(state, message_key="executed", source_id="executed", action_type="add_to_needs_reply")
+    client.post(f"/api/mail/approvals/{executed_id}/approve", headers={"X-Api-Key": "secret"}, json={})
+    client.post(f"/api/mail/approvals/{executed_id}/execute", headers={"X-Api-Key": "secret"})
+    stale_id = _create_approval(state, message_key="stale", source_id="stale")
+    client.post(f"/api/mail/approvals/{stale_id}/approve", headers={"X-Api-Key": "secret"}, json={})
+    state.mark_approval_execution_started(stale_id)
+    old = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    _set_execution_started_at(state, stale_id, old)
+
+    expected = {
+        rejected_id: ("rejected", "Approval was rejected."),
+        expired_id: ("expired", "Approval is expired."),
+        executed_id: ("terminal", "Approval already reached terminal status 'executed'."),
+        stale_id: ("manual_review_required", "execution_status='started' is stale"),
+    }
+    for approval_id, (gate, reason) in expected.items():
+        body = client.get(
+            f"/api/mail/approvals/{approval_id}",
+            headers={"X-Api-Key": "secret"},
+        ).json()
+        assert body["current_gate_preview"]["gate"] == gate
+        assert body["current_gate_preview"]["reason"] == reason
+        assert body["would_execute_now"] is False
+        assert body["would_be_blocked_now"] is True
+
+
+def test_preview_handles_missing_trigger_and_rule_context(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    ai_id = _create_approval(state, source_id="missing-trigger")
+    state.create_action_approval(
+        source_type="rule_preview",
+        source_id="rule-7",
+        message={"message_key": "rule-message", "account_id": "acct"},
+        action={"action_type": "add_to_needs_reply"},
+        classification=None,
+    )
+    rule_id = [
+        row["approval_id"] for row in state.list_action_approvals(status=None)
+        if row["source_type"] == "rule_preview"
+    ][0]
+
+    ai_detail = client.get(
+        f"/api/mail/approvals/{ai_id}",
+        headers={"X-Api-Key": "secret"},
+    )
+    rule_detail = client.get(
+        f"/api/mail/approvals/{rule_id}",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert ai_detail.status_code == 200
+    assert ai_detail.json()["trigger_context"]["trigger_id"] == "missing-trigger"
+    assert rule_detail.status_code == 200
+    assert rule_detail.json()["trigger_context"] is None
+    assert rule_detail.json()["rule_context"]["rule_id"] == "rule-7"
+
+
+def test_approval_events_endpoint_auth_and_order(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    approval_id = _create_approval(state, action_type="add_to_needs_reply")
+
+    no_auth = client.get(f"/api/mail/approvals/{approval_id}/events")
+    client.post(
+        f"/api/mail/approvals/{approval_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    client.post(
+        f"/api/mail/approvals/{approval_id}/execute",
+        headers={"X-Api-Key": "secret"},
+    )
+    events = client.get(
+        f"/api/mail/approvals/{approval_id}/events",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert no_auth.status_code in {401, 403}
+    assert events.status_code == 200
+    ids = [event["id"] for event in events.json()]
+    assert ids == sorted(ids)
+    event_types = [event["event_type"] for event in events.json()]
+    assert "approval_created" in event_types
+    assert "approval_execution_started" in event_types
+    assert "approval_executed" in event_types
+
+
+def test_blocked_execution_detail_records_gate_reason(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch, mode="live", mutations_enabled=True, dry_run=True)
+    approval_id = _create_approval(state, action_type="mark_read")
+    client.post(
+        f"/api/mail/approvals/{approval_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    executed = client.post(
+        f"/api/mail/approvals/{approval_id}/execute",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    body = executed.json()
+    assert executed.status_code == 200
+    assert body["status"] == "blocked"
+    assert body["execution_state"] == "blocked"
+    assert body["execution_status"] == "dry_run"
+    assert body["blocked_reason"] == "dry_run"
+    assert body["gate_result"]["status"] == "dry_run"
+
+
+def test_failed_execution_detail_records_error(tmp_path, monkeypatch):
+    def raise_executor(settings):
+        def run(*args, **kwargs):
+            raise RuntimeError("simulated IMAP failure")
+        return run
+
+    monkeypatch.setattr(api_mail, "_mutation_executor", raise_executor)
+    client, state = _client(tmp_path, monkeypatch, mode="live", mutations_enabled=True, dry_run=False)
+    approval_id = _create_approval(state, action_type="mark_read")
+    client.post(
+        f"/api/mail/approvals/{approval_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    executed = client.post(
+        f"/api/mail/approvals/{approval_id}/execute",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert executed.status_code == 200
+    assert executed.json()["status"] == "failed"
+    assert executed.json()["execution_state"] == "failed"
+    assert executed.json()["execution_error"] == "simulated IMAP failure"
+
+
+def test_started_approval_stuck_detection_and_mark_failed(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    approval_id = _create_approval(state)
+    client.post(
+        f"/api/mail/approvals/{approval_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    state.mark_approval_execution_started(approval_id)
+    old = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    _set_execution_started_at(state, approval_id, old)
+
+    detail = client.get(
+        f"/api/mail/approvals/{approval_id}",
+        headers={"X-Api-Key": "secret"},
+    )
+    execute_again = client.post(
+        f"/api/mail/approvals/{approval_id}/execute",
+        headers={"X-Api-Key": "secret"},
+    )
+    marked = client.post(
+        f"/api/mail/approvals/{approval_id}/mark-failed",
+        headers={"X-Api-Key": "secret"},
+        json={"reason": "Operator verified crashed worker"},
+    )
+
+    assert detail.status_code == 200
+    assert detail.json()["execution_state"] == "stuck"
+    assert detail.json()["is_stuck"] is True
+    assert execute_again.status_code == 409
+    assert marked.status_code == 200
+    assert marked.json()["status"] == "failed"
+    assert marked.json()["execution_state"] == "failed"
+    assert marked.json()["execution_error"] == "Operator verified crashed worker"
+    assert "approval_marked_failed" in [
+        event["event_type"] for event in marked.json()["events"]]
+
+
+def test_non_stale_started_and_terminal_derived_states(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    started_id = _create_approval(state, message_key="started", source_id="started")
+    client.post(
+        f"/api/mail/approvals/{started_id}/approve",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    state.mark_approval_execution_started(started_id)
+    fresh = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    _set_execution_started_at(state, started_id, fresh)
+
+    rejected_id = _create_approval(state, message_key="rejected", source_id="rejected")
+    client.post(
+        f"/api/mail/approvals/{rejected_id}/reject",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    expired_id = _create_approval(state, message_key="expired", source_id="expired")
+    client.post(
+        f"/api/mail/approvals/{expired_id}/expire",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert client.get(
+        f"/api/mail/approvals/{started_id}",
+        headers={"X-Api-Key": "secret"},
+    ).json()["execution_state"] == "started"
+    assert client.post(
+        f"/api/mail/approvals/{started_id}/mark-failed",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    ).status_code == 409
+    assert client.get(
+        f"/api/mail/approvals/{rejected_id}",
+        headers={"X-Api-Key": "secret"},
+    ).json()["execution_state"] == "rejected"
+    assert client.get(
+        f"/api/mail/approvals/{expired_id}",
+        headers={"X-Api-Key": "secret"},
+    ).json()["execution_state"] == "expired"
+
+
+def test_mark_failed_only_for_stale_started_terminal_items_rejected(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    pending_id = _create_approval(state, message_key="pending", source_id="pending")
+    executed_id = _create_approval(state, message_key="executed", source_id="executed", action_type="add_to_needs_reply")
+    rejected_id = _create_approval(state, message_key="rejected", source_id="rejected")
+    expired_id = _create_approval(state, message_key="expired", source_id="expired")
+    client.post(f"/api/mail/approvals/{executed_id}/approve", headers={"X-Api-Key": "secret"}, json={})
+    client.post(f"/api/mail/approvals/{executed_id}/execute", headers={"X-Api-Key": "secret"})
+    client.post(f"/api/mail/approvals/{rejected_id}/reject", headers={"X-Api-Key": "secret"}, json={})
+    client.post(f"/api/mail/approvals/{expired_id}/expire", headers={"X-Api-Key": "secret"})
+
+    for approval_id in [pending_id, executed_id, rejected_id, expired_id]:
+        response = client.post(
+            f"/api/mail/approvals/{approval_id}/mark-failed",
+            headers={"X-Api-Key": "secret"},
+            json={},
+        )
+        assert response.status_code == 409
 
 
 def test_audit_events_and_no_bridge_send_alert(tmp_path, monkeypatch):
@@ -525,3 +986,203 @@ def test_audit_events_and_no_bridge_send_alert(tmp_path, monkeypatch):
     with state._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM mail_needs_reply").fetchone()[0] == 1
+
+
+def test_cleanup_preview_is_read_only_and_excludes_started(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    old_pending = _create_approval(state, message_key="old-pending", source_id="old-pending")
+    _age_approval(state, old_pending, hours=30)
+    old_terminal = _terminal_approval(client, state, status="rejected", message_key="old-terminal")
+    _age_approval(state, old_terminal, days=45)
+    started = _create_approval(state, message_key="started-cleanup", source_id="started-cleanup")
+    client.post(f"/api/mail/approvals/{started}/approve", headers={"X-Api-Key": "secret"}, json={})
+    state.mark_approval_execution_started(started)
+    _set_execution_started_at(
+        state,
+        started,
+        (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat(),
+    )
+    before_events = _events(state)
+
+    preview = client.get(
+        "/api/mail/approvals/cleanup/preview",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["cleanup_enabled"] is False
+    assert body["would_expire_pending"] == 1
+    assert body["would_archive_terminal"] == 1
+    assert body["would_hard_delete"] == 0
+    assert body["stuck_or_started_excluded"] == 1
+    assert state.get_action_approval(old_pending)["status"] == "pending"
+    assert state.get_action_approval(old_terminal)["archived_at"] is None
+    assert state.get_action_approval(started)["execution_status"] == "started"
+    assert _events(state) == before_events
+
+
+def test_cleanup_disabled_then_forced_expires_and_archives_only_safe_rows(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    old_pending = _create_approval(state, message_key="cleanup-pending", source_id="cleanup-pending")
+    _age_approval(state, old_pending, hours=30)
+    fresh_pending = _create_approval(state, message_key="fresh-pending", source_id="fresh-pending")
+    old_terminal = _terminal_approval(client, state, status="expired", message_key="cleanup-terminal")
+    _age_approval(state, old_terminal, days=45)
+    started = _create_approval(state, message_key="cleanup-started", source_id="cleanup-started")
+    client.post(f"/api/mail/approvals/{started}/approve", headers={"X-Api-Key": "secret"}, json={})
+    state.mark_approval_execution_started(started)
+
+    disabled = client.post(
+        "/api/mail/approvals/cleanup",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["cleanup_ran"] is False
+    assert state.get_action_approval(old_pending)["status"] == "pending"
+
+    forced = client.post(
+        "/api/mail/approvals/cleanup",
+        headers={"X-Api-Key": "secret"},
+        json={"force": True},
+    )
+
+    assert forced.status_code == 200, forced.text
+    body = forced.json()
+    assert body["cleanup_ran"] is True
+    assert body["expired_ids"] == [old_pending]
+    assert body["archived_ids"] == [old_terminal]
+    assert body["hard_deleted_ids"] == []
+    assert state.get_action_approval(old_pending)["status"] == "expired"
+    assert state.get_action_approval(old_terminal)["archived_at"]
+    assert state.get_action_approval(fresh_pending)["status"] == "pending"
+    assert state.get_action_approval(started)["execution_status"] == "started"
+    event_types = [event[0] for event in _events(state)]
+    assert "approval_cleanup_expired" in event_types
+    assert "approval_cleanup_archived" in event_types
+
+
+def test_archive_unarchive_visibility_and_invalid_transitions(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    pending_id = _create_approval(state, message_key="archive-pending", source_id="archive-pending")
+    terminal_id = _terminal_approval(client, state, status="rejected", message_key="archive-terminal")
+    started_id = _create_approval(state, message_key="archive-started", source_id="archive-started")
+    client.post(f"/api/mail/approvals/{started_id}/approve", headers={"X-Api-Key": "secret"}, json={})
+    state.mark_approval_execution_started(started_id)
+
+    assert client.post(
+        f"/api/mail/approvals/{pending_id}/archive",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    ).status_code == 409
+    assert client.post(
+        f"/api/mail/approvals/{started_id}/archive",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    ).status_code == 409
+
+    archived = client.post(
+        f"/api/mail/approvals/{terminal_id}/archive",
+        headers={"X-Api-Key": "secret"},
+        json={"decided_by": "tester"},
+    )
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["archived_at"]
+    assert archived.json()["is_archived"] is True
+    hidden = client.get(
+        "/api/mail/approvals?status=rejected",
+        headers={"X-Api-Key": "secret"},
+    ).json()
+    visible = client.get(
+        "/api/mail/approvals?status=rejected&include_archived=true",
+        headers={"X-Api-Key": "secret"},
+    ).json()
+    assert terminal_id not in [row["approval_id"] for row in hidden]
+    assert terminal_id in [row["approval_id"] for row in visible]
+
+    unarchived = client.post(
+        f"/api/mail/approvals/{terminal_id}/unarchive",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    assert unarchived.status_code == 200
+    assert unarchived.json()["archived_at"] is None
+    restored = client.get(
+        "/api/mail/approvals?status=rejected",
+        headers={"X-Api-Key": "secret"},
+    ).json()
+    assert terminal_id in [row["approval_id"] for row in restored]
+    event_types = [event[0] for event in _events(state)]
+    assert "approval_archived" in event_types
+    assert "approval_unarchived" in event_types
+
+
+def test_approval_export_sanitized_filters_and_archived(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    state.create_ai_trigger(_trigger_payload())
+    state.complete_ai_item(_queue_message(state), _classification())
+    approval_id = _approval_id(state)
+    client.post(
+        f"/api/mail/approvals/{approval_id}/reject",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+    client.post(
+        f"/api/mail/approvals/{approval_id}/archive",
+        headers={"X-Api-Key": "secret"},
+        json={},
+    )
+
+    hidden = client.get(
+        "/api/mail/approvals/export?status=rejected&include_events=true",
+        headers={"X-Api-Key": "secret"},
+    )
+    exported = client.get(
+        "/api/mail/approvals/export?status=rejected&include_archived=true&include_events=true",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert hidden.status_code == 200
+    assert hidden.json()["count"] == 0
+    assert exported.status_code == 200, exported.text
+    body = exported.json()
+    assert body["count"] == 1
+    assert body["approvals"][0]["approval"]["approval_id"] == approval_id
+    assert body["approvals"][0]["events"]
+    text = str(body)
+    assert "body_text" not in text
+    assert "Payment due tomorrow." not in text
+    assert "secret" not in text.lower()
+
+
+def test_approval_list_filters_and_auth(tmp_path, monkeypatch):
+    client, state = _client(tmp_path, monkeypatch)
+    pending_id = _create_approval(state, message_key="filter-pending", source_id="filter-pending")
+    executed_id = _terminal_approval(client, state, status="executed", message_key="filter-executed")
+
+    no_auth = client.get("/api/mail/approvals/cleanup/preview")
+    invalid_status = client.get(
+        "/api/mail/approvals?status=weird",
+        headers={"X-Api-Key": "secret"},
+    )
+    invalid_state = client.get(
+        "/api/mail/approvals?execution_state=weird",
+        headers={"X-Api-Key": "secret"},
+    )
+    pending = client.get(
+        "/api/mail/approvals?status=pending&limit=500",
+        headers={"X-Api-Key": "secret"},
+    )
+    executed = client.get(
+        "/api/mail/approvals?execution_state=executed&status=executed",
+        headers={"X-Api-Key": "secret"},
+    )
+
+    assert no_auth.status_code in {401, 403}
+    assert invalid_status.status_code == 400
+    assert invalid_state.status_code == 400
+    assert pending.status_code == 200
+    assert [row["approval_id"] for row in pending.json()] == [pending_id]
+    assert executed.status_code == 200
+    assert [row["approval_id"] for row in executed.json()] == [executed_id]

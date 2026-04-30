@@ -2,6 +2,28 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-04-30 — Phase 4D.4 Approval Lifecycle Hygiene
+
+- Added `archived_at` lifecycle metadata for terminal approvals so old items can be hidden from the active Control Center while retaining audit history.
+- Added read-only cleanup preview, explicit cleanup execution, manual archive/unarchive, and sanitized JSON export endpoints for approval/audit history.
+- Added active/history Control Center filters, cleanup preview counts, one-by-one archive/unarchive actions, and current-filter JSON export.
+- Cleanup remains conservative: disabled by default, no hard delete in this phase, and started/stuck approvals are excluded.
+
+## 2026-04-30 — Phase 4D.3 Approval Preview Quality
+
+- Added read-only approval preview fields for operator confidence: title, summary, message context, trigger/rule context, risk level/reasons, reversibility, operator guidance, and current gate preview.
+- Gate preview now explains whether approval would be blocked, dry-run only, unsupported, terminal, stale/manual-review, or statically ready under current config without starting execution or writing audit events.
+- Updated the Control Center cards and detail panel to show risk, gate status, message context, proposed action, safety preview, and review guidance before approval.
+- Preserved the pre-live boundary: no autonomous execution, no bulk approval, no new action types, and no default mailbox mutation enablement.
+
+## 2026-04-30 — Phase 4D.2 Approval Result Visibility
+
+- Added normalized approval detail responses with derived execution state, expiry, decision timestamps, blocked reason, execution error, gate result, and audit event IDs.
+- Added chronological approval audit events via `/api/mail/approvals/{approval_id}/events` and embedded events in approval detail responses.
+- Added stale `execution_status='started'` detection with `started_stale_after_minutes=30` and a safe mark-failed endpoint for stale started approvals only; it does not retry execution.
+- Updated the Control Center with compact result visibility, a detail panel, proposed value/gate result display, audit timeline, and stuck-execution guidance.
+- Preserved the Phase 4D safety boundary: no bulk approval, no autonomous execution, no new action types, and existing mutation/dry-run gates still decide final outcome.
+
 ## 2026-04-30 — Phase 4D.1 Control Center Operator Approval
 
 - Added `mail_action_approvals` in `data/agent.db` for human review of AI-triggered action suggestions.

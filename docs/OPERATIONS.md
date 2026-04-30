@@ -399,6 +399,19 @@ Phase 4C.3A AI triggers write `ai_trigger_matched` dry-run audit events after AI
 
 Approval authorizes only a later execution attempt. The existing gates still decide the final outcome: `[agent].mode`, `[mail.imap_mutations].enabled`, `dry_run_default`, UIDVALIDITY, folder metadata, IMAP capabilities, and the action allow/block list. There is no bulk approval path. `send_imessage`, reply, forward, delete, expunge, unsubscribe, and webhooks remain blocked and should appear only as planned/blocked/audited records.
 
+Operator workflow:
+
+1. Open the dashboard Control Center and review pending approval items one at a time.
+2. Read the preview title, message sender/subject/account/folder/UID, AI trigger or rule explanation, proposed action, risk badge, and current gate preview.
+3. Treat **Dry-run only**, **Blocked by config**, **Unsupported action**, and **No mailbox change would occur under current settings** as expected safety outcomes, not live mutation.
+4. Use **Approve attempt** only when the preview context is acceptable; this still does not execute anything by itself and only allows one gated attempt.
+5. Use **Run gated attempt** on an approved item. Read the resulting execution state: `executed`, `blocked`, `failed`, `expired`, `rejected`, `started`, or `stuck`.
+6. For `blocked`, inspect the gate result. Dry-run and mutation-disabled outcomes mean no mailbox change was made.
+7. For `stuck`, do not retry automatically. Review the audit trail and mark failed only after confirming the worker did not finish.
+8. Use **Archive from active view** only for terminal approvals. Archive hides the row from the active view; audit is retained and the row can be unarchived from History.
+9. Use **Cleanup preview** to inspect how many old pending approvals would expire and how many terminal approvals would archive. The preview is read-only and excludes started/stuck approvals.
+10. Use **Export JSON** for sanitized approval/audit history when reviewing lifecycle decisions.
+
 Settings live in `config/settings.toml`:
 
 ```toml
@@ -429,6 +442,10 @@ curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
 
 curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
   'http://127.0.0.1:8090/api/mail/approvals?status=pending&limit=50' \
+  | python3 -m json.tool
+
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
+  "http://127.0.0.1:8090/api/mail/approvals/$APPROVAL_ID" \
   | python3 -m json.tool
 
 curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
