@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  PHASE_4A_SAFE_ACTIONS,
+  RULE_ACTIONS,
+  actionLabel,
+  actionRequiresTarget,
   accountOptionLabel,
   accountScopeLabel,
   defaultRuleAccountId,
   hasPriorityConflict,
+  isMutationAction,
   reorderPayloadForScope,
   rulePayloadWithAccountScope,
 } from '../src/views/ruleUiHelpers.ts';
@@ -101,20 +104,27 @@ test('reorder payload is scoped to one account', () => {
   ]);
 });
 
-test('unsafe and deferred actions are not exposed', () => {
+test('safe mutation actions are exposed with target rules', () => {
+  assert.equal(RULE_ACTIONS.includes('move_to_folder' as any), true);
+  assert.equal(RULE_ACTIONS.includes('mark_read' as any), true);
+  assert.equal(actionLabel('move_to_folder'), 'Move to folder');
+  assert.equal(isMutationAction('mark_flagged'), true);
+  assert.equal(actionRequiresTarget('move_to_folder'), true);
+  assert.equal(actionRequiresTarget('mark_read'), false);
+});
+
+test('dangerous actions are not exposed', () => {
   const forbidden = [
-    'move_to_folder',
     'add_label',
-    'mark_read',
-    'mark_flagged',
     'send_imessage',
     'delete',
+    'expunge',
     'auto_reply',
     'forward',
     'unsubscribe',
     'external_webhook',
   ];
   for (const action of forbidden) {
-    assert.equal(PHASE_4A_SAFE_ACTIONS.includes(action as any), false, action);
+    assert.equal(RULE_ACTIONS.includes(action as any), false, action);
   }
 });

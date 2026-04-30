@@ -9,6 +9,8 @@ import tomlkit
 import keyring
 from datetime import datetime, timezone
 
+from .ai_worker import DEFAULT_AI_SETTINGS
+
 logger = logging.getLogger("agent.config_manager")
 
 SETTINGS_FILE = os.environ.get("SETTINGS_FILE", "/app/config/settings.toml")
@@ -95,6 +97,83 @@ class ConfigManager:
             return "file" if store == "toml" else store
         except Exception:
             return "keychain"
+
+    def get_ai_settings(self) -> dict:
+        path = self._get_settings_path()
+        with open(path, "r", encoding="utf-8") as f:
+            doc = tomlkit.parse(f.read())
+        cfg = dict(DEFAULT_AI_SETTINGS)
+        cfg.update(doc.get("mail", {}).get("ai", {}))
+        return self._validate_ai_settings(cfg)
+
+    def update_ai_settings(self, payload: dict) -> dict:
+        current = self.get_ai_settings()
+        merged = {**current, **payload}
+        validated = self._validate_ai_settings(merged)
+
+        path = self._get_settings_path()
+        with open(path, "r", encoding="utf-8") as f:
+            doc = tomlkit.parse(f.read())
+        mail = doc.setdefault("mail", tomlkit.table())
+        ai = mail.setdefault("ai", tomlkit.table())
+        for key, value in validated.items():
+            ai[key] = value
+        self._atomic_write_toml(path, doc)
+        if self.state:
+            self.state.write_event("mail_ai_settings_updated", {
+                "enabled": validated["enabled"],
+                "provider": validated["provider"],
+                "model": validated["model"],
+            })
+        return validated
+
+    def _validate_ai_settings(self, settings: dict) -> dict:
+        enabled = settings.get("enabled", DEFAULT_AI_SETTINGS["enabled"])
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        provider = str(settings.get("provider", "ollama")).strip()
+        if provider != "ollama":
+            raise ValueError("provider must be 'ollama'")
+        base_url = str(settings.get("base_url", "")).strip()
+        if not base_url:
+            raise ValueError("base_url must be a non-empty string")
+        model = str(settings.get("model", "")).strip()
+        if not model:
+            raise ValueError("model must be a non-empty string")
+        try:
+            temperature = float(settings.get("temperature"))
+        except (TypeError, ValueError):
+            raise ValueError("temperature must be a number")
+        if temperature < 0 or temperature > 1:
+            raise ValueError("temperature must be between 0 and 1")
+        try:
+            timeout_seconds = int(settings.get("timeout_seconds"))
+        except (TypeError, ValueError):
+            raise ValueError("timeout_seconds must be an integer")
+        if timeout_seconds <= 0 or timeout_seconds > 300:
+            raise ValueError("timeout_seconds must be between 1 and 300")
+        try:
+            max_body_chars = int(settings.get("max_body_chars"))
+        except (TypeError, ValueError):
+            raise ValueError("max_body_chars must be an integer")
+        if max_body_chars <= 0 or max_body_chars > 100000:
+            raise ValueError("max_body_chars must be between 1 and 100000")
+        try:
+            urgency_threshold = int(settings.get("urgency_threshold"))
+        except (TypeError, ValueError):
+            raise ValueError("urgency_threshold must be an integer")
+        if urgency_threshold < 0 or urgency_threshold > 10:
+            raise ValueError("urgency_threshold must be between 0 and 10")
+        return {
+            "enabled": enabled,
+            "provider": provider,
+            "base_url": base_url,
+            "model": model,
+            "temperature": temperature,
+            "timeout_seconds": timeout_seconds,
+            "max_body_chars": max_body_chars,
+            "urgency_threshold": urgency_threshold,
+        }
 
     def save_credential(self, account_id: str, app_password: str, email: str):
         store = self.get_credential_store_type()

@@ -657,3 +657,54 @@ sudo docker compose logs -f household-api
 - Keep the household health check in the deploy script.
 - Keep household data in `household.db`; do not mix it directly into `finance.db`.
 - Treat the finance Settings household section as an admin proxy, not the source of truth.
+
+## Mail AI Enrichment Not Completing
+
+### Symptoms
+
+- Dashboard shows AI status as `pending`, `running`, or `failed`.
+- `POST /api/mail/ai/test` returns 502 or validation errors.
+- Recent messages still show deterministic classification but no AI summary.
+
+### Likely Cause
+
+- `[mail.ai].enabled` is false.
+- Ollama is not reachable from Docker at `[mail.ai].base_url`.
+- The configured model is not pulled locally.
+- Ollama returned malformed JSON or schema-invalid values.
+
+### How To Diagnose
+
+```bash
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
+  http://127.0.0.1:8090/api/mail/ai/settings | python3 -m json.tool
+
+sqlite3 data/agent.db "
+SELECT id, status, attempts, last_error, created_at, updated_at
+FROM mail_ai_queue
+ORDER BY id DESC
+LIMIT 20;
+"
+
+docker compose logs -f mail-agent
+```
+
+From the host, confirm Ollama and the model:
+
+```bash
+curl http://localhost:11434/api/tags
+ollama pull gemma3:4b
+```
+
+### Fix
+
+- Keep AI disabled if enrichment is not needed; existing rule/classifier/PDF routing continues to work.
+- Set `base_url = "http://host.docker.internal:11434"` for Docker mail-agent access to host Ollama.
+- Use the dashboard AI settings test before enabling queue processing.
+- For malformed model output, inspect `last_error`; validation failures are intentionally failed and do not fire actions.
+
+### Safety Boundary
+
+Phase 4B is read-only. It never performs IMAP mutations, auto-reply, forwarding, deletion, unsubscribe, external webhooks, or AI-triggered iMessage actions.
+
+Phase 4C.1 mutation primitives can still be blocked by design. Check `[agent].mode`, `[mail.imap_mutations].enabled`, dry-run status, UIDVALIDITY, and per-account IMAP capability output before treating a blocked mutation as a runtime failure.

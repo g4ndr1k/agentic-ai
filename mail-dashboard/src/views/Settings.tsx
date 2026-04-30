@@ -1,6 +1,8 @@
 import { ReactNode, useEffect, useState } from 'react';
 import {
   ApiError,
+  AiClassification,
+  AiSettings,
   MailProcessingEvent,
   MailRule,
   MailRuleAction,
@@ -10,14 +12,18 @@ import {
   useApi,
 } from '../api/mail';
 import {
-  PHASE_4A_SAFE_ACTIONS,
+  RULE_ACTIONS,
+  actionLabel,
+  actionRequiresTarget,
   accountOptionLabel,
   accountScopeLabel,
   activeRuleAccounts,
   defaultRuleAccountId,
   hasPriorityConflict,
+  isMutationAction,
   nextPriorityForScope,
   reorderPayloadForScope,
+  ruleHasMutationAction,
   rulesInScope,
 } from './ruleUiHelpers';
 
@@ -25,7 +31,7 @@ function normalizeAppPassword(value: string) {
   return value.replace(/\s+/g, '');
 }
 
-const SAFE_ACTIONS = PHASE_4A_SAFE_ACTIONS;
+const SAFE_ACTIONS = RULE_ACTIONS;
 
 const OPERATORS = [
   'equals',
@@ -101,6 +107,9 @@ export default function Settings() {
     reorderRules,
     previewRules,
     listProcessingEvents,
+    getAiSettings,
+    updateAiSettings,
+    testAi,
   } = useApi();
   const [showAddModal, setShowAddModal] = useState(false);
   const [formData, setFormData] = useState({ display_name: '', email: '', app_password: '' });
@@ -117,10 +126,15 @@ export default function Settings() {
   const [previewResult, setPreviewResult] = useState<RulePreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<MailProcessingEvent[]>([]);
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiTestResult, setAiTestResult] = useState<AiClassification | null>(null);
   const activeAccounts = activeRuleAccounts(accounts);
 
   useEffect(() => {
     refreshRulesAndAudit();
+    refreshAiSettings();
   }, []);
 
   useEffect(() => {
@@ -147,6 +161,48 @@ export default function Settings() {
       }
     } catch (e: any) {
       setRuleError(e.message);
+    }
+  };
+
+  const refreshAiSettings = async () => {
+    setAiError(null);
+    try {
+      setAiSettings(await getAiSettings());
+    } catch (e: any) {
+      setAiError(e.message);
+    }
+  };
+
+  const saveAiSettings = async () => {
+    if (!aiSettings) return;
+    setAiStatus('Saving AI settings...');
+    setAiError(null);
+    try {
+      const saved = await updateAiSettings(aiSettings);
+      setAiSettings(saved);
+      setAiStatus('AI settings saved.');
+      await reloadConfig();
+    } catch (e: any) {
+      setAiStatus(null);
+      setAiError(e.message);
+    }
+  };
+
+  const runAiTest = async () => {
+    setAiStatus('Testing Ollama...');
+    setAiError(null);
+    setAiTestResult(null);
+    try {
+      const result = await testAi({
+        sender: 'alerts@example.com',
+        subject: 'Payment due reminder',
+        body: 'Your payment is due tomorrow. Please review your account.',
+      });
+      setAiTestResult(result);
+      setAiStatus('AI test completed.');
+    } catch (e: any) {
+      setAiStatus(null);
+      setAiError(e.message);
     }
   };
 
@@ -261,7 +317,11 @@ export default function Settings() {
 
   const updateAction = (index: number, patch: Partial<MailRuleAction>) => {
     const next = [...ruleDraft.actions];
-    next[index] = { ...next[index], ...patch };
+    const updated = { ...next[index], ...patch };
+    if (patch.action_type && !actionRequiresTarget(patch.action_type)) {
+      updated.target = '';
+    }
+    next[index] = updated;
     setRuleDraft({ ...ruleDraft, actions: next });
   };
 
@@ -346,6 +406,17 @@ export default function Settings() {
         </div>
       )}
 
+      <AiSettingsCard
+        settings={aiSettings}
+        setSettings={setAiSettings}
+        status={aiStatus}
+        error={aiError}
+        testResult={aiTestResult}
+        onRefresh={refreshAiSettings}
+        onSave={saveAiSettings}
+        onTest={runAiTest}
+      />
+
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/50 text-gray-400 uppercase text-[10px] tracking-wider">
@@ -409,7 +480,7 @@ export default function Settings() {
           <div>
             <h2 className="text-lg font-semibold text-white">Rules</h2>
             <p className="text-xs text-gray-500 mt-1">
-              Phase 4A deterministic rules only. Deferred IMAP mutations and AI settings are intentionally hidden.
+              Deterministic rules remain the primary classifier. AI enrichment is read-only and does not mutate mailboxes.
             </p>
           </div>
           <div className="flex gap-2">
@@ -469,6 +540,16 @@ export default function Settings() {
                             <div className="text-xs text-gray-500 mt-1">
                               {accountScopeLabel(rule.account_id, accounts)} · Priority {rule.priority} · {rule.match_type} · {rule.conditions.length} conditions · {rule.actions.length} actions
                             </div>
+                            {ruleHasMutationAction(rule) && (
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                <span className="px-2 py-0.5 rounded bg-amber-900/30 text-amber-300 text-[10px] font-medium">
+                                  Mailbox action
+                                </span>
+                                <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-400 text-[10px] font-medium">
+                                  Dry-run protected
+                                </span>
+                              </div>
+                            )}
                           </div>
                           <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
                             rule.enabled ? 'bg-green-900/30 text-green-400' : 'bg-gray-800 text-gray-500'
@@ -645,22 +726,28 @@ export default function Settings() {
                 onRemove={(index) => setRuleDraft({ ...ruleDraft, actions: ruleDraft.actions.filter((_, i) => i !== index) })}
                 render={(action, index) => (
                   <div className="space-y-2">
-                    <div className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_auto] gap-2">
+                    <div className={`grid grid-cols-1 gap-2 ${
+                      actionRequiresTarget(action.action_type)
+                        ? 'md:grid-cols-[1.5fr_1fr_auto]'
+                        : 'md:grid-cols-[1.5fr_auto]'
+                    }`}>
                       <select
                         value={action.action_type}
                         onChange={(e) => updateAction(index, { action_type: e.target.value })}
                         className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
                       >
                         {SAFE_ACTIONS.map((actionType) => (
-                          <option key={actionType} value={actionType}>{actionType}</option>
+                          <option key={actionType} value={actionType}>{actionLabel(actionType)}</option>
                         ))}
                       </select>
-                      <input
-                        value={action.target ?? ''}
-                        onChange={(e) => updateAction(index, { target: e.target.value })}
-                        placeholder="Target (optional)"
-                        className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                      />
+                      {actionRequiresTarget(action.action_type) && (
+                        <input
+                          value={action.target ?? ''}
+                          onChange={(e) => updateAction(index, { target: e.target.value })}
+                          placeholder="Target folder"
+                          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                        />
+                      )}
                       <label className="flex items-center gap-2 text-xs text-gray-400 whitespace-nowrap">
                         <input
                           type="checkbox"
@@ -670,6 +757,11 @@ export default function Settings() {
                         Stop
                       </label>
                     </div>
+                    {isMutationAction(action.action_type) && (
+                      <div className="rounded-lg border border-amber-900/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                        Mailbox mutations only execute when agent mode is live and mail.imap_mutations.enabled=true. Otherwise they are audited as blocked or dry-run.
+                      </div>
+                    )}
                     <JsonValueEditor
                       label="value_json"
                       value={action.value_json}
@@ -786,6 +878,154 @@ export default function Settings() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiSettingsCard({
+  settings,
+  setSettings,
+  status,
+  error,
+  testResult,
+  onRefresh,
+  onSave,
+  onTest,
+}: {
+  settings: AiSettings | null;
+  setSettings: (settings: AiSettings) => void;
+  status: string | null;
+  error: string | null;
+  testResult: AiClassification | null;
+  onRefresh: () => void;
+  onSave: () => void;
+  onTest: () => void;
+}) {
+  const patch = (updates: Partial<AiSettings>) => {
+    if (!settings) return;
+    setSettings({ ...settings, ...updates });
+  };
+
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-white">AI Enrichment</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Read-only Ollama classification queue. Mailbox actions remain disabled for this phase.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={onRefresh}
+            className="px-3 py-2 bg-gray-800 text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
+          >
+            Refresh
+          </button>
+          <button
+            onClick={onTest}
+            disabled={!settings}
+            className="px-3 py-2 bg-gray-800 text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-700 disabled:opacity-50 transition-colors"
+          >
+            Test
+          </button>
+          <button
+            onClick={onSave}
+            disabled={!settings}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-900/20 border border-red-900/50 p-3 rounded-lg text-red-400 text-sm mb-4">
+          {error}
+        </div>
+      )}
+      {status && (
+        <div className="bg-green-900/20 border border-green-900/50 p-3 rounded-lg text-green-400 text-sm mb-4">
+          {status}
+        </div>
+      )}
+
+      {!settings ? (
+        <div className="text-sm text-gray-500">AI settings unavailable</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              onChange={(e) => patch({ enabled: e.target.checked })}
+            />
+            Enabled
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Provider</span>
+            <input
+              value={settings.provider}
+              readOnly
+              className="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-gray-400"
+            />
+          </label>
+          <label className="md:col-span-2">
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Base URL</span>
+            <input
+              value={settings.base_url}
+              onChange={(e) => patch({ base_url: e.target.value })}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            />
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Model</span>
+            <input
+              value={settings.model}
+              onChange={(e) => patch({ model: e.target.value })}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            />
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Timeout</span>
+            <input
+              type="number"
+              value={settings.timeout_seconds}
+              onChange={(e) => patch({ timeout_seconds: Number(e.target.value) })}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            />
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Max Body Chars</span>
+            <input
+              type="number"
+              value={settings.max_body_chars}
+              onChange={(e) => patch({ max_body_chars: Number(e.target.value) })}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            />
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Urgency Threshold</span>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={settings.urgency_threshold}
+              onChange={(e) => patch({ urgency_threshold: Number(e.target.value) })}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            />
+          </label>
+        </div>
+      )}
+
+      {testResult && (
+        <div className="mt-4 bg-gray-950/70 border border-gray-800 rounded-lg p-3 text-sm">
+          <div className="text-gray-300">
+            {testResult.category} · urgency {testResult.urgency_score}/10 · confidence {Math.round(testResult.confidence * 100)}%
+          </div>
+          <div className="text-gray-500 mt-1">{testResult.summary}</div>
         </div>
       )}
     </div>
@@ -984,10 +1224,19 @@ function PreviewPanel({
                 <div className="text-gray-500">No actions planned.</div>
               ) : (
                 previewResult.planned_actions.map((action, index) => (
-                  <div key={`${action.rule_id}-${action.action_type}-${index}`} className="flex items-center justify-between gap-2 border border-gray-800 rounded-lg p-3 bg-gray-950/40">
+                  <div key={`${action.rule_id}-${action.action_type}-${index}`} className="flex items-start justify-between gap-2 border border-gray-800 rounded-lg p-3 bg-gray-950/40">
                     <div>
-                      <div className="font-mono text-xs text-gray-200">{action.action_type}</div>
+                      <div className="font-mono text-xs text-gray-200">{actionLabel(action.action_type)}</div>
                       {action.target && <div className="text-xs text-gray-500 mt-1">Target: {action.target}</div>}
+                      {action.mutation && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          Gate: <span className="text-amber-300">{action.gate_status}</span>
+                          {typeof action.would_execute === 'boolean' && (
+                            <span> · would execute: {String(action.would_execute)}</span>
+                          )}
+                          {action.reason && <span> · {action.reason}</span>}
+                        </div>
+                      )}
                     </div>
                     <span className="text-[10px] uppercase tracking-wider text-gray-500">rule {action.rule_id}</span>
                   </div>

@@ -10,22 +10,29 @@ import hmac
 import imaplib
 import json
 from typing import Any, Optional
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, ValidationError
 
 from .state import AgentState, apply_sqlite_pragmas
 from .rules import (
     ACTIVE_ACTIONS,
     ALLOWED_OPERATORS,
+    MUTATION_ACTIONS,
     evaluate_message,
     validate_action_type,
     validate_operator,
 )
+from .imap_source import probe_capabilities
 from .config_manager import (
     ConfigManager,
     DuplicateAccountError,
     SoftDeletedAccountError,
+)
+from .ai_worker import (
+    MailAiClassification,
+    classify_with_ollama,
 )
 
 logger = logging.getLogger("agent.api_mail")
@@ -81,6 +88,32 @@ def _get_config_accounts() -> list[dict]:
         return cfg.get("mail", {}).get("imap", {}).get("accounts", [])
     except Exception:
         return []
+
+def _get_settings() -> dict:
+    import tomllib
+    settings_file = os.environ.get("SETTINGS_FILE", "/app/config/settings.toml")
+    try:
+        with open(settings_file, "rb") as f:
+            return tomllib.load(f)
+    except Exception:
+        return {}
+
+def _resolve_mode(settings: dict) -> str:
+    agent_cfg = settings.get("agent", {})
+    mode = str(agent_cfg.get("mode", "")).strip()
+    if mode in ("observe", "draft_only", "live"):
+        return mode
+    safe_default = str(agent_cfg.get("safe_default", "draft_only")).strip()
+    if safe_default in ("observe", "draft_only"):
+        return safe_default
+    return "draft_only"
+
+def _find_account(account_id: str) -> dict | None:
+    for acct in _get_config_accounts():
+        names = {acct.get("id"), acct.get("name"), acct.get("email")}
+        if account_id in names:
+            return acct
+    return None
 
 def _is_placeholder_account(acct: dict) -> bool:
     email = str(acct.get("email", "")).strip()
@@ -153,6 +186,29 @@ class RuleReorder(BaseModel):
 
 class RulePreview(BaseModel):
     message: dict[str, Any]
+
+class MutationPreview(BaseModel):
+    action_type: str = Field(..., min_length=1, max_length=100)
+    target: Optional[str] = Field(None, max_length=500)
+    value_json: Optional[Any] = None
+    dry_run: Optional[bool] = None
+
+class AiSettingsPatch(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    timeout_seconds: Optional[int] = None
+    max_body_chars: Optional[int] = None
+    urgency_threshold: Optional[int] = None
+
+class AiTestRequest(BaseModel):
+    sender: str = Field(..., min_length=1, max_length=500)
+    subject: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(..., min_length=1, max_length=50000)
+    received_at: Optional[str] = None
+    account_id: Optional[str] = None
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -227,6 +283,17 @@ def _validate_rule_payload(conditions: list[RuleConditionIn],
         validate_operator(condition.operator)
     for action in actions:
         validate_action_type(action.action_type)
+        target = (action.target or "").strip()
+        if action.action_type == "move_to_folder" and not target:
+            raise ValueError("move_to_folder requires a non-empty target")
+        if action.action_type in MUTATION_ACTIONS - {"move_to_folder"} and target:
+            raise ValueError(f"{action.action_type} does not accept a target")
+
+
+def _normalize_rule_action(action: RuleActionIn) -> RuleActionIn:
+    if action.action_type in MUTATION_ACTIONS - {"move_to_folder"}:
+        action.target = None
+    return action
 
 def _replace_rule_children(conn: sqlite3.Connection, rule_id: int,
                            conditions: list[RuleConditionIn],
@@ -247,6 +314,7 @@ def _replace_rule_children(conn: sqlite3.Connection, rule_id: int,
             int(condition.case_sensitive),
         ))
     for action in actions:
+        action = _normalize_rule_action(action)
         conn.execute("""
             INSERT INTO mail_rule_actions
                 (rule_id, action_type, target, value_json, stop_processing)
@@ -529,7 +597,18 @@ async def reorder_rules(data: RuleReorder):
 @router.post("/rules/preview", dependencies=[Depends(require_api_key)])
 async def preview_rules(data: RulePreview):
     state = _ensure_state()
-    result = evaluate_message(state, data.message, preview=True)
+    settings = _get_settings()
+    cfg = settings.get("mail", {}).get("imap_mutations", {})
+    result = evaluate_message(
+        state,
+        data.message,
+        preview=True,
+        mutation_context={
+            "mode": _resolve_mode(settings),
+            "config": cfg,
+            "dry_run": bool(cfg.get("dry_run_default", True)),
+        },
+    )
     return {
         "matched_conditions": result.matched_conditions,
         "planned_actions": result.planned_actions,
@@ -538,6 +617,79 @@ async def preview_rules(data: RulePreview):
         "route_to_pdf_pipeline": result.route_to_pdf_pipeline,
         "active_actions": sorted(ACTIVE_ACTIONS),
         "allowed_operators": sorted(ALLOWED_OPERATORS),
+    }
+
+@router.get(
+    "/accounts/{account_id}/imap-capabilities",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_imap_capabilities(
+        account_id: str,
+        folder: str = Query("INBOX", min_length=1, max_length=500),
+        target_folder: Optional[str] = Query(None, max_length=500)):
+    account = _find_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    payload = dict(account)
+    payload["folder"] = folder
+    if target_folder:
+        payload["target_folder"] = target_folder
+    return probe_capabilities(payload).to_dict()
+
+@router.post(
+    "/messages/{message_id}/mutation-preview",
+    dependencies=[Depends(require_api_key)],
+)
+async def mutation_preview(message_id: str, data: MutationPreview):
+    validate_action_type(data.action_type)
+    if data.action_type not in {
+        "move_to_folder", "mark_read", "mark_unread",
+        "mark_flagged", "unmark_flagged",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Action is not an IMAP mutation action.",
+        )
+    state = _ensure_state()
+    source = state.find_ai_reprocess_source(message_id)
+    if not source:
+        raise HTTPException(
+            status_code=404,
+            detail="Message metadata is not available for mutation preview.",
+        )
+    settings = _get_settings()
+    cfg = settings.get("mail", {}).get("imap_mutations", {})
+    mode = _resolve_mode(settings)
+    dry_run = data.dry_run
+    if dry_run is None:
+        dry_run = bool(cfg.get("dry_run_default", True))
+    gate = "planned"
+    if mode != "live":
+        gate = "mode_blocked"
+    elif not bool(cfg.get("enabled", False)):
+        gate = "mutation_disabled"
+    elif dry_run:
+        gate = "dry_run"
+    return {
+        "message_id": message_id,
+        "planned_actions": [{
+            "action_type": data.action_type,
+            "target": data.target,
+            "value": data.value_json,
+            "status": gate,
+        }],
+        "gate": {
+            "mode": mode,
+            "mutation_enabled": bool(cfg.get("enabled", False)),
+            "dry_run": dry_run,
+            "status": gate,
+        },
+        "message": {
+            "account_id": source.get("account_id"),
+            "folder": source.get("folder"),
+            "imap_uid": source.get("imap_uid"),
+            "uidvalidity": source.get("uidvalidity"),
+        },
     }
 
 @router.get(
@@ -591,6 +743,73 @@ async def list_processing_events(limit: int = Query(50, ge=1, le=200)):
     finally:
         conn.close()
 
+@router.get("/ai/settings", dependencies=[Depends(require_api_key)])
+async def get_ai_settings():
+    try:
+        return ConfigManager(state=_ensure_state()).get_ai_settings()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.put("/ai/settings", dependencies=[Depends(require_api_key)])
+async def put_ai_settings(data: AiSettingsPatch):
+    try:
+        payload = data.model_dump(exclude_unset=True)
+        return ConfigManager(state=_ensure_state()).update_ai_settings(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post("/ai/test", dependencies=[Depends(require_api_key)])
+async def test_ai(data: AiTestRequest):
+    try:
+        settings = ConfigManager(state=_ensure_state()).get_ai_settings()
+        item = {
+            "sender": data.sender,
+            "subject": data.subject,
+            "body_text": data.body,
+            "received_at": data.received_at,
+            "account_id": data.account_id,
+        }
+        result = classify_with_ollama(item, settings)
+        return result.model_dump()
+    except ValidationError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "AI output failed validation",
+                     "errors": exc.errors()},
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama request failed: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post(
+    "/messages/{message_id}/reprocess",
+    dependencies=[Depends(require_api_key)],
+)
+async def reprocess_message(message_id: str):
+    state = _ensure_state()
+    source = state.find_ai_reprocess_source(message_id)
+    if not source:
+        raise HTTPException(
+            status_code=404,
+            detail="Message body is not available for AI reprocess.",
+        )
+    if not source.get("body_text"):
+        raise HTTPException(
+            status_code=422,
+            detail="Message body is empty; fetch a fresh message before reprocessing.",
+        )
+    settings = ConfigManager(state=state).get_ai_settings()
+    queue_id = state.enqueue_manual_ai_reprocess(
+        source, max_body_chars=int(settings["max_body_chars"]))
+    return {"queue_id": queue_id, "status": "pending"}
+
 @router.get("/recent", dependencies=[Depends(require_api_key)])
 async def get_recent(limit: int = Query(20, ge=1, le=200)):
     if not _db_exists():
@@ -599,12 +818,25 @@ async def get_recent(limit: int = Query(20, ge=1, le=200)):
         conn = _connect()
         try:
             rows = conn.execute(
-                "SELECT bridge_id, message_id, processed_at, category, "
-                "       urgency, provider, alert_sent, summary, "
-                "       COALESCE(status, 'processed') AS status, "
-                "       COALESCE(source, 'bridge') AS source "
-                "FROM processed_messages "
-                "ORDER BY processed_at DESC LIMIT ?",
+                "SELECT pm.bridge_id, pm.message_id, pm.processed_at, "
+                "       pm.category, pm.urgency, pm.provider, "
+                "       pm.alert_sent, pm.summary, "
+                "       COALESCE(pm.status, 'processed') AS status, "
+                "       COALESCE(pm.source, 'bridge') AS source, "
+                "       q.id AS ai_queue_id, q.status AS ai_status, "
+                "       q.last_error AS ai_last_error, "
+                "       c.category AS ai_category, "
+                "       c.urgency_score AS ai_urgency_score, "
+                "       c.confidence AS ai_confidence, "
+                "       c.summary AS ai_summary "
+                "FROM processed_messages pm "
+                "LEFT JOIN mail_ai_queue q ON q.message_id = pm.message_id "
+                "  AND q.id = ("
+                "    SELECT MAX(q2.id) FROM mail_ai_queue q2 "
+                "    WHERE q2.message_id = pm.message_id"
+                "  ) "
+                "LEFT JOIN mail_ai_classifications c ON c.queue_id = q.id "
+                "ORDER BY pm.processed_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]

@@ -33,7 +33,7 @@ interface Summary {
   mode: string;
 }
 
-interface RecentEmail {
+export interface RecentEmail {
   bridge_id: string;
   message_id: string;
   processed_at: string;
@@ -44,6 +44,33 @@ interface RecentEmail {
   summary: string;
   status: string;
   source: string;
+  ai_queue_id?: number | null;
+  ai_status?: string | null;
+  ai_last_error?: string | null;
+  ai_category?: string | null;
+  ai_urgency_score?: number | null;
+  ai_confidence?: number | null;
+  ai_summary?: string | null;
+}
+
+export interface AiSettings {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  timeout_seconds: number;
+  max_body_chars: number;
+  urgency_threshold: number;
+}
+
+export interface AiClassification {
+  category: string;
+  urgency_score: number;
+  confidence: number;
+  summary: string;
+  needs_reply: boolean;
+  reason: string;
 }
 
 export interface AccountHealth {
@@ -100,6 +127,11 @@ export interface RulePreviewResult {
     target?: string | null;
     value?: any;
     status?: string;
+    would_execute?: boolean;
+    gate_status?: string;
+    reason?: string;
+    dry_run?: boolean;
+    mutation?: boolean;
   }>;
   would_skip_ai: boolean;
   continue_to_classifier: boolean;
@@ -141,6 +173,10 @@ interface ApiContextType {
   reorderRules: (rules: Array<{ rule_id: number; priority: number }>) => Promise<any>;
   previewRules: (message: Record<string, any>) => Promise<RulePreviewResult>;
   listProcessingEvents: (limit?: number) => Promise<MailProcessingEvent[]>;
+  getAiSettings: () => Promise<AiSettings>;
+  updateAiSettings: (data: Partial<AiSettings>) => Promise<AiSettings>;
+  testAi: (data: { sender: string; subject: string; body: string }) => Promise<AiClassification>;
+  reprocessMessage: (messageId: string) => Promise<{ queue_id: number; status: string }>;
 }
 
 const ApiContext = createContext<ApiContextType | null>(null);
@@ -332,6 +368,32 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     return fetchWithAuth(`/api/mail/processing-events?limit=${limit}`);
   }, [fetchWithAuth]);
 
+  const getAiSettings = useCallback(async () => {
+    return fetchWithAuth('/api/mail/ai/settings');
+  }, [fetchWithAuth]);
+
+  const updateAiSettings = useCallback(async (data: Partial<AiSettings>) => {
+    return fetchWithAuth('/api/mail/ai/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }, [fetchWithAuth]);
+
+  const testAi = useCallback(async (data: { sender: string; subject: string; body: string }) => {
+    return fetchWithAuth('/api/mail/ai/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }, [fetchWithAuth]);
+
+  const reprocessMessage = useCallback(async (messageId: string) => {
+    return fetchWithAuth(`/api/mail/messages/${encodeURIComponent(messageId)}/reprocess`, {
+      method: 'POST',
+    });
+  }, [fetchWithAuth]);
+
   useEffect(() => {
     refresh();
     const interval = setInterval(refresh, 30000);
@@ -344,7 +406,8 @@ export function ApiProvider({ children }: { children: ReactNode }) {
         summary, recent, accounts, loading, error, refresh, triggerRun,
         testAccount, addAccount, deleteAccount, reactivateAccount, reloadConfig,
         listRules, createRule, updateRule, deleteRule, reorderRules,
-        previewRules, listProcessingEvents
+        previewRules, listProcessingEvents, getAiSettings, updateAiSettings,
+        testAi, reprocessMessage
       }}
     >
       {children}

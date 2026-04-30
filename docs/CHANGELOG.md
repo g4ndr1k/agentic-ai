@@ -2,6 +2,15 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-04-30 — Mail Rules Phase 4B Through 4C.2
+
+- Added Phase 4B read-only AI enrichment with `mail_ai_queue`, `mail_ai_classifications`, Ollama JSON-schema validation, manual reprocess, and dashboard AI status display.
+- Added Phase 4C.1 IMAP mutation primitives: capability probing, UIDVALIDITY-checked `UID MOVE`, safe `UID STORE` for `\Seen` / `\Flagged`, conservative config gates, dry-run enforcement, and mutation audit rows.
+- Added Phase 4C.2 rule-managed safe mailbox actions for deterministic rules: `move_to_folder`, `mark_read`, `mark_unread`, `mark_flagged`, and `unmark_flagged`.
+- Kept mailbox mutations blocked outside `live`, blocked when `[mail.imap_mutations].enabled=false`, and dry-run protected by default.
+- Updated the native mail dashboard Rules UI to expose only safe mailbox actions with target handling, preview gate results, and clear preview/dry-run safety labels.
+- Verified the accepted checkpoint with backend regression tests, dashboard build, authenticated `mailagent_status.py --no-run`, Docker rebuild, and bounded mail-agent logs.
+
 ## 2026-04-29 — Mail Account Settings Hardening
 
 - Moved the native `mail-dashboard` account-management flow onto the finance API mount at `127.0.0.1:8090/api/mail/*`, with `agent.app.api_mail` imported and mounted by `finance/api.py`.
@@ -19,7 +28,7 @@ Human-readable project history. Reverse chronological order.
 - Added IMAP UID/UIDVALIDITY state, bounded re-scan handling, size guards, and durable message/attachment idempotency keys.
 - Added attachment routing through `agent/app/pdf_router.py`: bridge multipart `/pdf/unlock`, strict filename validation, deterministic fallback names, NAS sentinel checks, collision handling, and explicit `pending_review` / `failed_retryable` states.
 - Added server-side safety modes: `observe`, `draft_only`, and `live`; blocked actions are recorded as `mode_blocked`.
-- Added local mail-agent dashboard APIs under `127.0.0.1:8080/api/mail/*` and a smoke harness in `scripts/mailagent_status.py`.
+- Added local mail-agent worker APIs and a smoke harness in `scripts/mailagent_status.py`; dashboard-facing mail APIs were later mounted through the finance API at `127.0.0.1:8090/api/mail/*`, while worker health/debug remains on `127.0.0.1:8080`.
 - Added the Electron + React `mail-dashboard/` menu-bar app and fixed its production build.
 - Hardened bridge health checking so the agent consults authenticated `/health` and requires `overall=ok` instead of relying on `/healthz`.
 - Updated `scripts/mailagent_preflight.py` to report Docker compose restart policies, healthchecks, volumes, API collisions, SQLite schemas, config keys, and NAS mount state more accurately.
@@ -172,3 +181,11 @@ Source commits:
 - Added multi-provider IMAP work.
 - Added homepage deployment workflow notes.
 - Added PWA privacy mode for hiding monetary values.
+## 2026-04-30 — Phase 4B Read-Only Mail AI Enrichment
+
+- Added `[mail.ai]` settings with atomic TOML read/write APIs.
+- Added `mail_ai_queue` lifecycle helpers and a single-worker Ollama `/api/chat` enrichment loop.
+- Added Pydantic validation for structured AI categories, urgency, confidence, summary, and raw JSON persistence.
+- Added `/api/mail/ai/settings`, `/api/mail/ai/test`, and `/api/mail/messages/{message_id}/reprocess`.
+- Dashboard now shows AI status/category/urgency/confidence/summary separately from deterministic classification and can queue manual reprocess.
+- Phase 4B remains read-only: no IMAP mutations, auto-reply, forwarding, delete, unsubscribe, webhooks, or AI-triggered iMessage actions.

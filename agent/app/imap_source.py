@@ -31,11 +31,54 @@ import re
 import socket
 import subprocess
 import sys
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("agent.imap_source")
+
+SAFE_MUTATION_FLAGS = {"\\Seen", "\\Flagged"}
+
+
+@dataclass
+class ImapCapabilities:
+    account_id: str
+    folder: str | None = None
+    capabilities: list[str] = field(default_factory=list)
+    supports_move: bool = False
+    supports_uidplus: bool = False
+    permanent_flags: list[str] = field(default_factory=list)
+    flag_support: bool = False
+    mailbox_separator: str | None = None
+    list_available: bool = False
+    create_supported: bool = False
+    target_exists: bool | None = None
+    target_can_be_created: bool | None = None
+    uidvalidity: int | None = None
+    status: str = "ok"
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MutationResult:
+    account_id: str
+    folder: str
+    uidvalidity: int
+    uid: int
+    operation: str
+    target: str | None = None
+    dry_run: bool = True
+    status: str = "planned"
+    provider_response: str | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 # ── Auth helper ──────────────────────────────────────────────────────────────
 
@@ -369,6 +412,259 @@ class IMAPPoller:
         imap.sock.settimeout(self.TIMEOUT)
         return imap
 
+    def probe_capabilities(
+            self, folder: str = "INBOX",
+            target_folder: str | None = None) -> ImapCapabilities:
+        account_id = self.name
+        capabilities = ImapCapabilities(account_id=account_id, folder=folder)
+        try:
+            password = self._get_password()
+            imap = self._connect()
+        except Exception as exc:
+            capabilities.status = "failed"
+            capabilities.error = str(exc)[:500]
+            return capabilities
+
+        try:
+            imap.login(self.email, password)
+            capabilities.capabilities = _capability_names(imap)
+            cap_set = set(capabilities.capabilities)
+            capabilities.supports_move = "MOVE" in cap_set
+            capabilities.supports_uidplus = "UIDPLUS" in cap_set
+            capabilities.create_supported = "CREATE" in cap_set
+
+            capabilities.list_available = False
+            status, data = imap.list()
+            if status == "OK":
+                capabilities.list_available = True
+                capabilities.mailbox_separator = _mailbox_separator(data)
+
+            status, data = imap.select(folder, readonly=True)
+            if status != "OK":
+                capabilities.status = "failed"
+                capabilities.error = f"SELECT {folder} failed: {status}"
+                return capabilities
+            capabilities.uidvalidity = self._get_uidvalidity(imap, folder)
+            capabilities.permanent_flags = _permanent_flags(
+                getattr(imap, "untagged_responses", {}))
+            capabilities.flag_support = bool(capabilities.permanent_flags)
+
+            if target_folder:
+                capabilities.target_exists = _mailbox_exists(
+                    imap, target_folder)
+                capabilities.target_can_be_created = (
+                    not capabilities.target_exists
+                    and capabilities.create_supported
+                )
+            return capabilities
+        except Exception as exc:
+            capabilities.status = "failed"
+            capabilities.error = str(exc)[:500]
+            return capabilities
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+    def move_message_by_uid(
+            self, folder: str, uidvalidity: int, uid: int,
+            target_folder: str, *, dry_run: bool,
+            mutation_cfg: dict[str, Any] | None = None) -> MutationResult:
+        result = MutationResult(
+            account_id=self.name,
+            folder=folder,
+            uidvalidity=int(uidvalidity),
+            uid=int(uid),
+            operation="move_to_folder",
+            target=target_folder,
+            dry_run=bool(dry_run),
+        )
+        cfg = _mutation_cfg(mutation_cfg)
+        if not cfg["enabled"]:
+            result.status = "mutation_disabled"
+            result.error = "IMAP mutations are disabled"
+            return result
+        err = _validate_mailbox_name(target_folder)
+        if err:
+            result.status = "failed"
+            result.error = err
+            return result
+        if dry_run:
+            result.status = "dry_run"
+            return result
+
+        try:
+            password = self._get_password()
+            imap = self._connect()
+        except Exception as exc:
+            result.status = "failed"
+            result.error = str(exc)[:500]
+            return result
+
+        try:
+            imap.login(self.email, password)
+            status, _ = imap.select(folder, readonly=False)
+            if status != "OK":
+                result.status = "failed"
+                result.error = f"SELECT {folder} failed: {status}"
+                return result
+
+            server_validity = self._get_uidvalidity(imap, folder)
+            if int(server_validity) != int(uidvalidity):
+                result.status = "uidvalidity_mismatch"
+                result.error = (
+                    f"UIDVALIDITY changed from {uidvalidity} "
+                    f"to {server_validity}")
+                result.metadata["server_uidvalidity"] = server_validity
+                return result
+
+            caps = self.probe_capabilities(folder, target_folder)
+            result.metadata["capabilities"] = caps.to_dict()
+            if caps.target_exists is False and not cfg["allow_create_folder"]:
+                result.status = "unsupported"
+                result.error = "Target folder does not exist"
+                return result
+            if (caps.target_exists is False
+                    and cfg["allow_create_folder"]
+                    and caps.target_can_be_created):
+                create_status, create_data = imap.create(target_folder)
+                result.metadata["create_response"] = _summarize_response(
+                    create_status, create_data)
+                if create_status != "OK":
+                    result.status = "failed"
+                    result.error = "CREATE target folder failed"
+                    return result
+
+            if caps.supports_move:
+                move_status, move_data = imap.uid(
+                    "MOVE", str(uid), _quote_mailbox(target_folder))
+                result.provider_response = _summarize_response(
+                    move_status, move_data)
+                result.status = (
+                    "completed" if move_status == "OK" else "failed")
+                if move_status != "OK":
+                    result.error = "UID MOVE failed"
+                return result
+
+            if not cfg["allow_copy_delete_fallback"]:
+                result.status = "unsupported"
+                result.error = "UID MOVE unsupported and fallback disabled"
+                return result
+            if not caps.supports_uidplus:
+                result.status = "unsupported"
+                result.error = "COPY/STORE fallback requires UIDPLUS support"
+                return result
+
+            copy_status, copy_data = imap.uid(
+                "COPY", str(uid), _quote_mailbox(target_folder))
+            if copy_status != "OK":
+                result.status = "failed"
+                result.provider_response = _summarize_response(
+                    copy_status, copy_data)
+                result.error = "UID COPY fallback failed"
+                return result
+            store_status, store_data = imap.uid(
+                "STORE", str(uid), "+FLAGS.SILENT", r"(\Deleted)")
+            result.provider_response = _summarize_response(
+                store_status, store_data)
+            result.status = (
+                "completed" if store_status == "OK" else "failed")
+            if store_status != "OK":
+                result.error = "UID STORE \\Deleted fallback failed"
+            result.metadata["fallback"] = "copy_store_deleted_no_expunge"
+            return result
+        except Exception as exc:
+            result.status = "failed"
+            result.error = str(exc)[:500]
+            return result
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+    def store_flags_by_uid(
+            self, folder: str, uidvalidity: int, uid: int,
+            *, add_flags=None, remove_flags=None, dry_run: bool,
+            mutation_cfg: dict[str, Any] | None = None) -> MutationResult:
+        add = _normalize_flags(add_flags)
+        remove = _normalize_flags(remove_flags)
+        result = MutationResult(
+            account_id=self.name,
+            folder=folder,
+            uidvalidity=int(uidvalidity),
+            uid=int(uid),
+            operation="store_flags",
+            target=",".join(add + remove),
+            dry_run=bool(dry_run),
+            metadata={"add_flags": add, "remove_flags": remove},
+        )
+        cfg = _mutation_cfg(mutation_cfg)
+        if not cfg["enabled"]:
+            result.status = "mutation_disabled"
+            result.error = "IMAP mutations are disabled"
+            return result
+        if not add and not remove:
+            result.status = "failed"
+            result.error = "No supported flags requested"
+            return result
+        if dry_run:
+            result.status = "dry_run"
+            return result
+
+        try:
+            password = self._get_password()
+            imap = self._connect()
+        except Exception as exc:
+            result.status = "failed"
+            result.error = str(exc)[:500]
+            return result
+
+        try:
+            imap.login(self.email, password)
+            status, _ = imap.select(folder, readonly=False)
+            if status != "OK":
+                result.status = "failed"
+                result.error = f"SELECT {folder} failed: {status}"
+                return result
+            server_validity = self._get_uidvalidity(imap, folder)
+            if int(server_validity) != int(uidvalidity):
+                result.status = "uidvalidity_mismatch"
+                result.error = (
+                    f"UIDVALIDITY changed from {uidvalidity} "
+                    f"to {server_validity}")
+                result.metadata["server_uidvalidity"] = server_validity
+                return result
+
+            responses = []
+            for command, flags in (("+FLAGS.SILENT", add),
+                                   ("-FLAGS.SILENT", remove)):
+                if not flags:
+                    continue
+                flag_expr = "(" + " ".join(flags) + ")"
+                store_status, store_data = imap.uid(
+                    "STORE", str(uid), command, flag_expr)
+                responses.append(_summarize_response(
+                    store_status, store_data))
+                if store_status != "OK":
+                    result.status = "failed"
+                    result.provider_response = "; ".join(responses)
+                    result.error = f"UID STORE {command} failed"
+                    return result
+            result.status = "completed"
+            result.provider_response = "; ".join(responses)
+            return result
+        except Exception as exc:
+            result.status = "failed"
+            result.error = str(exc)[:500]
+            return result
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
     def poll(self) -> list[dict]:
         """Fetch new messages across all configured folders."""
         messages: list[dict] = []
@@ -660,6 +956,138 @@ class IMAPPoller:
             "skipped_size_bytes": size,
             "attachments": [],
         }
+
+
+# ── IMAP capability / mutation helpers ──────────────────────────────────────
+
+def _mutation_cfg(raw: dict[str, Any] | None) -> dict[str, bool]:
+    raw = raw or {}
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "allow_create_folder": bool(raw.get("allow_create_folder", False)),
+        "allow_copy_delete_fallback": bool(
+            raw.get("allow_copy_delete_fallback", False)),
+        "dry_run_default": bool(raw.get("dry_run_default", True)),
+    }
+
+
+def _capability_names(imap) -> list[str]:
+    raw_caps = getattr(imap, "capabilities", None)
+    if not raw_caps:
+        status, data = imap.capability()
+        raw_caps = data if status == "OK" else []
+    names: set[str] = set()
+    for item in raw_caps or []:
+        if isinstance(item, bytes):
+            item = item.decode(errors="replace")
+        for part in str(item).replace("(", " ").replace(")", " ").split():
+            if part:
+                names.add(part.upper())
+    return sorted(names)
+
+
+def _mailbox_separator(data) -> str | None:
+    for item in data or []:
+        text = item.decode(errors="replace") if isinstance(item, bytes) else str(item)
+        m = re.search(r'\)\s+"([^"]*)"\s+', text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _permanent_flags(untagged: dict) -> list[str]:
+    values = untagged.get("PERMANENTFLAGS") or untagged.get(b"PERMANENTFLAGS")
+    flags: set[str] = set()
+    for item in values or []:
+        text = item.decode(errors="replace") if isinstance(item, bytes) else str(item)
+        for flag in re.findall(r"\\[A-Za-z]+", text):
+            if flag in SAFE_MUTATION_FLAGS:
+                flags.add(flag)
+    return sorted(flags)
+
+
+def _mailbox_exists(imap, folder: str) -> bool:
+    status, data = imap.list(pattern=folder)
+    if status != "OK":
+        return False
+    needle = folder.strip('"')
+    for item in data or []:
+        text = item.decode(errors="replace") if isinstance(item, bytes) else str(item)
+        if text.endswith(f'"{needle}"') or text.endswith(f" {needle}"):
+            return True
+    return False
+
+
+def _validate_mailbox_name(folder: str | None) -> str | None:
+    if not folder or not str(folder).strip():
+        return "Target folder is required"
+    text = str(folder)
+    if any(ch in text for ch in ("\x00", "\r", "\n")):
+        return "Target folder contains invalid control characters"
+    if text.strip() in (".", ".."):
+        return "Target folder is not allowed"
+    return None
+
+
+def _quote_mailbox(folder: str) -> str:
+    escaped = folder.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _normalize_flags(flags) -> list[str]:
+    normalized: list[str] = []
+    for flag in flags or []:
+        text = str(flag).strip()
+        if text in SAFE_MUTATION_FLAGS and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _summarize_response(status, data) -> str:
+    parts = []
+    for item in data or []:
+        if isinstance(item, bytes):
+            parts.append(item.decode(errors="replace"))
+        else:
+            parts.append(str(item))
+    text = " ".join(parts)
+    return f"{status}: {text[:500]}".strip()
+
+
+def _poller_for_account(account: dict[str, Any]):
+    imap_cfg = {
+        "max_batch": account.get("max_batch", 25),
+        "max_message_mb": account.get("max_message_mb", 25),
+        "max_attachment_mb": account.get("max_attachment_mb", 20),
+    }
+    acct = dict(account)
+    acct.setdefault("name", acct.get("id") or acct.get("email") or "account")
+    acct.setdefault("email", acct.get("email", ""))
+    return IMAPPoller(acct, state=None, imap_cfg=imap_cfg)
+
+
+def probe_capabilities(account) -> ImapCapabilities:
+    folder = (account.get("folder")
+              or (account.get("folders") or ["INBOX"])[0])
+    target = account.get("target_folder")
+    return _poller_for_account(account).probe_capabilities(folder, target)
+
+
+def move_message_by_uid(
+        account, folder, uidvalidity, uid, target_folder, *,
+        dry_run: bool) -> MutationResult:
+    return _poller_for_account(account).move_message_by_uid(
+        folder, uidvalidity, uid, target_folder, dry_run=dry_run,
+        mutation_cfg=account.get("imap_mutations"))
+
+
+def store_flags_by_uid(
+        account, folder, uidvalidity, uid, add_flags=None,
+        remove_flags=None, dry_run: bool = True) -> MutationResult:
+    return _poller_for_account(account).store_flags_by_uid(
+        folder, uidvalidity, uid,
+        add_flags=add_flags, remove_flags=remove_flags, dry_run=dry_run,
+        mutation_cfg=account.get("imap_mutations"))
 
 
 # ── Top-level helper ─────────────────────────────────────────────────────────

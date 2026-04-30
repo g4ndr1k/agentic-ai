@@ -21,14 +21,14 @@ Keep the high-level architecture summary in `SYSTEM_DESIGN.md`, keep command-onl
 | Mail-agent health/debug API on `127.0.0.1:8080` | Implemented |
 | Phase 4A deterministic SQLite-backed rules engine | Implemented |
 | Rules UI with account scoping and safe Phase 4A actions | Implemented |
-| Phase 4B AI enrichment | Not started |
-| IMAP mutations such as move/read/delete/label | Deferred |
+| Phase 4B AI enrichment | Implemented, read-only |
+| Phase 4C.1 IMAP mutation primitives | Implemented, gated/audited |
 | Unsafe actions such as auto-reply, forward, webhook, unsubscribe | Not exposed |
 
 Important database boundary:
 
 ```text
-data/agent.db   = mail-agent runtime state, rules, audit, needs-reply, future AI queues
+data/agent.db   = mail-agent runtime state, rules, audit, needs-reply, AI queues/classifications
 data/finance.db = PWM / finance data only
 ```
 
@@ -319,7 +319,7 @@ skip_ai_inference = do not enqueue future AI inference
 
 Each action should log an outcome to `mail_processing_events`. One action failure must not erase prior successful action logs.
 
-### Phase 4A Safe Actions Only
+### Phase 4A Safe Actions And Phase 4C.1 Mutation Primitives
 
 Allowed in Phase 4A:
 
@@ -332,13 +332,20 @@ notify_dashboard
 stop_processing
 ```
 
-Not allowed yet:
+Recognized in Phase 4C.1, but gated by `[agent].mode` and `[mail.imap_mutations]`:
 
 ```text
 move_to_folder
-add_label
 mark_read
+mark_unread
 mark_flagged
+unmark_flagged
+```
+
+Still not allowed:
+
+```text
+add_label
 send_imessage
 delete
 auto_reply
@@ -357,11 +364,11 @@ phase4a_scan_summary messages_seen=3 messages_evaluator_ran=3 rules_matched=3 ev
 
 ---
 
-## Phase 4B AI Enrichment — Not Started
+## Phase 4B AI Enrichment — Read-Only
 
-Phase 4B should remain opt-in and read-only at first.
+Phase 4B is implemented as an opt-in, read-only AI triage layer. It runs after deterministic rule evaluation, enqueues eligible messages in `mail_ai_queue`, and stores validated Ollama output in `mail_ai_classifications`.
 
-Proposed default config:
+Default config:
 
 ```toml
 [mail.ai]
@@ -375,14 +382,41 @@ max_body_chars = 12000
 urgency_threshold = 8
 ```
 
-Required constraints for 4B:
+Operational constraints:
 
 - AI enrichment does not mutate email.
 - Ollama calls happen outside DB transactions.
 - Output is schema-validated before persistence.
 - Validation failure writes `status='failed'` and `last_error`; no trigger fires.
 - One in-flight Ollama request is enough for v1.
-- Manual reprocess should use a nonce so it does not collide with existing queue uniqueness.
+- Manual reprocess uses `manual_nonce` so it does not collide with existing queue uniqueness.
+- AI enrichment still does not invoke mutation helpers or trigger actions.
+
+---
+
+## Phase 4C.1 IMAP Mutation Primitives
+
+Phase 4C.1 adds infrastructure-level IMAP primitives only. It does not add AI-triggered actions, bulk mutation, auto-reply, forwarding, unsubscribe, webhooks, delete/expunge as a user-facing action, or AI-triggered iMessage.
+
+Default config:
+
+```toml
+[mail.imap_mutations]
+enabled = false
+allow_create_folder = false
+allow_copy_delete_fallback = false
+dry_run_default = true
+```
+
+Safety constraints:
+
+- `observe` and `draft_only` always audit `mode_blocked`.
+- `live` still requires `[mail.imap_mutations].enabled = true`.
+- UIDVALIDITY is rechecked before any UID mutation.
+- MOVE uses `UID MOVE` when supported.
+- COPY + STORE `\Deleted` fallback is disabled by default and never calls EXPUNGE in this phase.
+- STORE supports only `\Seen` and `\Flagged`.
+- Every planned, blocked, dry-run, unsupported, completed, or failed mutation path writes `mail_processing_events`.
 
 ---
 

@@ -17,6 +17,8 @@ If FINANCE_API_KEY is not set the endpoints are open (development mode).
 from __future__ import annotations
 
 import hmac
+import asyncio
+import inspect
 import json
 import logging
 import os
@@ -92,6 +94,12 @@ def _send_json(handler: "BaseHTTPRequestHandler",
     handler.wfile.write(payload)
 
 
+def _resolve_api_result(value):
+    if inspect.isawaitable(value):
+        return asyncio.run(value)
+    return value
+
+
 # ── Server factory ────────────────────────────────────────────────────────────
 
 def start_health_server(
@@ -131,7 +139,7 @@ def start_health_server(
                     return
                 try:
                     from app.api_mail import get_summary
-                    data = get_summary()
+                    data = _resolve_api_result(get_summary())
                     _send_json(self, 200, data)
                 except Exception as exc:
                     logger.error("api_mail.get_summary error: %s", exc)
@@ -147,7 +155,7 @@ def start_health_server(
                     limit = 20
                 try:
                     from app.api_mail import get_recent
-                    data = get_recent(limit=limit)
+                    data = _resolve_api_result(get_recent(limit=limit))
                     _send_json(self, 200, data)
                 except Exception as exc:
                     logger.error("api_mail.get_recent error: %s", exc)
@@ -157,8 +165,8 @@ def start_health_server(
                 if not _check_auth(self):
                     return
                 try:
-                    from app.api_mail import get_accounts
-                    data = get_accounts()
+                    from app.api_mail import get_accounts_health
+                    data = _resolve_api_result(get_accounts_health())
                     _send_json(self, 200, data)
                 except Exception as exc:
                     logger.error("api_mail.get_accounts error: %s", exc)

@@ -18,6 +18,19 @@ ACTIVE_ACTIONS = {
     "route_to_pdf_pipeline",
     "notify_dashboard",
     "stop_processing",
+    "move_to_folder",
+    "mark_read",
+    "mark_unread",
+    "mark_flagged",
+    "unmark_flagged",
+}
+
+MUTATION_ACTIONS = {
+    "move_to_folder",
+    "mark_read",
+    "mark_unread",
+    "mark_flagged",
+    "unmark_flagged",
 }
 
 ALLOWED_OPERATORS = {
@@ -60,7 +73,9 @@ def message_audit_id(message: dict[str, Any]) -> str:
 
 
 def evaluate_message(state, message: dict[str, Any],
-                     preview: bool = False) -> RuleEvaluation:
+                     preview: bool = False,
+                     mutation_context: dict[str, Any] | None = None
+                     ) -> RuleEvaluation:
     result = RuleEvaluation()
     rules = _load_rules(state, message.get("imap_account"))
 
@@ -120,6 +135,20 @@ def evaluate_message(state, message: dict[str, Any],
             }
             result.planned_actions.append(planned)
 
+            if action_type in MUTATION_ACTIONS:
+                if preview:
+                    result.planned_actions[-1].update(
+                        _mutation_preview_metadata(
+                            message, action, mutation_context))
+                    continue
+                outcome = _execute_mutation_action(
+                    state, message, rule, action, mutation_context)
+                if outcome.get("event_written"):
+                    result.events_written += int(outcome["event_written"])
+                result.actions_executed.append(
+                    {**planned, "status": outcome.get("status")})
+                continue
+
             if action_type == "skip_ai_inference":
                 result.enqueue_ai = False
             elif action_type == "route_to_pdf_pipeline":
@@ -146,7 +175,7 @@ def evaluate_message(state, message: dict[str, Any],
 def validate_action_type(action_type: str) -> str:
     if action_type not in ACTIVE_ACTIONS:
         raise ValueError(
-            f"Unsupported Phase 4A action_type: {action_type}")
+            f"Unsupported mail rule action_type: {action_type}")
     return action_type
 
 
@@ -350,6 +379,232 @@ def _execute_action(state, message: dict[str, Any],
         )
         conn.commit()
     return outcome
+
+
+def _execute_mutation_action(
+        state, message: dict[str, Any], rule: dict[str, Any],
+        action: dict[str, Any], mutation_context: dict[str, Any] | None
+        ) -> dict[str, Any]:
+    mutation_context = mutation_context or {}
+    mode = _safe_mode(mutation_context.get("mode"))
+    cfg = _mutation_cfg(mutation_context.get("config"))
+    action_type = action["action_type"]
+    target = _mutation_target(action)
+    audit_base = _mutation_audit_payload(
+        message, rule, action, mode, cfg, target)
+    dry_run = bool(mutation_context.get("dry_run", cfg["dry_run_default"]))
+    audit_base["dry_run"] = dry_run
+    events_written = 0
+    _write_processing_event(
+        state, message, rule, action,
+        event_type="mutation:planned",
+        outcome="planned",
+        details=audit_base)
+    events_written += 1
+
+    if mode != "live":
+        status = "mode_blocked"
+        details = {**audit_base, "status": status,
+                   "gate_status": status}
+        _write_processing_event(
+            state, message, rule, action,
+            event_type="mutation:mode_blocked",
+            outcome=status,
+            details=details)
+        return {"event_written": events_written + 1, "status": status}
+
+    if not cfg["enabled"]:
+        status = "mutation_disabled"
+        details = {**audit_base, "status": status,
+                   "gate_status": status}
+        _write_processing_event(
+            state, message, rule, action,
+            event_type="mutation:mutation_disabled",
+            outcome=status,
+            details=details)
+        return {"event_written": events_written + 1, "status": status}
+
+    if dry_run:
+        status = "dry_run"
+        details = {**audit_base, "status": status,
+                   "gate_status": status, "dry_run": True}
+        _write_processing_event(
+            state, message, rule, action,
+            event_type="mutation:dry_run",
+            outcome=status,
+            details=details)
+        return {"event_written": events_written + 1, "status": status}
+
+    executor = mutation_context.get("executor")
+    if executor is None:
+        status = "unsupported"
+        details = {**audit_base, "status": status,
+                   "gate_status": status,
+                   "error": "No mutation executor configured"}
+        _write_processing_event(
+            state, message, rule, action,
+            event_type="mutation:unsupported",
+            outcome=status,
+            details=details)
+        return {"event_written": events_written + 1, "status": status}
+
+    try:
+        raw_result = executor(action_type, message, target, dry_run=False)
+        result = (
+            raw_result.to_dict()
+            if hasattr(raw_result, "to_dict")
+            else dict(raw_result or {}))
+        status = result.get("status") or "failed"
+        event_status = status if status in {
+            "completed", "failed", "unsupported", "uidvalidity_mismatch",
+            "mutation_disabled", "dry_run", "mode_blocked"
+        } else "failed"
+        event_type = (
+            "mutation:completed"
+            if event_status == "completed"
+            else "mutation:unsupported"
+            if event_status == "unsupported"
+            else "mutation:failed"
+        )
+        _write_processing_event(
+            state, message, rule, action,
+            event_type=event_type,
+            outcome=event_status,
+            details={**audit_base, "mutation_result": result,
+                     "gate_status": event_status,
+                     "status": event_status})
+        return {"event_written": events_written + 1, "status": event_status}
+    except Exception as exc:
+        status = "failed"
+        _write_processing_event(
+            state, message, rule, action,
+            event_type="mutation:failed",
+            outcome=status,
+            details={**audit_base, "status": status,
+                     "gate_status": status,
+                     "error": str(exc)[:500]})
+        return {"event_written": events_written + 1, "status": status}
+
+
+def _write_processing_event(
+        state, message: dict[str, Any], rule: dict[str, Any],
+        action: dict[str, Any], *, event_type: str,
+        outcome: str, details: dict[str, Any]) -> None:
+    with state._connect() as conn:
+        conn.execute("""
+            INSERT INTO mail_processing_events
+                (message_id, account_id, bridge_id, rule_id, action_type,
+                 event_type, outcome, details_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            message_audit_id(message),
+            message.get("imap_account"),
+            message.get("bridge_id"),
+            rule["rule_id"],
+            action["action_type"],
+            event_type,
+            outcome,
+            json.dumps(details, sort_keys=True),
+            _now(),
+        ))
+        conn.commit()
+
+
+def _safe_mode(mode: Any) -> str:
+    text = str(mode or "").strip()
+    return text if text in {"observe", "draft_only", "live"} else "draft_only"
+
+
+def _mutation_cfg(raw: dict[str, Any] | None) -> dict[str, bool]:
+    raw = raw or {}
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "allow_create_folder": bool(raw.get("allow_create_folder", False)),
+        "allow_copy_delete_fallback": bool(
+            raw.get("allow_copy_delete_fallback", False)),
+        "dry_run_default": bool(raw.get("dry_run_default", True)),
+    }
+
+
+def _mutation_target(action: dict[str, Any]) -> Any:
+    value = _decode_json(action.get("value_json"))
+    if isinstance(value, dict) and value.get("target_folder"):
+        return value["target_folder"]
+    return action.get("target")
+
+
+def _mutation_audit_payload(
+        message: dict[str, Any], rule: dict[str, Any],
+        action: dict[str, Any], mode: str, cfg: dict[str, bool],
+        target: Any) -> dict[str, Any]:
+    return {
+        "rule_name": rule["name"],
+        "account_id": message.get("imap_account"),
+        "folder": message.get("imap_folder"),
+        "uidvalidity": message.get("imap_uidvalidity"),
+        "uid": message.get("imap_uid"),
+        "operation": action["action_type"],
+        "target": target,
+        "mode": mode,
+        "mutation_enabled": cfg["enabled"],
+        "dry_run_default": cfg["dry_run_default"],
+    }
+
+
+def _mutation_preview_metadata(
+        message: dict[str, Any], action: dict[str, Any],
+        mutation_context: dict[str, Any] | None) -> dict[str, Any]:
+    mutation_context = mutation_context or {}
+    mode = _safe_mode(mutation_context.get("mode"))
+    cfg = _mutation_cfg(mutation_context.get("config"))
+    dry_run = bool(mutation_context.get("dry_run", cfg["dry_run_default"]))
+    target = _mutation_target(action)
+    action_type = action["action_type"]
+
+    if mode != "live":
+        status = "mode_blocked"
+        reason = f"agent.mode={mode}"
+        would_execute = False
+    elif not cfg["enabled"]:
+        status = "mutation_disabled"
+        reason = "mail.imap_mutations.enabled=false"
+        would_execute = False
+    elif dry_run:
+        status = "dry_run"
+        reason = "mail.imap_mutations.dry_run_default=true"
+        would_execute = False
+    elif not _message_has_imap_identity(message):
+        status = "unsupported"
+        reason = "message lacks IMAP account/folder/UID metadata"
+        would_execute = False
+    elif action_type == "move_to_folder" and not target:
+        status = "failed"
+        reason = "move_to_folder requires target"
+        would_execute = False
+    else:
+        status = "ready"
+        reason = "all static gates allow execution"
+        would_execute = True
+
+    return {
+        "would_execute": would_execute,
+        "gate_status": status,
+        "reason": reason,
+        "dry_run": dry_run,
+        "mutation": True,
+    }
+
+
+def _message_has_imap_identity(message: dict[str, Any]) -> bool:
+    return all(
+        message.get(key) is not None
+        for key in (
+            "imap_account",
+            "imap_folder",
+            "imap_uidvalidity",
+            "imap_uid",
+        )
+    )
 
 
 def _decode_json(raw: str | None) -> Any:

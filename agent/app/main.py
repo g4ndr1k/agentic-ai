@@ -12,6 +12,7 @@ from app.classifier import Classifier
 from app.commands import CommandHandler
 from app.orchestrator import Orchestrator
 from app.health import start_health_server, StatsView
+from app.ai_worker import start_ai_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +104,9 @@ def main():
         bridge, classifier, state, commands,
         settings, stats)
     _shared["orch"] = orch
+    ai_worker_thread = start_ai_worker(
+        state, lambda: orch.settings, shutdown_event)
+    logger.info("AI worker started: %s", ai_worker_thread.name)
 
     if settings["imessage"].get(
             "startup_notifications", True):

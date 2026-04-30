@@ -15,6 +15,22 @@ max_batch = 25
 max_body_text_bytes = 200000
 initial_lookback_days = 15
 
+[mail.ai]
+enabled = false
+provider = "ollama"
+base_url = "http://host.docker.internal:11434"
+model = "gemma3:4b"
+temperature = 0.1
+timeout_seconds = 45
+max_body_chars = 12000
+urgency_threshold = 8
+
+[mail.imap_mutations]
+enabled = false
+allow_create_folder = false
+allow_copy_delete_fallback = false
+dry_run_default = true
+
 [imessage]
 primary_recipient = "your-apple-id@icloud.com"
 authorized_senders = ["your-apple-id@icloud.com"]

@@ -281,7 +281,11 @@ class Orchestrator:
                 continue
 
             try:
-                rule_eval = evaluate_message(self.state, item)
+                rule_eval = evaluate_message(
+                    self.state,
+                    item,
+                    mutation_context=self._mutation_context(),
+                )
             except Exception:
                 logger.exception(
                     "Mail rule evaluation failed: %s",
@@ -297,6 +301,8 @@ class Orchestrator:
             self._log_phase4a_evaluation(
                 item, rule_eval, skipped_by_dedup=False,
                 matched_rule_count=matched_rule_count)
+
+            self._enqueue_ai_if_enabled(item, rule_eval)
 
             try:
                 result = self.classifier.classify(item)
@@ -411,6 +417,36 @@ class Orchestrator:
             1 for r in rule_eval.matched_conditions
             if r.get("matched"))
 
+    def _enqueue_ai_if_enabled(self, item: dict, rule_eval) -> None:
+        ai_cfg = self.settings.get("mail", {}).get("ai", {})
+        if not ai_cfg.get("enabled", False):
+            return
+        if getattr(rule_eval, "would_skip_ai", False):
+            return
+        try:
+            queue_id = self.state.enqueue_ai_work(
+                item,
+                max_body_chars=int(ai_cfg.get("max_body_chars", 12000)),
+            )
+            if queue_id:
+                self.state.write_event(
+                    "mail_ai_enqueued",
+                    {
+                        "account": item.get("imap_account"),
+                        "message_id": (
+                            item.get("message_key")
+                            or item.get("fallback_message_key")
+                            or item.get("message_id")
+                        ),
+                        "bridge_id": item.get("bridge_id"),
+                        "queue_id": queue_id,
+                    },
+                )
+        except Exception as exc:
+            logger.warning(
+                "AI enqueue failed for %s: %s",
+                item.get("bridge_id"), exc)
+
     def _truncate_log_value(self, value, limit: int) -> str:
         text = str(value or "").replace("\n", " ").replace("\r", " ")
         return text[:limit]
@@ -460,6 +496,58 @@ class Orchestrator:
         if account and folder and uid is not None and uidvalidity is not None:
             self.state.set_imap_folder_state(
                 account, folder, int(uid), int(uidvalidity))
+
+    def _mutation_context(self) -> dict:
+        cfg = self.settings.get("mail", {}).get("imap_mutations", {})
+        return {
+            "mode": self.mode,
+            "config": cfg,
+            "dry_run": bool(cfg.get("dry_run_default", True)),
+            "executor": self._execute_email_mutation,
+        }
+
+    def _execute_email_mutation(
+            self, action_type: str, message: dict,
+            target, *, dry_run: bool):
+        from app.imap_source import move_message_by_uid, store_flags_by_uid
+
+        account = self._account_config(message.get("imap_account"))
+        mutation_cfg = self.settings.get("mail", {}).get(
+            "imap_mutations", {})
+        account = {**account, "imap_mutations": mutation_cfg}
+        folder = message.get("imap_folder")
+        uidvalidity = message.get("imap_uidvalidity")
+        uid = message.get("imap_uid")
+        if action_type == "move_to_folder":
+            return move_message_by_uid(
+                account, folder, uidvalidity, uid, target,
+                dry_run=dry_run)
+
+        flag_map = {
+            "mark_read": (["\\Seen"], []),
+            "mark_unread": ([], ["\\Seen"]),
+            "mark_flagged": (["\\Flagged"], []),
+            "unmark_flagged": ([], ["\\Flagged"]),
+        }
+        add_flags, remove_flags = flag_map[action_type]
+        return store_flags_by_uid(
+            account, folder, uidvalidity, uid,
+            add_flags=add_flags,
+            remove_flags=remove_flags,
+            dry_run=dry_run)
+
+    def _account_config(self, account_name: str | None) -> dict:
+        accounts = self.settings.get("mail", {}).get("imap", {}).get(
+            "accounts", [])
+        for acct in accounts:
+            names = {
+                acct.get("name"),
+                acct.get("id"),
+                acct.get("email"),
+            }
+            if account_name in names:
+                return dict(acct)
+        raise RuntimeError(f"Unknown IMAP account: {account_name}")
 
     def _resolve_mode(self) -> str:
         agent_cfg = self.settings.get("agent", {})

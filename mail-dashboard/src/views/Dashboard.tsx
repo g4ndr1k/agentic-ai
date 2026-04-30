@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useApi } from '../api/mail';
 import KpiCard from '../components/KpiCard';
 import SourceSplit from '../components/SourceSplit';
@@ -6,7 +7,8 @@ import ActionsList from '../components/ActionsList';
 import EmptyState from '../components/EmptyState';
 
 export default function Dashboard() {
-  const { summary, recent, loading, error, refresh, triggerRun } = useApi();
+  const { summary, recent, loading, error, refresh, triggerRun, reprocessMessage } = useApi();
+  const [reprocessState, setReprocessState] = useState<Record<string, string>>({});
 
   if (loading && !summary) {
     return (
@@ -54,6 +56,17 @@ export default function Dashboard() {
   ]
     .filter(Boolean)
     .join(' + ');
+
+  const reprocess = async (messageId: string) => {
+    setReprocessState((state) => ({ ...state, [messageId]: 'queueing' }));
+    try {
+      const result = await reprocessMessage(messageId);
+      setReprocessState((state) => ({ ...state, [messageId]: result.status }));
+      setTimeout(() => refresh(), 1500);
+    } catch (e: any) {
+      setReprocessState((state) => ({ ...state, [messageId]: e.message || 'failed' }));
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -145,32 +158,60 @@ export default function Dashboard() {
             {recent.map((email) => (
               <div
                 key={email.bridge_id}
-                className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0"
+                className="py-3 border-b border-gray-800 last:border-0"
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-200 truncate">
-                    {email.summary || email.category}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {email.source} · {email.provider} ·{' '}
-                    {new Date(email.processed_at).toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 ml-4">
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      email.urgency === 'high'
-                        ? 'bg-red-900 text-red-300'
-                        : email.urgency === 'medium'
-                        ? 'bg-yellow-900 text-yellow-300'
-                        : 'bg-gray-800 text-gray-400'
-                    }`}
-                  >
-                    {email.urgency}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {email.category.replace(/_/g, ' ')}
-                  </span>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-200 truncate">
+                      {email.summary || email.category}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {email.source} · {email.provider} ·{' '}
+                      {new Date(email.processed_at).toLocaleString()}
+                    </p>
+                    <div className="mt-2 rounded-lg border border-gray-800 bg-gray-950/50 p-3">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-gray-500">AI</span>
+                        <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-300">
+                          {email.ai_status || 'Not analyzed'}
+                        </span>
+                        {email.ai_category && (
+                          <span className="text-gray-400">{email.ai_category.replace(/_/g, ' ')}</span>
+                        )}
+                        {email.ai_urgency_score !== null && email.ai_urgency_score !== undefined && (
+                          <span className="text-gray-400">urgency {email.ai_urgency_score}/10</span>
+                        )}
+                        {email.ai_confidence !== null && email.ai_confidence !== undefined && (
+                          <span className="text-gray-400">confidence {Math.round(email.ai_confidence * 100)}%</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {email.ai_summary || email.ai_last_error || 'Not analyzed'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 ml-4">
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        email.urgency === 'high'
+                          ? 'bg-red-900 text-red-300'
+                          : email.urgency === 'medium'
+                          ? 'bg-yellow-900 text-yellow-300'
+                          : 'bg-gray-800 text-gray-400'
+                      }`}
+                    >
+                      {email.urgency}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {email.category.replace(/_/g, ' ')}
+                    </span>
+                    <button
+                      onClick={() => reprocess(email.message_id || email.bridge_id)}
+                      className="text-xs px-2 py-1 rounded bg-gray-800 text-gray-300 hover:bg-gray-700"
+                    >
+                      {reprocessState[email.message_id] || 'Reprocess'}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

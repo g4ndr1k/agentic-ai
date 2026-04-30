@@ -37,6 +37,13 @@ __pycache__/
 # Claude Code session data
 .claude/
 .qwen/
+.serena/
+
+# Local AI memory tooling
+.mempalace-src/
+.mempalace-palace/
+entities.json
+mempalace.yaml
 
 # Docker override files with local secrets
 docker-compose.override.yml

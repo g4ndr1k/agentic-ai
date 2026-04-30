@@ -74,7 +74,11 @@ Bank PDFs
 
 The mail agent runs in Docker and handles IMAP intake, bridge fallback, deterministic Phase 4A rule evaluation, classifier providers, iMessage/PDF bridge calls, and attachment routing. It serves worker health/debug on `127.0.0.1:8080`; the native dashboard uses the finance API mount at `127.0.0.1:8090/api/mail/*`.
 
-Mail-agent runtime state, including Phase 4A rules, rule actions, audit events, needs-reply rows, and future AI queues, belongs in `data/agent.db`. `data/finance.db` remains reserved for finance/PWM data.
+Mail-agent runtime state, including Phase 4A rules, rule actions, audit events, needs-reply rows, AI queues, and AI classifications, belongs in `data/agent.db`. `data/finance.db` remains reserved for finance/PWM data.
+
+Phase 4B adds read-only AI enrichment after deterministic rule evaluation. Eligible messages are queued in `mail_ai_queue`; a single worker claims one row, commits, calls Ollama `/api/chat` with a JSON schema, then opens a new transaction to save `mail_ai_classifications` or a soft failure. Validation failures and Ollama outages update queue status/attempts/`last_error` and do not block existing classifier, alert, or PDF routing behavior.
+
+Phase 4C.1 implements IMAP mutation primitives only: capability probing, UIDVALIDITY-checked `UID MOVE`, UID-based `STORE` for `\Seen`/`\Flagged`, dry-run enforcement, and audit rows for planned/blocked/dry-run/unsupported/completed/failed outcomes. Mutations are blocked outside `live`, blocked when `[mail.imap_mutations].enabled=false`, and COPY + STORE `\Deleted` fallback is disabled by default and never EXPUNGEs automatically. AI-triggered external actions, labels, delete as a user action, unsubscribe, auto-reply, forwarding, webhooks, and AI-triggered iMessage remain out of scope.
 
 For detailed mail-agent architecture, API boundaries, rules, credential handling, safe actions, and troubleshooting, see [MAIL_AGENT.md](MAIL_AGENT.md).
 

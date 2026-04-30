@@ -204,7 +204,7 @@ def test_rule_preview_is_side_effect_free(tmp_path):
         ).fetchone()[0] == 0
 
 
-def test_unsupported_stored_action_is_deferred_without_audit(tmp_path):
+def test_mutation_stored_action_is_recognized_but_mode_blocked(tmp_path):
     state = AgentState(str(tmp_path / "agent.db"))
     _insert_rule(
         state,
@@ -216,14 +216,12 @@ def test_unsupported_stored_action_is_deferred_without_audit(tmp_path):
 
     result = evaluate_message(state, _message())
 
-    assert result.planned_actions == [
-        {"rule_id": 1, "action_type": "move_to_folder", "status": "deferred"}
-    ]
-    assert result.actions_executed == []
+    assert result.planned_actions[0]["action_type"] == "move_to_folder"
+    assert result.actions_executed[0]["status"] == "mode_blocked"
     with state._connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM mail_processing_events"
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 2
 
 
 def test_disabled_rules_do_not_match_or_write_audit(tmp_path):
@@ -392,11 +390,129 @@ def test_duplicate_priority_fails_and_invalid_rule_payloads_are_rejected(tmp_pat
             **base_payload,
             "name": "invalid action",
             "priority": 3,
-            "actions": [{"action_type": "move_to_folder"}],
+            "actions": [{"action_type": "external_webhook"}],
         },
     )
     assert invalid_action.status_code == 400
-    assert "Unsupported Phase 4A action_type" in invalid_action.json()["detail"]
+    assert "Unsupported mail rule action_type" in invalid_action.json()["detail"]
+
+
+def test_rules_crud_accepts_safe_mutation_actions_and_validates_targets(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DB_PATH", str(tmp_path / "agent.db"))
+    monkeypatch.setenv("FINANCE_API_KEY", "secret")
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/mail")
+    client = TestClient(app)
+    headers = {"X-Api-Key": "secret"}
+
+    created = client.post(
+        "/api/mail/rules",
+        headers=headers,
+        json={
+            "name": "move statements",
+            "priority": 1,
+            "match_type": "ALL",
+            "conditions": [
+                {"field": "subject", "operator": "contains", "value": "invoice"}
+            ],
+            "actions": [
+                {"action_type": "move_to_folder", "target": "Archive"},
+                {"action_type": "mark_read"},
+                {"action_type": "mark_flagged"},
+                {"action_type": "mark_unread"},
+                {"action_type": "unmark_flagged"},
+            ],
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert [a["action_type"] for a in created.json()["actions"]] == [
+        "move_to_folder",
+        "mark_read",
+        "mark_flagged",
+        "mark_unread",
+        "unmark_flagged",
+    ]
+
+    missing_target = client.post(
+        "/api/mail/rules",
+        headers=headers,
+        json={
+            "name": "bad move",
+            "priority": 2,
+            "conditions": [],
+            "actions": [{"action_type": "move_to_folder"}],
+        },
+    )
+    assert missing_target.status_code == 400
+    assert "requires a non-empty target" in missing_target.json()["detail"]
+
+    flag_with_target = client.post(
+        "/api/mail/rules",
+        headers=headers,
+        json={
+            "name": "bad flag",
+            "priority": 3,
+            "conditions": [],
+            "actions": [{"action_type": "mark_read", "target": "Archive"}],
+        },
+    )
+    assert flag_with_target.status_code == 400
+    assert "does not accept a target" in flag_with_target.json()["detail"]
+
+    dangerous = client.post(
+        "/api/mail/rules",
+        headers=headers,
+        json={
+            "name": "dangerous",
+            "priority": 4,
+            "conditions": [],
+            "actions": [{"action_type": "delete"}],
+        },
+    )
+    assert dangerous.status_code == 400
+
+
+def test_rule_preview_includes_mutation_gate_and_has_no_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_DB_PATH", str(tmp_path / "agent.db"))
+    monkeypatch.setenv("FINANCE_API_KEY", "secret")
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/mail")
+    client = TestClient(app)
+    headers = {"X-Api-Key": "secret"}
+
+    created = client.post(
+        "/api/mail/rules",
+        headers=headers,
+        json={
+            "name": "preview move",
+            "priority": 1,
+            "conditions": [
+                {"field": "subject", "operator": "contains", "value": "Invoice"}
+            ],
+            "actions": [{"action_type": "move_to_folder", "target": "Archive"}],
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    preview = client.post(
+        "/api/mail/rules/preview",
+        headers=headers,
+        json={"message": _message()},
+    )
+    assert preview.status_code == 200, preview.text
+    action = preview.json()["planned_actions"][0]
+    assert action["action_type"] == "move_to_folder"
+    assert action["target"] == "Archive"
+    assert action["would_execute"] is False
+    assert action["gate_status"] == "mode_blocked"
+    assert "agent.mode" in action["reason"]
+
+    with AgentState(str(tmp_path / "agent.db"))._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM mail_processing_events"
+        ).fetchone()[0] == 0
 
 
 def test_mail_run_unmatched_rules_still_reach_existing_classifier(

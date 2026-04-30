@@ -1,7 +1,9 @@
 import json
 import sqlite3
+import hashlib
+import uuid
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 
 
@@ -211,10 +213,15 @@ class AgentState:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT,
                 message_id TEXT NOT NULL,
+                bridge_id TEXT,
                 folder TEXT,
                 imap_uid INTEGER,
                 uidvalidity INTEGER,
                 body_hash TEXT NOT NULL,
+                sender TEXT,
+                subject TEXT,
+                received_at TEXT,
+                body_text TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at TEXT,
@@ -306,6 +313,11 @@ class AgentState:
             "imap_accounts", "last_event_payload", "TEXT")
         self._add_column_if_missing(
             "imap_accounts", "last_event_at", "TEXT")
+        self._add_column_if_missing("mail_ai_queue", "bridge_id", "TEXT")
+        self._add_column_if_missing("mail_ai_queue", "sender", "TEXT")
+        self._add_column_if_missing("mail_ai_queue", "subject", "TEXT")
+        self._add_column_if_missing("mail_ai_queue", "received_at", "TEXT")
+        self._add_column_if_missing("mail_ai_queue", "body_text", "TEXT")
 
     def _add_column_if_missing(
             self, table: str, column: str, definition: str):
@@ -418,6 +430,220 @@ class AgentState:
             """, (key, "true" if value else "false"))
             conn.commit()
 
+    # ── Phase 4B AI queue ──────────────────────────────────────────────────
+
+    def _mail_message_audit_id(self, message: dict) -> str:
+        if message.get("message_key"):
+            return f"mkey:{message.get('message_key')}"
+        if message.get("fallback_message_key"):
+            return f"fkey:{message.get('fallback_message_key')}"
+        return (
+            message.get("message_id")
+            or message.get("bridge_id")
+            or self._body_hash(message.get("body_text") or "")
+        )
+
+    def _body_hash(self, body: str) -> str:
+        return hashlib.sha256(str(body or "").encode("utf-8")).hexdigest()
+
+    def enqueue_ai_work(
+            self, message: dict, max_body_chars: int = 12000,
+            manual_nonce: str | None = None) -> int | None:
+        """Create or return a queue row for read-only AI enrichment."""
+        now = self._now()
+        body_text = str(message.get("body_text") or message.get("snippet") or "")
+        body_text = body_text[:max_body_chars]
+        body_hash = self._body_hash(body_text)
+        account_id = message.get("imap_account") or message.get("account_id")
+        folder = message.get("imap_folder") or message.get("folder")
+        imap_uid = message.get("imap_uid")
+        uidvalidity = message.get("imap_uidvalidity") or message.get("uidvalidity")
+        message_id = self._mail_message_audit_id(message)
+        bridge_id = message.get("bridge_id")
+        sender = message.get("sender_email") or message.get("sender")
+        subject = message.get("subject")
+        received_at = message.get("date_received") or message.get("received_at")
+
+        with self._connect() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO mail_ai_queue
+                    (account_id, message_id, bridge_id, folder, imap_uid,
+                     uidvalidity, body_hash, sender, subject, received_at,
+                     body_text, status, attempts, next_attempt_at,
+                     last_error, created_at, updated_at, manual_nonce)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending',
+                        0, NULL, NULL, ?, ?, ?)
+            """, (
+                account_id, message_id, bridge_id, folder, imap_uid,
+                uidvalidity, body_hash, sender, subject, received_at,
+                body_text, now, now, manual_nonce,
+            ))
+            row = conn.execute("""
+                SELECT id FROM mail_ai_queue
+                WHERE account_id IS ?
+                  AND folder IS ?
+                  AND uidvalidity IS ?
+                  AND imap_uid IS ?
+                  AND body_hash = ?
+                  AND COALESCE(manual_nonce, '') = COALESCE(?, '')
+                ORDER BY id DESC LIMIT 1
+            """, (
+                account_id, folder, uidvalidity, imap_uid,
+                body_hash, manual_nonce,
+            )).fetchone()
+            conn.commit()
+            return int(row[0]) if row else None
+
+    def enqueue_manual_ai_reprocess(
+            self, source_row: dict, max_body_chars: int = 12000) -> int:
+        message = {
+            "message_id": source_row.get("message_id"),
+            "bridge_id": source_row.get("bridge_id"),
+            "imap_account": source_row.get("account_id"),
+            "imap_folder": source_row.get("folder"),
+            "imap_uid": source_row.get("imap_uid"),
+            "imap_uidvalidity": source_row.get("uidvalidity"),
+            "sender_email": source_row.get("sender"),
+            "subject": source_row.get("subject"),
+            "date_received": source_row.get("received_at"),
+            "body_text": source_row.get("body_text") or "",
+        }
+        queue_id = self.enqueue_ai_work(
+            message, max_body_chars=max_body_chars,
+            manual_nonce=str(uuid.uuid4()))
+        if queue_id is None:
+            raise RuntimeError("Failed to create manual AI reprocess item")
+        return queue_id
+
+    def claim_next_ai_item(self, max_attempts: int = 3) -> dict | None:
+        now = self._now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("""
+                SELECT id, account_id, message_id, bridge_id, folder,
+                       imap_uid, uidvalidity, body_hash, sender, subject,
+                       received_at, body_text, status, attempts,
+                       manual_nonce
+                FROM mail_ai_queue
+                WHERE status = 'pending'
+                  AND attempts < ?
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                ORDER BY id ASC
+                LIMIT 1
+            """, (max_attempts, now)).fetchone()
+            if not row:
+                conn.commit()
+                return None
+            conn.execute(
+                "UPDATE mail_ai_queue SET status = 'running', "
+                "updated_at = ?, last_error = NULL WHERE id = ?",
+                (now, row[0]),
+            )
+            conn.commit()
+            keys = [
+                "id", "account_id", "message_id", "bridge_id", "folder",
+                "imap_uid", "uidvalidity", "body_hash", "sender", "subject",
+                "received_at", "body_text", "status", "attempts",
+                "manual_nonce",
+            ]
+            return dict(zip(keys, row))
+
+    def complete_ai_item(self, queue_id: int, classification: dict) -> None:
+        now = self._now()
+        raw_json = json.dumps(classification, sort_keys=True)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""
+                INSERT INTO mail_ai_classifications
+                    (queue_id, category, urgency_score, confidence,
+                     summary, raw_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                queue_id,
+                classification["category"],
+                int(classification["urgency_score"]),
+                float(classification["confidence"]),
+                classification.get("summary", ""),
+                raw_json,
+                now,
+            ))
+            conn.execute(
+                "UPDATE mail_ai_queue SET status = 'completed', "
+                "updated_at = ?, last_error = NULL WHERE id = ?",
+                (now, queue_id),
+            )
+            conn.commit()
+
+    def fail_ai_item(
+            self, queue_id: int, error: str, *,
+            retryable: bool = True, max_attempts: int = 3,
+            delay_seconds: int = 60) -> None:
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT attempts FROM mail_ai_queue WHERE id = ?",
+                (queue_id,),
+            ).fetchone()
+            attempts = int(row[0] if row else 0) + 1
+            status = (
+                "pending"
+                if retryable and attempts < max_attempts
+                else "failed"
+            )
+            next_attempt_at = (
+                (now_dt + timedelta(seconds=delay_seconds)).isoformat()
+                if status == "pending" else None
+            )
+            conn.execute("""
+                UPDATE mail_ai_queue
+                SET status = ?, attempts = ?, next_attempt_at = ?,
+                    last_error = ?, updated_at = ?
+                WHERE id = ?
+            """, (
+                status, attempts, next_attempt_at,
+                str(error)[:1000], now, queue_id,
+            ))
+            conn.commit()
+
+    def find_ai_reprocess_source(self, message_id: str) -> dict | None:
+        candidates = [message_id]
+        if not message_id.startswith(("mkey:", "fkey:")):
+            candidates.extend([f"mkey:{message_id}", f"fkey:{message_id}"])
+        with self._connect() as conn:
+            row = conn.execute("""
+                SELECT q.account_id, q.message_id, q.bridge_id, q.folder,
+                       q.imap_uid, q.uidvalidity, q.sender, q.subject,
+                       q.received_at, q.body_text
+                FROM mail_ai_queue q
+                WHERE q.message_id IN ({})
+                   OR q.bridge_id = ?
+                ORDER BY q.id DESC LIMIT 1
+            """.format(",".join("?" for _ in candidates)),
+                (*candidates, message_id)).fetchone()
+            if row:
+                keys = [
+                    "account_id", "message_id", "bridge_id", "folder",
+                    "imap_uid", "uidvalidity", "sender", "subject",
+                    "received_at", "body_text",
+                ]
+                return dict(zip(keys, row))
+
+            row = conn.execute("""
+                SELECT bridge_id, message_id, summary
+                FROM processed_messages
+                WHERE message_id IN ({})
+                   OR bridge_id = ?
+                ORDER BY processed_at DESC LIMIT 1
+            """.format(",".join("?" for _ in candidates)),
+                (*candidates, message_id)).fetchone()
+            if row and row[2]:
+                return {
+                    "bridge_id": row[0],
+                    "message_id": row[1],
+                    "body_text": row[2],
+                }
+            return None
 
     # ── IMAP folder state ──────────────────────────────────────────────────
 

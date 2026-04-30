@@ -9,8 +9,51 @@ export const PHASE_4A_SAFE_ACTIONS = [
   'stop_processing',
 ] as const;
 
+export const SAFE_MUTATION_ACTIONS = [
+  'move_to_folder',
+  'mark_read',
+  'mark_unread',
+  'mark_flagged',
+  'unmark_flagged',
+] as const;
+
+export const RULE_ACTIONS = [
+  ...PHASE_4A_SAFE_ACTIONS,
+  ...SAFE_MUTATION_ACTIONS,
+] as const;
+
+const ACTION_LABELS: Record<string, string> = {
+  mark_pending_alert: 'Mark pending alert',
+  skip_ai_inference: 'Skip AI inference',
+  add_to_needs_reply: 'Add to needs reply',
+  route_to_pdf_pipeline: 'Route to PDF pipeline',
+  notify_dashboard: 'Notify dashboard',
+  stop_processing: 'Stop processing',
+  move_to_folder: 'Move to folder',
+  mark_read: 'Mark as read',
+  mark_unread: 'Mark as unread',
+  mark_flagged: 'Flag',
+  unmark_flagged: 'Unflag',
+};
+
 export function activeRuleAccounts(accounts: AccountHealth[]) {
   return accounts.filter((account) => account.enabled !== false && account.status === 'active');
+}
+
+export function actionLabel(actionType: string) {
+  return ACTION_LABELS[actionType] ?? actionType;
+}
+
+export function isMutationAction(actionType: string) {
+  return SAFE_MUTATION_ACTIONS.includes(actionType as any);
+}
+
+export function actionRequiresTarget(actionType: string) {
+  return actionType === 'move_to_folder';
+}
+
+export function ruleHasMutationAction(rule: MailRule | MailRuleInput) {
+  return rule.actions.some((action) => isMutationAction(action.action_type));
 }
 
 export function accountOptionLabel(account: AccountHealth) {

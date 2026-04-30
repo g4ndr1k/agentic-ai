@@ -389,6 +389,47 @@ PY
 
 NAS replica: all CoreTax write endpoints are blocked under `FINANCE_READ_ONLY=true` and return 403. GET endpoints remain available for review/download of already-synced data.
 
+## Mail AI Enrichment
+
+Phase 4B AI enrichment is read-only. It adds an Ollama-backed triage layer on top of deterministic mail rules and the existing classifier; it does not move, label, delete, reply, forward, unsubscribe, or trigger iMessage actions.
+
+Phase 4C.1 IMAP mutation primitives are available only behind the safety ladder. Keep `[mail.imap_mutations].enabled=false` and `dry_run_default=true` unless deliberately testing in `live`; `observe` and `draft_only` always audit `mode_blocked`.
+
+Settings live in `config/settings.toml`:
+
+```toml
+[mail.ai]
+enabled = false
+provider = "ollama"
+base_url = "http://host.docker.internal:11434"
+model = "gemma3:4b"
+temperature = 0.1
+timeout_seconds = 45
+max_body_chars = 12000
+urgency_threshold = 8
+```
+
+Lifecycle:
+
+1. IMAP scan evaluates deterministic rules.
+2. If AI is enabled and rules did not set `skip_ai_inference`, the message is inserted into `data/agent.db:mail_ai_queue`.
+3. The single AI worker claims one pending row, commits, calls Ollama outside SQLite, then persists completion or failure.
+4. Completed rows write `mail_ai_classifications`; failed rows retain `last_error` and attempts.
+5. Manual reprocess creates a second queue row with a fresh `manual_nonce`.
+
+Useful probes:
+
+```bash
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
+  http://127.0.0.1:8090/api/mail/ai/settings | python3 -m json.tool
+
+curl -s -H "X-Api-Key: $FINANCE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8090/api/mail/ai/test \
+  -d '{"sender":"alerts@example.com","subject":"Payment due reminder","body":"Your payment is due tomorrow."}' \
+  | python3 -m json.tool
+```
+
 ## Existing Specialized Docs
 
 These docs remain as focused notes and were not folded into the core docs set:

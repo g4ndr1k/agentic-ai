@@ -99,10 +99,10 @@ def print_summary(base_url: str, api_key: str) -> bool:
         print(f"  {_RED}HTTP {status}{_RESET}: {body}")
         return False
 
-    kpis  = body.get("kpis", {})
+    kpis = body.get("kpis", body)
     split = body.get("source_split", {})
-    clsf  = body.get("classification_counts", {})
-    acts  = body.get("action_counts", {})
+    clsf = body.get("classification_counts", body.get("classification", {}))
+    acts = body.get("action_counts", body.get("actions", {}))
 
     print(f"\n  {'KPI':<28} Value")
     print(f"  {'─'*40}")
@@ -185,8 +185,8 @@ def print_accounts(base_url: str, api_key: str) -> bool:
         return True
 
     for acct in items:
-        name = acct.get("account_name", "(unknown)")
-        ok   = acct.get("last_success")
+        name = acct.get("account_name") or acct.get("name") or acct.get("id") or "(unknown)"
+        ok   = acct.get("last_success") or acct.get("last_success_at")
         err  = acct.get("last_error")
         print(f"\n  {_BOLD}{name}{_RESET}")
         _kv("last_success", ok or "(never)")
