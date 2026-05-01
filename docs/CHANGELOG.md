@@ -288,6 +288,15 @@ Human-readable project history. Reverse chronological order.
 - Updated Control Center detail to show readiness-only mutation plans without offering live enablement.
 - Preserved dangerous action blocking, no bulk approval, no auto-retry, and no live mailbox mutation by default.
 
+## 2026-05-02 — Phase 4F.2b Dashboard Rule AI Safety E2E Smoke Tests
+
+- Added Playwright E2E smoke coverage for dashboard Rule AI safety flows.
+- The E2E suite runs against Vite in a browser and mocks all `/api/mail/*` requests with Playwright route interception.
+- Covered sender suppression draft save flow, unsupported draft blocking, golden probe disabled/pass/fail states, Rule AI Quality rendering, and Rule Explanation dry-run rendering.
+- Verified that Save Rule is available only for saveable drafts and that AI draft metadata is stripped before the human `POST /api/mail/rules` save payload.
+- Tests do not require Docker, finance-api, Electron, Ollama, Gmail, IMAP, iMessage, or a real mailbox/database.
+- Control Center E2E smoke remains a follow-up; helper/unit coverage and synthetic QA fixtures continue to cover that surface for now.
+
 ## 2026-05-02 — Phase 4F.2a Rule Explanation / Dry-Run Inspector
 
 - Added `POST /api/mail/rules/explain` for deterministic saved-rule explanations against synthetic/sample message payloads.

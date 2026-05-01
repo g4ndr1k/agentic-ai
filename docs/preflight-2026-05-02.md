@@ -1,6 +1,6 @@
 # Mail-Agent Preflight Report
 
-**Generated:** 2026-05-01T22:38:02Z  
+**Generated:** 2026-05-01T23:15:49Z  
 **Repo:** `/Users/g4ndr1k/agentic-ai`  
 **Python:** 3.14.4  
 
@@ -169,7 +169,7 @@
   - ✅ ThrottleInterval=30s
 
 **Live probe:** GET http://127.0.0.1:9100/health
-✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-01T22:38:04.446272+00:00"}
+✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-01T23:15:50.478961+00:00"}
 
 
 ## SQLite — agent state + pdf_jobs.db

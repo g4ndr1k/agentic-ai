@@ -367,6 +367,29 @@ Safety boundary preserved: the inspector is read-only. It does not save rules, w
 
 The dashboard **Explain Rule** panel accepts synthetic/sample message JSON and can generate a sample from an AI draft, such as `alerts@bca.co.id` for a `from_domain contains bca.co.id` condition. Explanation results intentionally do not show Save Rule or run the golden probe.
 
+## Phase 4F.2b Dashboard E2E Safety Smoke Tests
+
+Phase 4F.2b is test infrastructure only. It adds Playwright browser smoke tests for the dashboard Rule AI safety flows:
+
+```bash
+cd mail-dashboard
+npm run test:e2e
+```
+
+The suite starts the Vite app and mocks every `/api/mail/*` request through Playwright route interception. It does not call real finance-api, Docker, Electron, Ollama, Gmail, IMAP, iMessage, the bridge, a real mailbox, or a real database.
+
+Covered flows:
+
+- saveable sender suppression draft shows Save Rule and sends only normalized RuleCreate payload fields
+- unsupported/blocked draft hides Save Rule and does not call `POST /api/mail/rules`
+- golden probe disabled and pass/fail states render without Save Rule controls
+- Rule AI Quality renders privacy-safe metrics, request previews, and no raw model output/save/rerun/execute controls
+- Explain Rule dry-run panel renders matched conditions, expected vs actual values, planned local actions, skip/stop flags, and safety copy
+
+The sender suppression smoke captures the outgoing Save Rule body and verifies draft metadata is stripped before save: no `status`, `saveable`, `safety_status`, warnings, explanation, provider, model, or raw model error.
+
+Control Center E2E smoke is deferred. Existing helper tests and Synthetic QA fixtures remain the safety coverage for that dashboard surface until a focused browser smoke is added.
+
 ## 2026-05-01 Validation Checkpoint
 
 Manual validation after schema hardening established the current local-model recommendation for this narrow flow:

@@ -8,6 +8,7 @@
     "build": "vite build && tsc -p tsconfig.electron.json",
     "build:electron": "tsc -p tsconfig.electron.json",
     "test:rules-ui": "node --test --experimental-strip-types tests/ruleUiHelpers.test.ts",
+    "test:e2e": "playwright test",
     "preview": "vite preview",
     "dist": "npm run build && electron-builder"
   },
@@ -18,6 +19,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

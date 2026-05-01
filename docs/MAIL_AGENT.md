@@ -578,6 +578,10 @@ The dashboard Save Rule path strips draft metadata (`status`, `saveable`, `safet
 
 Phase 4F.2a adds the Rule Explanation / Dry-Run Inspector. This is not an AI expansion: it uses saved deterministic rules and synthetic/sample message payloads only. The dashboard **Explain Rule** panel shows matched vs not matched, each condition's expected and actual values, planned local actions, skip-AI and stop-processing flags, and safety copy. It helps verify AI-drafted rules after human save, but it does not expose Save Rule from the explanation result and does not run the golden probe.
 
+Phase 4F.2b adds dashboard E2E smoke tests for the safety-critical Rule AI surfaces. The Playwright suite lives under `mail-dashboard/tests/e2e/` and runs with `npm run test:e2e`. It mocks all backend mail APIs through browser route interception and does not call real Ollama, Gmail, IMAP, iMessage, bridge, finance-api, Docker, Electron, or a real database. The tests prove that Save Rule appears only for saveable drafts, unsupported drafts cannot save, golden probe and quality panels expose no save/execute controls, Explain Rule remains dry-run only, and draft metadata is stripped before the human Save Rule payload.
+
+Control Center browser smoke is intentionally deferred for a later pass. The current Control Center safety posture is still covered by helper tests and Synthetic QA fixtures.
+
 Phase 4F.1g adds local Rule AI draft/probe observability. `mail_rule_ai_draft_audit` records each successful draft endpoint response as a best-effort audit row, and `mail_rule_ai_golden_probe_runs` records aggregate golden probe results. These tables are quality metrics only: they do not save rules, do not execute actions, and do not change mailbox state.
 
 Audit privacy rules:

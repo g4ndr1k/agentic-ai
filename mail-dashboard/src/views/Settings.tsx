@@ -1219,7 +1219,7 @@ function AiRuleBuilderCard({
   const failedAlertDraft = draft && !draft.rule && (draft.safety_status === 'llm_draft_failed' || draft.safety_status === 'local_llm_disabled');
 
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
+    <div data-testid="ai-rule-builder" className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-white">AI Rule Builder</h3>
@@ -1351,7 +1351,7 @@ function RuleAiGoldenProbeCard({
   const passed = result?.status === 'passed';
 
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6">
+    <div data-testid="rule-ai-golden-probe" className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-white">Rule AI Golden Probe</h3>
@@ -1468,7 +1468,7 @@ function RuleAiQualityCard({
   const saveableRate = summary ? Math.round(summary.saveable_rate * 100) : 0;
 
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6">
+    <div data-testid="rule-ai-quality" className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-white">Rule AI Quality</h3>
@@ -2181,7 +2181,7 @@ function RuleExplainPanel({
   hasAiDraft: boolean;
 }) {
   return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+    <div data-testid="rule-explain-panel" className="bg-gray-900 rounded-xl border border-gray-800 p-5">
       <div className="flex items-center justify-between gap-3 mb-3">
         <div>
           <h3 className="text-base font-semibold text-white">Explain Rule</h3>

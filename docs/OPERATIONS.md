@@ -540,6 +540,26 @@ Phase 4F.2a adds a deterministic inspector for saved rules. Operators provide a 
 
 This is read-only operator debugging. It does not fetch real mailbox messages, call IMAP, call the bridge, send iMessage, mutate Gmail, create labels, move mail, mark read/unread, write processing events, write approval rows, write action execution rows, save rules, call Ollama, or call a cloud LLM. Mutation actions that already exist on saved rules are shown as dry-run/blocked preview metadata only. The dashboard **Explain Rule** panel uses this endpoint and can synthesize sample messages from AI drafts, including deriving `alerts@domain` samples for `from_domain` conditions.
 
+Dashboard Rule AI safety E2E smoke:
+
+```bash
+cd mail-dashboard
+npm run test:e2e
+```
+
+Phase 4F.2b adds a minimal Playwright browser suite for safety-critical Rule AI dashboard flows. The tests start Vite, intercept all `/api/mail/*` calls, and return local mock responses. They do not require Docker, finance-api, Electron, Ollama, Gmail, IMAP, iMessage, a real mailbox, or a real database.
+
+The smoke suite verifies that saveable sender suppression drafts expose Save Rule, unsupported drafts do not, golden probe disabled/pass/fail states render without save controls, Rule AI Quality shows privacy-safe audit metrics, and Explain Rule shows dry-run safety copy. It also captures the outgoing human Save Rule request and confirms AI draft metadata such as `status`, `saveable`, `safety_status`, warnings, explanation, provider, model, and raw model error is not sent to `POST /api/mail/rules`.
+
+Playwright browser binaries may need a one-time local install:
+
+```bash
+cd mail-dashboard
+npx playwright install
+```
+
+Control Center E2E smoke is deferred; keep using the existing helper/unit tests and Synthetic QA mode for that surface until a focused browser smoke is added.
+
 Rule AI audit and quality metrics:
 
 ```text

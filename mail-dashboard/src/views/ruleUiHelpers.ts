@@ -151,7 +151,7 @@ export function aiDraftToRuleInput(
     });
     return items;
   }, []);
-  return {
+  const payload: MailRuleInput = {
     name: rule.name,
     account_id: rule.account_id ?? null,
     match_type: rule.match_type,
@@ -165,8 +165,11 @@ export function aiDraftToRuleInput(
     actions,
     priority,
     enabled: true,
-    source_draft_audit_id: draft.draft_audit_id ?? null,
   };
+  if (draft.draft_audit_id != null) {
+    payload.source_draft_audit_id = draft.draft_audit_id;
+  }
+  return payload;
 }
 
 export function isSaveableAiDraft(draft: RuleAiDraftResult | null) {
