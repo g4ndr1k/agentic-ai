@@ -1,0 +1,102 @@
+[
+  {
+    "id": "bca_suspicious_transaction",
+    "prompt": "If BCA emails me about suspicious transaction, notify me.",
+    "mode": "alert_rule",
+    "expected_domain": "bca.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["suspicious", "mencurigakan", "transaction", "transaksi"]
+  },
+  {
+    "id": "cimb_credit_card_confirmation",
+    "prompt": "If CIMB Niaga asks for credit card transaction confirmation, send me an iMessage notification.",
+    "mode": "alert_rule",
+    "expected_domain": "cimbniaga.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["confirmation", "konfirmasi", "credit card", "kartu kredit", "transaction", "transaksi"]
+  },
+  {
+    "id": "maybank_security_alert",
+    "prompt": "Notify me if Maybank sends a security alert.",
+    "mode": "alert_rule",
+    "expected_domain": "maybank.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["security", "keamanan", "alert", "peringatan"]
+  },
+  {
+    "id": "permata_kartu_kredit_confirmation",
+    "prompt": "If Permata asks me to confirm a kartu kredit transaction, alert me.",
+    "mode": "alert_rule",
+    "expected_domain": "permatabank.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["confirmation", "konfirmasi", "kartu kredit", "transaction", "transaksi"]
+  },
+  {
+    "id": "klikbca_login_security",
+    "prompt": "If the email is from klikbca about login/security, notify me.",
+    "mode": "alert_rule",
+    "expected_domain": "klikbca.com",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["login", "security", "keamanan"]
+  },
+  {
+    "id": "mandiri_otp",
+    "prompt": "Notify me if Mandiri sends an OTP email.",
+    "mode": "alert_rule",
+    "expected_domain": "bankmandiri.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["otp", "one time password", "verification code", "kode verifikasi"]
+  },
+  {
+    "id": "bni_failed_transaction",
+    "prompt": "If BNI sends a failed transaction email, alert me.",
+    "mode": "alert_rule",
+    "expected_domain": "bni.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["failed", "gagal", "transaction", "transaksi"]
+  },
+  {
+    "id": "bri_payment_due",
+    "prompt": "If BRI sends a payment due notice, notify me.",
+    "mode": "alert_rule",
+    "expected_domain": "bri.co.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["payment", "pembayaran", "due", "jatuh tempo"]
+  },
+  {
+    "id": "ocbc_suspicious_login",
+    "prompt": "If OCBC sends a suspicious login email, notify me.",
+    "mode": "alert_rule",
+    "expected_domain": "ocbc.id",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["suspicious", "mencurigakan", "login"]
+  },
+  {
+    "id": "jenius_account_security",
+    "prompt": "If Jenius sends an account security alert, alert me.",
+    "mode": "alert_rule",
+    "expected_domain": "jenius.com",
+    "expected_safety_status": "safe_local_alert_draft",
+    "expected_action_type": "mark_pending_alert",
+    "expected_target": "imessage",
+    "expected_keywords_any": ["security", "keamanan", "alert", "peringatan"]
+  }
+]

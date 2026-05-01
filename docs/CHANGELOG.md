@@ -2,6 +2,16 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-05-01 — Phase 4F.1d Local Rule AI Golden Prompt Smoke Harness
+
+- Added `agent/tests/fixtures/rule_ai_golden_prompts.json` with 10 operator smoke prompts covering BCA, CIMB Niaga, Maybank, Permata, KlikBCA, Mandiri, BNI, BRI, OCBC, and Jenius alert-rule scenarios.
+- Added `scripts/mail_rule_ai_golden_probe.py`, a manual local-API smoke harness that calls only `POST /api/mail/rules/ai/draft` and never calls the Save Rule endpoint.
+- The probe validates safe draft shape: HTTP 200, `status=draft`, `saveable=true`, `safe_local_alert_draft`, `match_type=ALL`, expected `from_domain`, content keyword coverage, and exactly one `mark_pending_alert` action targeting `imessage`.
+- The probe rejects blocked/mutating actions including direct `send_imessage`, labels, moves, read/unread, delete/archive, forward/reply, unsubscribe, webhooks, PDF routing, suppression actions, and stop-processing.
+- Added unit tests for fixture loading, validator failures, JSON report output, and proof that the harness calls only the draft endpoint under mocked HTTP.
+- Updated preflight to mention that the golden probe exists without running it, calling Ollama, or calling the draft endpoint.
+- Preserved the safety posture: local Qwen remains recommended for narrow rule drafting, cloud LLM remains deferred, and `[mail.rule_ai].enabled=false` remains the safe default unless actively testing.
+
 ## 2026-05-01 — Phase 4F.1c Alert Rule Draft Hardening / Bank Intent Coverage
 
 - Expanded deterministic bank-domain hints for Indonesian financial senders: Permata, BCA, KlikBCA, CIMB Niaga, Maybank, Mandiri/Livin, BNI, BRI, OCBC NISP, UOB, HSBC, DBS, Jenius, and BSI.

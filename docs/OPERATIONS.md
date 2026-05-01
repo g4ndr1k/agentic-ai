@@ -491,6 +491,27 @@ Keep this disabled unless you are explicitly testing local Ollama rule drafting.
 
 Phase 4F.1c supported deterministic bank hints include Permata, BCA, KlikBCA, CIMB Niaga, Maybank, Mandiri/Livin, BNI, BRI, OCBC NISP, UOB, HSBC, DBS, Jenius, and BSI. Supported intent normalization covers credit-card clarification/confirmation, suspicious/security/login alerts, payment due/billing, OTP/verification-code, and failed/declined transactions. Unsupported or overbroad requests return `status=unsupported`, `saveable=false`, and no rule; no rule is saved by the draft endpoint.
 
+Manual local-Qwen golden prompt smoke probe:
+
+```bash
+export FINANCE_API_KEY="$(cat secrets/finance_api.key 2>/dev/null || echo "$FINANCE_API_KEY")"
+python3 scripts/mail_rule_ai_golden_probe.py \
+  --api-base http://127.0.0.1:8090 \
+  --fixture agent/tests/fixtures/rule_ai_golden_prompts.json \
+  --timeout 120
+```
+
+Expected shape:
+
+```text
+PASS bca_suspicious_transaction -> bca.co.id
+PASS cimb_credit_card_confirmation -> cimbniaga.co.id
+...
+10 passed, 0 failed
+```
+
+Run this only when intentionally testing local rule AI with `[mail.rule_ai].enabled=true` and local Ollama reachable. The probe calls only `POST /api/mail/rules/ai/draft`; it never calls Save Rule, never sends iMessage, never mutates Gmail/IMAP, and never creates labels, moves mail, marks read/unread, deletes, archives, forwards, replies, unsubscribes, or calls webhooks. Keep `[mail.rule_ai].enabled=false` when not actively testing.
+
 Rebuild `finance-api` after changing Python code or config that affects this path. The safe default posture remains `[mail.rule_ai].enabled=false` until an operator intentionally tests AI rule drafting.
 
 ## Existing Specialized Docs

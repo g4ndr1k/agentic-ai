@@ -409,15 +409,21 @@ def inspect_config() -> list[str]:
 
     mutation_cfg = cfg.get("mail", {}).get("imap_mutations", {})
     rule_ai_cfg = cfg.get("mail", {}).get("rule_ai", {})
-    lines.append("### Phase 4F.1b rule AI probe")
+    lines.append("### Phase 4F rule AI probe")
     if rule_ai_cfg.get("enabled") is True:
         lines.append(_warn("mail.rule_ai.enabled=true"))
     else:
         lines.append(_ok("mail.rule_ai.enabled=false or unset"))
     lines.append(f"  - `provider` = {repr(rule_ai_cfg.get('provider', 'ollama'))}")
-    lines.append(f"  - `model` = {repr(rule_ai_cfg.get('model', 'gemma3:4b'))}")
+    lines.append(f"  - `model` = {repr(rule_ai_cfg.get('model', 'qwen2.5:7b-instruct-q4_K_M'))}")
     lines.append(f"  - `base_url` = {repr(rule_ai_cfg.get('base_url', 'http://host.docker.internal:11434'))}")
     lines.append(f"  - `timeout_seconds` = {repr(rule_ai_cfg.get('timeout_seconds', 30))}")
+    golden_probe = REPO / "scripts" / "mail_rule_ai_golden_probe.py"
+    if golden_probe.exists():
+        lines.append(_ok("Rule AI golden probe available at scripts/mail_rule_ai_golden_probe.py"))
+        lines.append("  - Preflight does not run the golden probe, call Ollama, or call the draft endpoint.")
+    else:
+        lines.append(_warn("Rule AI golden probe script not found"))
     lines.append("")
 
     lines.append("### Phase 4E.2 execution safety")

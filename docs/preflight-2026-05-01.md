@@ -1,6 +1,6 @@
 # Mail-Agent Preflight Report
 
-**Generated:** 2026-05-01T08:45:19Z  
+**Generated:** 2026-05-01T08:55:29Z  
 **Repo:** `/Users/g4ndr1k/agentic-ai`  
 **Python:** 3.14.4  
 
@@ -169,7 +169,7 @@
   - ✅ ThrottleInterval=30s
 
 **Live probe:** GET http://127.0.0.1:9100/health
-✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-01T08:45:20.897084+00:00"}
+✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-01T08:55:31.207017+00:00"}
 
 
 ## SQLite — agent state + pdf_jobs.db
@@ -308,12 +308,14 @@
   - `verify_timeout_seconds` = 120
   - `verify_model` = 'gemma3:4b'
 
-### Phase 4F.1b rule AI probe
+### Phase 4F rule AI probe
 ⚠️  mail.rule_ai.enabled=true
   - `provider` = 'ollama'
   - `model` = 'qwen2.5:7b-instruct-q4_K_M'
   - `base_url` = 'http://host.docker.internal:11434'
   - `timeout_seconds` = 120
+✅ Rule AI golden probe available at scripts/mail_rule_ai_golden_probe.py
+  - Preflight does not run the golden probe, call Ollama, or call the draft endpoint.
 
 ### Phase 4E.2 execution safety
 ✅ Final read-only verification module present

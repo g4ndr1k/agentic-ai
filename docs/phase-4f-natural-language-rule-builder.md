@@ -182,6 +182,47 @@ These prompts are useful for manual local-Qwen checks. Normal automated tests us
 9. If OCBC sends a suspicious login email, notify me.
 10. If Jenius sends an account security alert, alert me.
 
+## Implemented 4F.1d Local Golden Smoke Harness
+
+Phase 4F.1d makes the golden prompts repeatable through an explicit operator-run smoke harness:
+
+```text
+agent/tests/fixtures/rule_ai_golden_prompts.json
+scripts/mail_rule_ai_golden_probe.py
+```
+
+The fixture records each prompt, expected deterministic bank domain, expected action (`mark_pending_alert`), expected target (`imessage`), and expected content keywords. The script calls only:
+
+```text
+POST /api/mail/rules/ai/draft
+```
+
+It never calls `POST /api/mail/rules`, never saves drafts, never sends iMessage, never calls the bridge, never calls IMAP, and never mutates Gmail. Normal pytest coverage mocks HTTP responses and does not require local Ollama.
+
+Manual run:
+
+```bash
+export FINANCE_API_KEY="$(cat secrets/finance_api.key 2>/dev/null || echo "$FINANCE_API_KEY")"
+python3 scripts/mail_rule_ai_golden_probe.py \
+  --api-base http://127.0.0.1:8090 \
+  --fixture agent/tests/fixtures/rule_ai_golden_prompts.json \
+  --timeout 120
+```
+
+Useful options:
+
+```bash
+python3 scripts/mail_rule_ai_golden_probe.py --json
+python3 scripts/mail_rule_ai_golden_probe.py --prompt-id bca_suspicious_transaction
+python3 scripts/mail_rule_ai_golden_probe.py --fail-fast
+```
+
+The probe passes a response only when it has HTTP 200, `status=draft`, `saveable=true`, `safety_status=safe_local_alert_draft`, `match_type=ALL`, `from_domain contains <expected domain>`, at least one subject/body content condition containing an expected keyword, and exactly one `mark_pending_alert` action targeting `imessage` with `stop_processing=false`.
+
+The probe rejects blocked actions including `delete`, `move_to_folder`, `add_label`, `mark_read`, `mark_unread`, `move_to_spam`, `send_imessage`, `forward`, `auto_reply`, `unsubscribe`, `external_webhook`, `route_to_pdf_pipeline`, `skip_ai_inference`, and `stop_processing`.
+
+Run the smoke harness only after intentionally enabling `[mail.rule_ai].enabled=true` and confirming local Ollama is reachable. The recommended model remains `qwen2.5:7b-instruct-q4_K_M`. Keep `[mail.rule_ai].enabled=false` when not actively testing, and keep cloud LLM integration deferred.
+
 ## 2026-05-01 Validation Checkpoint
 
 Manual validation after schema hardening established the current local-model recommendation for this narrow flow:
