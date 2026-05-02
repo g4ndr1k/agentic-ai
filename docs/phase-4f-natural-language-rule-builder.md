@@ -1,6 +1,6 @@
 # Phase 4F Natural Language Rule Builder
 
-Design status: Phase 4F.1a implemented for deterministic sender suppression drafts only; later phases remain planned. It does not enable live Gmail/IMAP mutation, autonomous execution, bulk approval, or auto-execute after approval.
+Design status: Phase 4F.1a-4F.2d implemented for deterministic/local Rule AI drafts, audit/quality metrics, read-only explanation, safety E2E, and release verification. It does not enable live Gmail/IMAP mutation, autonomous execution, bulk approval, or auto-execute after approval.
 
 Phase 4F lets the user type natural-language requests such as:
 
@@ -403,6 +403,18 @@ Covered Control Center flows:
 - stuck started approvals show manual review and allow only the mocked mark-failed endpoint
 - cleanup preview is read-only on page load and cleanup requires explicit confirmation
 - Export JSON calls only the mocked export endpoint and does not execute approvals
+
+## Phase 4F.2d Release Stabilization
+
+Phase 4F.2d is documentation and verification stabilization only. It adds the release safety matrix and a consolidated operator verification command:
+
+```bash
+./scripts/mailagent_verify_phase4.sh
+```
+
+The command runs targeted backend safety suites, the full backend suite, dashboard helper tests, Playwright E2E, dashboard build, and preflight. It does not require local Rule AI to be enabled and does not call real Ollama, Gmail/IMAP mutation paths, iMessage, or cloud LLMs. Dashboard E2E continues to mock every `/api/mail/*` route and fail closed on unmocked mail API calls.
+
+The safety matrix explicitly preserves the current boundary: draft writes audit only, golden probe writes quality runs only, explain is read-only, Save Rule is the only Rule AI path that writes rule rows, approval execution is mock-only / final-verification-only, and Gmail/IMAP mutation remains disabled/deferred.
 
 ## 2026-05-01 Validation Checkpoint
 

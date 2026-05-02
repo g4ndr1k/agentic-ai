@@ -342,8 +342,14 @@ def inspect_sqlite() -> list[str]:
                     "processed_messages",
                     "alerts",
                     "agent_flags",
+                    "mail_rules",
+                    "mail_rule_conditions",
+                    "mail_rule_actions",
                     "mail_rule_ai_draft_audit",
                     "mail_rule_ai_golden_probe_runs",
+                    "mail_action_approvals",
+                    "mail_action_executions",
+                    "mail_action_execution_events",
                 ]:
                     col_lines = _describe_table(conn, tbl)
                     lines.append(f"\n  **`{tbl}`** columns:")
@@ -418,9 +424,9 @@ def inspect_config() -> list[str]:
 
     mutation_cfg = cfg.get("mail", {}).get("imap_mutations", {})
     rule_ai_cfg = cfg.get("mail", {}).get("rule_ai", {})
-    lines.append("### Phase 4F rule AI probe")
+    lines.append("### Phase 4F Rule AI status")
     if rule_ai_cfg.get("enabled") is True:
-        lines.append(_warn("mail.rule_ai.enabled=true"))
+        lines.append(_warn("mail.rule_ai.enabled=true (local testing mode; safe default remains false)"))
     else:
         lines.append(_ok("mail.rule_ai.enabled=false or unset"))
     lines.append(f"  - `provider` = {repr(rule_ai_cfg.get('provider', 'ollama'))}")
@@ -471,6 +477,7 @@ def inspect_config() -> list[str]:
         else:
             lines.append(_ok(f"{key}=false"))
     lines.append(_ok("Preflight performs no mailbox mutation"))
+    lines.append("  - No Gmail/IMAP mutation, bridge iMessage call, Rule AI draft/probe run, or cloud LLM call is performed.")
     lines.append("")
 
     return lines
@@ -486,9 +493,9 @@ def inspect_filesystem() -> list[str]:
     if nas_path.exists():
         lines.append(_ok("Path exists"))
     elif Path("/Volumes/Synology").exists():
-        lines.append(_warn("/Volumes/Synology exists but /Volumes/Synology/mailagent does not"))
+        lines.append(_warn("/Volumes/Synology exists but /Volumes/Synology/mailagent does not (environment-specific, non-fatal for Rule AI safety)"))
     else:
-        lines.append(_warn("/Volumes/Synology not mounted"))
+        lines.append(_warn("/Volumes/Synology not mounted (environment-specific, non-fatal for Rule AI safety)"))
 
     banks_toml = REPO / "secrets" / "banks.toml"
     lines.append(f"\n**secrets/banks.toml:** `{banks_toml}`")
@@ -514,7 +521,9 @@ def build_report() -> str:
         [f"# Mail-Agent Preflight Report\n",
          f"**Generated:** {ts}  ",
          f"**Repo:** `{REPO}`  ",
-         f"**Python:** {sys.version.split()[0]}  "],
+         f"**Python:** {sys.version.split()[0]}  ",
+         "",
+         "This preflight is read-only. Known non-fatal environment warnings include bridge Messages/chat DB degradation, a missing NAS mount, and local Rule AI enabled for testing. It does not call Ollama, run the golden probe, run Playwright, mutate Gmail/IMAP, or send iMessage."],
         inspect_docker(),
         inspect_fastapi(),
         inspect_bridge(),

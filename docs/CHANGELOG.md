@@ -2,6 +2,15 @@
 
 Human-readable project history. Reverse chronological order.
 
+## 2026-05-02 — Phase 4F.2d Release Stabilization
+
+- Added [MAIL_AGENT_SAFETY_MATRIX.md](MAIL_AGENT_SAFETY_MATRIX.md) covering Rule AI draft/probe/audit/explain endpoints, human Save Rule, Control Center approvals, mock verification, cleanup, CLI golden probe, and preflight.
+- Added executable `scripts/mailagent_verify_phase4.sh` to run targeted backend safety suites, the full backend suite, dashboard helper tests, Playwright E2E, dashboard build, and preflight from one operator command.
+- Added dashboard `npm run test:all` convenience coverage for helper tests, E2E, and build.
+- Clarified preflight wording and table reporting for Rule AI audit/quality rows plus approval/execution rows without adding Ollama, Playwright, Gmail/IMAP mutation, or golden-probe runtime checks.
+- Updated operations, Mail Agent, troubleshooting, and Phase 4F docs with the consolidated Phase 4 verification command and known non-fatal warnings.
+- Preserved the safety boundary: no product behavior change, no cloud LLM, no Gmail/IMAP mutation, no iMessage sending, and no live approval execution.
+
 ## 2026-05-02 — Phase 4F.2c Control Center E2E Safety Smoke Tests
 
 - Added Playwright E2E smoke coverage for the dashboard Control Center / Operator Approval safety flows.

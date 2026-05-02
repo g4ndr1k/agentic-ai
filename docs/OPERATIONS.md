@@ -64,7 +64,25 @@ npm run dev
 
 The dashboard is an Electron menu-bar app. It is a viewer/control surface only; mail processing continues when the dashboard is closed. For account setup, Gmail App Password handling, safe rule actions, and rules UI details, see [MAIL_AGENT.md](MAIL_AGENT.md).
 
-Phase 4F natural-language rule authoring is documented in [phase-4f-natural-language-rule-builder.md](phase-4f-natural-language-rule-builder.md). Phase 4F.1a is implemented for deterministic/local sender suppression drafts only. Treat it as an AI draft/validate/human-save workflow only. It must not save rules without review, execute actions, or mutate Gmail/IMAP. “Spam list” currently means local Mail Agent suppression, not Gmail Spam.
+Phase 4F natural-language rule authoring is documented in [phase-4f-natural-language-rule-builder.md](phase-4f-natural-language-rule-builder.md). Phase 4F.1a-4F.2d covers deterministic/local drafts, audit/quality metrics, read-only explanation, safety E2E, and consolidated verification. Treat it as an AI draft/validate/human-save workflow only. It must not save rules without review, execute actions, or mutate Gmail/IMAP. “Spam list” currently means local Mail Agent suppression, not Gmail Spam.
+
+### Phase 4 Verification
+
+Run the consolidated Phase 4 safety verification before handoff or release:
+
+```bash
+./scripts/mailagent_verify_phase4.sh
+```
+
+The script runs targeted backend safety suites, the full backend suite, dashboard helper tests, Playwright E2E, dashboard build, and `scripts/mailagent_preflight.py`. The Playwright tests mock every `/api/mail/*` route and do not call the real backend, Gmail, IMAP, Ollama, iMessage, bridge, a mailbox, or a real database.
+
+Known non-fatal preflight warnings:
+
+- `[mail.rule_ai].enabled=true` may appear on a local test machine; example/safe config should remain disabled by default.
+- Missing `/Volumes/Synology` or `/Volumes/Synology/mailagent` is environment-specific.
+- Bridge Messages/chat DB degradation is unrelated to Rule AI draft/probe/explain safety.
+
+The safety matrix lives in [MAIL_AGENT_SAFETY_MATRIX.md](MAIL_AGENT_SAFETY_MATRIX.md).
 
 #### Synthetic approval visual QA
 

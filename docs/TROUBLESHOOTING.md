@@ -2,6 +2,24 @@
 
 Symptoms, likely causes, diagnosis, fixes, and prevention. For normal operating commands, see [OPERATIONS.md](OPERATIONS.md).
 
+## Phase 4 Verification
+
+Before debugging a release handoff, run:
+
+```bash
+./scripts/mailagent_verify_phase4.sh
+```
+
+This runs backend safety tests, the full backend suite, dashboard helper tests, Playwright E2E, dashboard build, and preflight. Playwright mocks all `/api/mail/*` routes and should not be debugged by enabling real Gmail/IMAP, Ollama, iMessage, bridge calls, or a real mailbox.
+
+Expected non-fatal preflight warnings:
+
+- Rule AI enabled locally may warn; keep example/safe config at `[mail.rule_ai].enabled=false`.
+- NAS mount missing is environment-specific.
+- Bridge Messages/chat DB degradation is unrelated to Rule AI draft/probe/explain safety.
+
+If verification fails because a dashboard test reports an unmocked `/api/mail/*` request, add an explicit test route mock. Do not allow E2E tests to fall through to a live backend.
+
 ## PDF Stuck As "New" Or "Never"
 
 ### Symptoms

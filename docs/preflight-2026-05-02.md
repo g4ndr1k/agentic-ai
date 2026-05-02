@@ -1,8 +1,10 @@
 # Mail-Agent Preflight Report
 
-**Generated:** 2026-05-01T23:15:49Z  
+**Generated:** 2026-05-02T00:37:06Z  
 **Repo:** `/Users/g4ndr1k/agentic-ai`  
 **Python:** 3.14.4  
+
+This preflight is read-only. Known non-fatal environment warnings include bridge Messages/chat DB degradation, a missing NAS mount, and local Rule AI enabled for testing. It does not call Ollama, run the golden probe, run Playwright, mutate Gmail/IMAP, or send iMessage.
 
 
 ## Docker — docker-compose.yml
@@ -169,7 +171,7 @@
   - ✅ ThrottleInterval=30s
 
 **Live probe:** GET http://127.0.0.1:9100/health
-✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-01T23:15:50.478961+00:00"}
+✅ Bridge responded: {"http": "ok", "applescript": "ok", "messages_app": "fail", "chat_db": "fail", "overall": "degraded", "service": "bridge", "mail_available": true, "timestamp": "2026-05-02T00:37:07.489702+00:00"}
 
 
 ## SQLite — agent state + pdf_jobs.db
@@ -213,7 +215,7 @@
   - `summary` TEXT
   - `status` TEXT
   - `source` TEXT
-  → 419 rows
+  → 421 rows
 
   **`alerts`** columns:
   - `id` INTEGER PK
@@ -229,6 +231,36 @@
   - `key` TEXT PK
   - `value` TEXT NOT NULL
   → 1 rows
+
+  **`mail_rules`** columns:
+  - `rule_id` INTEGER PK
+  - `account_id` TEXT
+  - `name` TEXT NOT NULL
+  - `priority` INTEGER NOT NULL
+  - `enabled` INTEGER NOT NULL
+  - `match_type` TEXT NOT NULL
+  - `created_at` TEXT NOT NULL
+  - `updated_at` TEXT NOT NULL
+  → 4 rows
+
+  **`mail_rule_conditions`** columns:
+  - `id` INTEGER PK
+  - `rule_id` INTEGER NOT NULL
+  - `field` TEXT NOT NULL
+  - `operator` TEXT NOT NULL
+  - `value` TEXT
+  - `value_json` TEXT
+  - `case_sensitive` INTEGER NOT NULL
+  → 4 rows
+
+  **`mail_rule_actions`** columns:
+  - `id` INTEGER PK
+  - `rule_id` INTEGER NOT NULL
+  - `action_type` TEXT NOT NULL
+  - `target` TEXT
+  - `value_json` TEXT
+  - `stop_processing` INTEGER NOT NULL
+  → 5 rows
 
   **`mail_rule_ai_draft_audit`** columns:
   - `id` INTEGER PK
@@ -267,6 +299,71 @@
   - `model` TEXT
   - `duration_ms` INTEGER
   - `results_json` TEXT NOT NULL
+  → 0 rows
+
+  **`mail_action_approvals`** columns:
+  - `approval_id` TEXT PK
+  - `source_type` TEXT NOT NULL
+  - `source_id` TEXT
+  - `message_key` TEXT
+  - `account_id` TEXT
+  - `folder` TEXT
+  - `uidvalidity` TEXT
+  - `imap_uid` INTEGER
+  - `subject` TEXT
+  - `sender` TEXT
+  - `received_at` TEXT
+  - `proposed_action_type` TEXT NOT NULL
+  - `proposed_target` TEXT
+  - `proposed_value_json` TEXT
+  - `reason` TEXT
+  - `ai_category` TEXT
+  - `ai_urgency_score` INTEGER
+  - `ai_confidence` REAL
+  - `status` TEXT NOT NULL
+  - `requested_at` TEXT NOT NULL
+  - `decided_at` TEXT
+  - `decided_by` TEXT
+  - `decision_note` TEXT
+  - `executed_at` TEXT
+  - `execution_status` TEXT
+  - `execution_result_json` TEXT
+  - `created_at` TEXT NOT NULL
+  - `updated_at` TEXT NOT NULL
+  - `execution_started_at` TEXT
+  - `archived_at` TEXT
+  → 0 rows
+
+  **`mail_action_executions`** columns:
+  - `execution_id` TEXT PK
+  - `approval_id` TEXT NOT NULL
+  - `account_id` TEXT NOT NULL
+  - `folder` TEXT NOT NULL
+  - `uidvalidity` TEXT NOT NULL
+  - `imap_uid` TEXT NOT NULL
+  - `operation` TEXT NOT NULL
+  - `target` TEXT
+  - `plan_hash` TEXT NOT NULL
+  - `idempotency_key` TEXT NOT NULL
+  - `status` TEXT NOT NULL
+  - `before_state_json` TEXT
+  - `after_state_json` TEXT
+  - `rollback_plan_json` TEXT
+  - `rollback_status` TEXT
+  - `requested_at` TEXT
+  - `started_at` TEXT
+  - `finished_at` TEXT
+  - `error_message` TEXT
+  - `created_at` TEXT NOT NULL
+  - `updated_at` TEXT NOT NULL
+  → 0 rows
+
+  **`mail_action_execution_events`** columns:
+  - `id` INTEGER PK
+  - `execution_id` TEXT NOT NULL
+  - `event_type` TEXT NOT NULL
+  - `event_json` TEXT
+  - `created_at` TEXT NOT NULL
   → 0 rows
 
 **pdf_jobs.db:** `/Users/g4ndr1k/agentic-ai/data/pdf_jobs.db`
@@ -349,8 +446,8 @@
   - `verify_timeout_seconds` = 120
   - `verify_model` = 'gemma3:4b'
 
-### Phase 4F rule AI probe
-⚠️  mail.rule_ai.enabled=true
+### Phase 4F Rule AI status
+⚠️  mail.rule_ai.enabled=true (local testing mode; safe default remains false)
   - `provider` = 'ollama'
   - `model` = 'qwen2.5:7b-instruct-q4_K_M'
   - `base_url` = 'http://host.docker.internal:11434'
@@ -370,13 +467,14 @@
 ✅ allow_add_label=false
 ✅ allow_move_to_folder=false
 ✅ Preflight performs no mailbox mutation
+  - No Gmail/IMAP mutation, bridge iMessage call, Rule AI draft/probe run, or cloud LLM call is performed.
 
 
 
 ## Filesystem
 
 **NAS mailagent mount:** `/Volumes/Synology/mailagent`
-⚠️  /Volumes/Synology not mounted
+⚠️  /Volumes/Synology not mounted (environment-specific, non-fatal for Rule AI safety)
 
 **secrets/banks.toml:** `/Users/g4ndr1k/agentic-ai/secrets/banks.toml`
 ✅ Readable

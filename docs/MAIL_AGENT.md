@@ -25,7 +25,7 @@ Keep the high-level architecture summary in `SYSTEM_DESIGN.md`, keep command-onl
 | Phase 4C.1 IMAP mutation primitives | Implemented, gated/audited |
 | Phase 4C.3A AI trigger actions | Implemented, preview-only |
 | Phase 4E.2 final read-only verification + mock execution API | Implemented, non-mutating |
-| Phase 4F.1a sender suppression rule drafts | Implemented, deterministic/local draft-only |
+| Phase 4F.1a-4F.2d Rule AI drafts, audit, explain, safety E2E, verification | Implemented, deterministic/local draft-only with human save |
 | Unsafe actions such as auto-reply, forward, webhook, unsubscribe | Not exposed |
 
 Important database boundary:
@@ -139,6 +139,10 @@ Current rules endpoints:
 GET    /api/mail/rules
 POST   /api/mail/rules
 POST   /api/mail/rules/ai/draft
+POST   /api/mail/rules/ai/golden-probe
+GET    /api/mail/rules/ai/audit/summary
+GET    /api/mail/rules/ai/audit/recent
+GET    /api/mail/rules/ai/golden-probe/runs
 GET    /api/mail/rules/{rule_id}
 PATCH  /api/mail/rules/{rule_id}
 DELETE /api/mail/rules/{rule_id}
@@ -148,9 +152,28 @@ POST   /api/mail/rules/explain
 GET    /api/mail/processing-events
 ```
 
-Phase 4F AI rule-builder endpoints are documented in [phase-4f-natural-language-rule-builder.md](phase-4f-natural-language-rule-builder.md). The implemented 4F.1a endpoint is draft-only for local sender suppression; AI must not write directly to `mail_rules` or execute mailbox actions.
+Current approval endpoints:
+
+```text
+GET    /api/mail/approvals
+GET    /api/mail/approvals/cleanup/preview
+POST   /api/mail/approvals/cleanup
+GET    /api/mail/approvals/export
+GET    /api/mail/approvals/{approval_id}
+POST   /api/mail/approvals/{approval_id}/approve
+POST   /api/mail/approvals/{approval_id}/reject
+POST   /api/mail/approvals/{approval_id}/expire
+POST   /api/mail/approvals/{approval_id}/execute
+POST   /api/mail/approvals/{approval_id}/mark-failed
+POST   /api/mail/approvals/{approval_id}/archive
+POST   /api/mail/approvals/{approval_id}/unarchive
+```
+
+Phase 4F AI rule-builder endpoints are documented in [phase-4f-natural-language-rule-builder.md](phase-4f-natural-language-rule-builder.md). The implemented draft/probe/explain surfaces preserve the draft-only and read-only boundaries; AI must not write directly to `mail_rules` or execute mailbox actions.
 
 `POST /api/mail/rules/explain` is the Phase 4F.2a deterministic rule explanation / dry-run inspector. It accepts a synthetic/sample message, optionally filters to one saved `rule_id`, runs the existing rule engine with `preview=True`, and returns per-condition expected/actual/matched details plus planned preview-only actions. `from_domain` / `sender_domain` actual values are derived from `sender_email` when needed. The endpoint is read-only: no rule rows, processing events, approval rows, audit rows, iMessage, bridge call, IMAP call, Gmail mutation, Ollama call, or cloud LLM call.
+
+The release safety matrix is maintained in [MAIL_AGENT_SAFETY_MATRIX.md](MAIL_AGENT_SAFETY_MATRIX.md).
 
 ### Worker health/debug API
 
@@ -536,7 +559,7 @@ Phase 4D.5 readiness fields extend the same preview surface. For reversible cand
 
 ## Phase 4F Natural Language Rule Builder
 
-Phase 4F adds AI-assisted rule authoring without changing the mailbox mutation boundary. Phase 4F.1a is implemented as a deterministic/local MVP for sender suppression drafts only. The intended flow is:
+Phase 4F adds AI-assisted rule authoring without changing the mailbox mutation boundary. The intended flow is:
 
 ```text
 User natural-language request
@@ -581,6 +604,18 @@ Phase 4F.2a adds the Rule Explanation / Dry-Run Inspector. This is not an AI exp
 Phase 4F.2b adds dashboard E2E smoke tests for the safety-critical Rule AI surfaces. The Playwright suite lives under `mail-dashboard/tests/e2e/` and runs with `npm run test:e2e`. It mocks all backend mail APIs through browser route interception and does not call real Ollama, Gmail, IMAP, iMessage, bridge, finance-api, Docker, Electron, or a real database. The tests prove that Save Rule appears only for saveable drafts, unsupported drafts cannot save, golden probe and quality panels expose no save/execute controls, Explain Rule remains dry-run only, and draft metadata is stripped before the human Save Rule payload.
 
 Phase 4F.2c adds Control Center browser safety smoke coverage to the same Playwright suite. It mocks every `/api/mail/*` request and fails closed on unmocked mail API calls. The tests prove that synthetic QA mode is read-only, pending approvals expose only approve/reject/expire controls, approved approvals are labeled **Mock verify + audit**, blocked terminal approvals show blockers without retry/bulk execute, stuck started approvals require manual review, cleanup preview does not auto-run cleanup, and JSON export does not execute approvals. The suite still does not call real finance-api, Gmail, IMAP, Ollama, iMessage, bridge, a mailbox, or a real database.
+
+## Phase 4 Verification
+
+Use the consolidated release verification command before handoff:
+
+```bash
+./scripts/mailagent_verify_phase4.sh
+```
+
+It runs targeted backend safety suites, the full backend suite, dashboard helper tests, Playwright E2E, dashboard build, and preflight. It does not require local Rule AI to be enabled. The automated tests mock external/runtime dependencies where appropriate: dashboard E2E mocks all `/api/mail/*` routes, and backend Rule AI tests use fake local clients instead of real Ollama.
+
+Expected preflight warnings may include local Rule AI enabled on a test machine, missing NAS mount, or bridge Messages/chat DB degradation. These are environment warnings, not evidence that Rule AI draft/probe/explain can mutate Gmail/IMAP or send iMessage.
 
 Phase 4F.1g adds local Rule AI draft/probe observability. `mail_rule_ai_draft_audit` records each successful draft endpoint response as a best-effort audit row, and `mail_rule_ai_golden_probe_runs` records aggregate golden probe results. These tables are quality metrics only: they do not save rules, do not execute actions, and do not change mailbox state.
 
